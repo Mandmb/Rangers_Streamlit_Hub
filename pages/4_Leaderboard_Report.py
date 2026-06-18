@@ -13,6 +13,7 @@ from reportlab.pdfgen import canvas
 st.set_page_config(page_title="Leaderboard Report", layout="wide")
 
 st.title("Player Leaderboard Report")
+st.error("TEST VERSION - UPDATED FILE IS RUNNING")
 
 st.sidebar.header("Upload CSVs")
 
