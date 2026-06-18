@@ -15,6 +15,7 @@ st.set_page_config(page_title="Leaderboard Report", layout="wide")
 st.title("Player Leaderboard Report")
 
 st.sidebar.header("Upload CSVs")
+
 uploaded_files = st.sidebar.file_uploader(
     "Upload all CSVs at once",
     type="csv",
@@ -24,7 +25,11 @@ uploaded_files = st.sidebar.file_uploader(
 st.sidebar.header("Report Info")
 team_name = st.sidebar.text_input("Team / Group", "DSL Rangers")
 report_date = st.sidebar.date_input("Report Date", date.today())
-leaderboard_type = st.sidebar.selectbox("Leaderboard Type", ["Top 5", "Bottom 5"])
+
+leaderboard_type = st.sidebar.selectbox(
+    "Leaderboard Type",
+    ["Top 5", "Bottom 5"],
+)
 show_bottom = leaderboard_type == "Bottom 5"
 ranking_label = "Bottom 5" if show_bottom else "Top 5"
 
@@ -64,23 +69,6 @@ if uploaded_files:
     st.sidebar.write("Catching:", catching_file.name if catching_file else "Missing")
 
 
-def find_asset(filename):
-    """Find an image whether the app is run locally, from Streamlit Cloud, or from a pages/ file."""
-    candidates = [
-        filename,
-        os.path.join(os.getcwd(), filename),
-        os.path.join(os.path.dirname(__file__), filename),
-        os.path.join(os.path.dirname(__file__), "..", filename),
-        os.path.join(os.getcwd(), "assets", filename),
-        os.path.join(os.path.dirname(__file__), "assets", filename),
-        os.path.join(os.path.dirname(__file__), "..", "assets", filename),
-    ]
-    for path in candidates:
-        if os.path.exists(path):
-            return path
-    return filename
-
-
 def load_csv(file):
     if file is not None:
         return pd.read_csv(file)
@@ -98,8 +86,10 @@ def clean_df(df, rename_map, keep_cols):
         df = df[~df["Rank"].astype(str).str.upper().isin(["TOTAL", "AVERAGE", "RANK"])]
 
     df = df.rename(columns=rename_map)
+
     keep_cols = [c for c in keep_cols if c in df.columns]
     df = df[keep_cols]
+
     return df
 
 
@@ -189,8 +179,25 @@ def draw_centered_text(c, text, x, y, w, font="Helvetica", size=6.3):
     c.drawString(x + (w / 2) - (text_width / 2), y, text)
 
 
-def draw_image_icon(c, icon_path, x, y, size=16):
-    if icon_path and os.path.exists(icon_path):
+def find_asset(filename):
+    candidates = [
+        filename,
+        os.path.join(os.getcwd(), filename),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), filename),
+        os.path.join(os.getcwd(), "assets", filename),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", filename),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", filename),
+    ]
+
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return filename
+
+
+def draw_image_icon(c, icon_path, x, y, size=17):
+    icon_path = find_asset(icon_path)
+    if os.path.exists(icon_path):
         try:
             img = ImageReader(icon_path)
             c.drawImage(
@@ -252,11 +259,11 @@ def draw_table(c, title, df, x, y, w, col_weights, icon_path):
     c.setFillColor(header_blue)
     c.roundRect(x, y - title_h, w, title_h, 4, stroke=0, fill=1)
 
-    draw_image_icon(c, icon_path, x + 13, y - 9, size=16)
+    draw_image_icon(c, icon_path, x + 14, y - 9, size=17)
 
     c.setFillColor(colors.white)
     c.setFont("Helvetica-Bold", 8)
-    c.drawCentredString(x + w / 2 + 4, y - 12, title)
+    c.drawCentredString(x + w / 2 + 5, y - 12, title)
 
     if df is None or df.empty:
         cols = ["#", "PLAYER", ""]
@@ -283,6 +290,7 @@ def draw_table(c, title, df, x, y, w, col_weights, icon_path):
 
         c.setFillColor(colors.HexColor("#0B1628"))
         draw_centered_text(c, col, current_x, header_y + 4, cw, "Helvetica-Bold", 5.8)
+
         current_x += cw
 
     c.line(x + w, y - title_h, x + w, y - h)
@@ -327,6 +335,7 @@ def draw_table(c, title, df, x, y, w, col_weights, icon_path):
                     "Helvetica-Bold" if r == 0 else "Helvetica",
                     size,
                 )
+
                 current_x += cw
 
     c.setStrokeColor(grid)
@@ -343,10 +352,10 @@ def build_pdf():
     red = colors.HexColor("#C0111F")
     panel = colors.HexColor("#F4F6F9")
 
-    hitting_icon = find_asset("Hitting.png")
-    baserunning_icon = find_asset("baserunning.png")
-    defense_icon = find_asset("Defense.png")
-    catching_icon = find_asset("Catching.png")
+    hitting_icon = "Hitting.png"
+    baserunning_icon = "baserunning.png"
+    defense_icon = "Defense.png"
+    catching_icon = "Catching.png"
 
     c.setFillColor(colors.white)
     c.rect(0, 0, width, height, fill=1, stroke=0)
@@ -446,14 +455,20 @@ def build_pdf():
     ]
 
     catch_y = 176
+
     draw_table(c, catching_tables[0][0], catching_tables[0][1], catch_start_x, catch_y, catching_tables[0][2], catching_tables[0][3], catching_tables[0][4])
     draw_table(c, catching_tables[1][0], catching_tables[1][1], catch_start_x + catch_left_w + catch_gap, catch_y, catching_tables[1][2], catching_tables[1][3], catching_tables[1][4])
 
     c.setStrokeColor(navy)
     c.setLineWidth(1)
 
-    c.line(25, 25, (width / 2) - 66, 25)
-    c.line((width / 2) + 66, 25, width - 25, 25)
+    footer_left_line_start = 25
+    footer_left_line_end = (width / 2) - 66
+    footer_right_line_start = (width / 2) + 66
+    footer_right_line_end = width - 25
+
+    c.line(footer_left_line_start, 25, footer_left_line_end, 25)
+    c.line(footer_right_line_start, 25, footer_right_line_end, 25)
 
     c.setFillColor(red)
     c.setFont("Helvetica-Bold", 14)
@@ -519,7 +534,7 @@ if all_uploaded:
     pdf = build_pdf()
 
     st.download_button(
-        label=f"Download {ranking_label} PDF Report",
+        label=f"Download Beautiful PDF Report ({ranking_label})",
         data=pdf,
         file_name=f"player_leaderboard_report_{ranking_label.lower().replace(' ', '_')}.pdf",
         mime="application/pdf",
