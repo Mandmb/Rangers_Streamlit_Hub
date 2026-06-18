@@ -472,8 +472,8 @@ def build_pdf():
 
     c.setFillColor(red)
     c.setFont("Helvetica-Bold", 14)
-    for i in [-2, -1, 1, 2]:
-        c.drawCentredString(center_x + (i * star_spacing), 19, "★")
+    for i in range(-2, 3):
+    c.drawCentredString(center_x + (i * star_spacing), 19, "★")
 
     c.setFillColor(navy)
     c.setFont("Helvetica-Oblique", 7)
