@@ -1,15 +1,41 @@
+import os
 import streamlit as st
 import pandas as pd
 from io import BytesIO
+from datetime import date
 
 from reportlab.lib.pagesizes import landscape, letter
 from reportlab.lib import colors
 from reportlab.pdfgen import canvas
+from reportlab.lib.utils import ImageReader
 
 
 st.set_page_config(page_title="Leaderboard Report", layout="wide")
 
 st.title("Player Leaderboard Report")
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CURRENT_DIR = os.getcwd()
+
+
+def find_icon(filename):
+    """Find icon in common local locations so Streamlit can draw it in the PDF."""
+    possible_paths = [
+        os.path.join(SCRIPT_DIR, filename),
+        os.path.join(CURRENT_DIR, filename),
+        os.path.join(SCRIPT_DIR, "assets", filename),
+        os.path.join(CURRENT_DIR, "assets", filename),
+    ]
+    for path in possible_paths:
+        if os.path.exists(path):
+            return path
+    return None
+
+
+HITTING_ICON = find_icon("Hitting.png")
+BASERUNNING_ICON = find_icon("Baserunning.png") or find_icon("baserunning.png")
+DEFENSE_ICON = find_icon("Defense.png")
+CATCHING_ICON = find_icon("Catching.png")
 
 st.sidebar.header("Upload CSVs")
 
@@ -18,6 +44,23 @@ uploaded_files = st.sidebar.file_uploader(
     type="csv",
     accept_multiple_files=True
 )
+
+st.sidebar.header("Report Info")
+team_name = st.sidebar.text_input("Team / Group", "DSL Rangers")
+report_date = st.sidebar.date_input("Report Date", date.today())
+
+st.sidebar.header("Minimum Qualifiers")
+min_pa = st.sidebar.number_input("Minimum PA for hitters", min_value=0, value=40)
+min_inn_if = st.sidebar.number_input("Minimum InnIF", min_value=0, value=40)
+min_inn_of = st.sidebar.number_input("Minimum InnOF", min_value=0, value=40)
+min_catcher_p = st.sidebar.number_input("Minimum Catcher P", min_value=0, value=100)
+min_sba = st.sidebar.number_input("Minimum SBA for CS%", min_value=0, value=5)
+
+st.sidebar.header("PDF Icons")
+st.sidebar.write("Hitting:", "Found" if HITTING_ICON else "Missing Hitting.png")
+st.sidebar.write("Baserunning:", "Found" if BASERUNNING_ICON else "Missing Baserunning.png / baserunning.png")
+st.sidebar.write("Defense:", "Found" if DEFENSE_ICON else "Missing Defense.png")
+st.sidebar.write("Catching:", "Found" if CATCHING_ICON else "Missing Catching.png")
 
 hitting_file = None
 baserunning_file = None
@@ -81,22 +124,32 @@ def to_number(series):
     )
 
 
-def top_leaders_with_extra(df, stat_col, extra_col, n=5, ascending=False):
+def top_leaders_with_extra(df, stat_col, extra_col, n=5, ascending=False, min_col=None, minimum=0):
     if df is None or "Player" not in df.columns or stat_col not in df.columns or extra_col not in df.columns:
         return pd.DataFrame(columns=["Player", stat_col, extra_col])
 
     temp = df.copy()
+
+    if min_col and min_col in temp.columns:
+        temp["_qualifier"] = to_number(temp[min_col])
+        temp = temp[temp["_qualifier"] >= minimum]
+
     temp["_sort"] = to_number(temp[stat_col])
     temp = temp.dropna(subset=["_sort"])
 
     return temp.sort_values("_sort", ascending=ascending)[["Player", stat_col, extra_col]].head(n)
 
 
-def top_leaders_with_context(df, stat_col, context_col, n=5, ascending=False):
+def top_leaders_with_context(df, stat_col, context_col, n=5, ascending=False, min_col=None, minimum=0):
     if df is None or "Player" not in df.columns or stat_col not in df.columns or context_col not in df.columns:
         return pd.DataFrame(columns=["Player", context_col, stat_col])
 
     temp = df.copy()
+
+    if min_col and min_col in temp.columns:
+        temp["_qualifier"] = to_number(temp[min_col])
+        temp = temp[temp["_qualifier"] >= minimum]
+
     temp["_sort"] = to_number(temp[stat_col])
     temp = temp.dropna(subset=["_sort"])
 
@@ -134,26 +187,45 @@ catching_df = clean_df(
 )
 
 
-def short_name(name, max_len=17):
+def short_name(name, max_len=18):
     name = str(name)
     if len(name) <= max_len:
         return name
     return name[:max_len - 2] + ".."
 
 
-def draw_centered_text(c, text, x, y, w, font="Helvetica", size=6.6):
+def draw_centered_text(c, text, x, y, w, font="Helvetica", size=6.3):
     text = str(text)
     c.setFont(font, size)
     text_width = c.stringWidth(text, font, size)
     c.drawString(x + (w / 2) - (text_width / 2), y, text)
 
 
-def draw_baseball_icon(c, x, y, size=12):
+def draw_fallback_icon(c, x, y, size=14):
     c.setStrokeColor(colors.white)
-    c.setFillColor(colors.white)
+    c.setLineWidth(1.1)
     c.circle(x, y, size / 2, stroke=1, fill=0)
     c.line(x - 3, y + 4, x - 1, y - 4)
     c.line(x + 3, y + 4, x + 1, y - 4)
+
+
+def draw_image_icon(c, icon_path, x, y, size=18):
+    if icon_path and os.path.exists(icon_path):
+        try:
+            img = ImageReader(icon_path)
+            c.drawImage(
+                img,
+                x - size / 2,
+                y - size / 2,
+                width=size,
+                height=size,
+                mask="auto"
+            )
+            return
+        except Exception:
+            pass
+
+    draw_fallback_icon(c, x, y, size=size)
 
 
 def draw_crossed_bats(c, x, y):
@@ -181,28 +253,29 @@ def draw_section_banner(c, text, x, y, w, h=18):
     c.drawCentredString(x + w / 2, y + 5, text)
 
 
-def draw_table(c, title, df, x, y, w, col_weights):
-    navy = colors.HexColor("#002B5C")
+def draw_table(c, title, df, x, y, w, col_weights, icon_path):
+    header_blue = colors.HexColor("#4F8EF7")
     light = colors.HexColor("#EAF0F6")
+    gold = colors.HexColor("#FFF2CC")
     grid = colors.HexColor("#C8C8C8")
 
-    title_h = 17
+    title_h = 18
     header_h = 14
     row_h = 15
     h = title_h + header_h + row_h * 5
 
     c.setStrokeColor(colors.HexColor("#D6D6D6"))
     c.setFillColor(colors.white)
-    c.roundRect(x, y - h, w, h, 3, stroke=1, fill=1)
+    c.roundRect(x, y - h, w, h, 4, stroke=1, fill=1)
 
-    c.setFillColor(navy)
-    c.roundRect(x, y - title_h, w, title_h, 3, stroke=0, fill=1)
+    c.setFillColor(header_blue)
+    c.roundRect(x, y - title_h, w, title_h, 4, stroke=0, fill=1)
 
-    draw_baseball_icon(c, x + 13, y - 8.5, 10)
+    draw_image_icon(c, icon_path, x + 14, y - 9, size=18)
 
     c.setFillColor(colors.white)
     c.setFont("Helvetica-Bold", 8)
-    c.drawCentredString(x + w / 2, y - 11.5, title)
+    c.drawCentredString(x + (w / 2) + 5, y - 12, title)
 
     if df is None or df.empty:
         cols = ["#", "PLAYER", ""]
@@ -228,7 +301,7 @@ def draw_table(c, title, df, x, y, w, col_weights):
         c.line(current_x, y - title_h, current_x, y - h)
 
         c.setFillColor(colors.HexColor("#0B1628"))
-        draw_centered_text(c, col, current_x, header_y + 4, cw, "Helvetica-Bold", 6.2)
+        draw_centered_text(c, col, current_x, header_y + 4, cw, "Helvetica-Bold", 5.8)
 
         current_x += cw
 
@@ -238,7 +311,10 @@ def draw_table(c, title, df, x, y, w, col_weights):
         row_top = header_y - r * row_h
         row_bottom = row_top - row_h
 
-        if r % 2 == 1:
+        if r == 0:
+            c.setFillColor(gold)
+            c.rect(x, row_bottom, w, row_h, stroke=0, fill=1)
+        elif r % 2 == 1:
             c.setFillColor(colors.HexColor("#F7F7F7"))
             c.rect(x, row_bottom, w, row_h, stroke=0, fill=1)
 
@@ -253,7 +329,7 @@ def draw_table(c, title, df, x, y, w, col_weights):
             row_bottom + 4,
             col_widths[0],
             "Helvetica-Bold",
-            6.7
+            6.2
         )
 
         if r < len(rows):
@@ -264,19 +340,20 @@ def draw_table(c, title, df, x, y, w, col_weights):
                 cw = col_widths[i + 1] if i + 1 < len(col_widths) else col_widths[-1]
 
                 if i == 0:
-                    text = short_name(val, 15)
+                    text = short_name(val, 18)
+                    size = 6.1
                 else:
-                    text = short_name(val, 8)
+                    text = short_name(val, 12)
+                    size = 6.0
 
-                c.setFillColor(colors.black)
                 draw_centered_text(
                     c,
                     text,
                     current_x,
                     row_bottom + 4,
                     cw,
-                    "Helvetica",
-                    6.6
+                    "Helvetica-Bold" if r == 0 else "Helvetica",
+                    size
                 )
 
                 current_x += cw
@@ -293,6 +370,7 @@ def build_pdf():
 
     navy = colors.HexColor("#001F45")
     red = colors.HexColor("#C0111F")
+    panel = colors.HexColor("#F4F6F9")
 
     c.setFillColor(colors.white)
     c.rect(0, 0, width, height, fill=1, stroke=0)
@@ -304,87 +382,137 @@ def build_pdf():
     c.setFont("Helvetica-Bold", 34)
     c.drawCentredString(width / 2, 555, "PLAYER LEADERBOARD REPORT")
 
+    c.setFillColor(colors.HexColor("#334155"))
+    c.setFont("Helvetica", 9)
+    subtitle = f"{team_name} | Through {report_date.strftime('%B %d, %Y')} | Top 5 by Category"
+    c.drawCentredString(width / 2, 538, subtitle)
+
     c.setStrokeColor(red)
     c.setLineWidth(1.4)
-    c.line(90, 530, 335, 530)
-    c.line(457, 530, 702, 530)
+    c.line(90, 524, 335, 524)
+    c.line(457, 524, 702, 524)
 
     c.setFillColor(red)
-    c.setFont("Helvetica-Bold", 15)
-    for sx in [350, 373, 396, 419, 442]:
-        c.drawCentredString(sx, 523, "★")
+    c.setFont("Helvetica-Bold", 14)
+    center_x = width / 2
+    star_spacing = 23
+    for i in range(-2, 3):
+        c.drawCentredString(center_x + (i * star_spacing), 517, "★")
 
-    draw_section_banner(c, "HITTING", 265, 490, 262)
+    c.setFillColor(panel)
+    c.roundRect(10, 377, width - 20, 123, 6, stroke=0, fill=1)
+    draw_section_banner(c, "HITTING", (width - 262) / 2, 488, 262)
 
     hitting_tables = [
-        ("AVG", top_leaders_with_context(hitting_df, "AVG", "PA")),
-        ("OBP", top_leaders_with_context(hitting_df, "OBP", "PA")),
-        ("SLG", top_leaders_with_context(hitting_df, "SLG", "PA")),
-        ("OPS", top_leaders_with_context(hitting_df, "OPS", "PA")),
-        ("BB%", top_leaders_with_context(hitting_df, "BB%", "PA")),
-        ("K%", top_leaders_with_context(hitting_df, "K%", "PA", ascending=True)),
+        ("AVG", top_leaders_with_context(hitting_df, "AVG", "PA", min_col="PA", minimum=min_pa)),
+        ("OBP", top_leaders_with_context(hitting_df, "OBP", "PA", min_col="PA", minimum=min_pa)),
+        ("SLG", top_leaders_with_context(hitting_df, "SLG", "PA", min_col="PA", minimum=min_pa)),
+        ("OPS", top_leaders_with_context(hitting_df, "OPS", "PA", min_col="PA", minimum=min_pa)),
+        ("BB%", top_leaders_with_context(hitting_df, "BB%", "PA", min_col="PA", minimum=min_pa)),
+        ("K%", top_leaders_with_context(hitting_df, "K%", "PA", ascending=True, min_col="PA", minimum=min_pa)),
     ]
 
-    start_x = 16
-    table_w = 120
-    gap = 12
-    y = 474
+    hitting_table_w = 114
+    hitting_gap = 8
+    hitting_total_w = (6 * hitting_table_w) + (5 * hitting_gap)
+    hitting_start_x = (width - hitting_total_w) / 2
+    hitting_y = 472
 
     for i, (title, df) in enumerate(hitting_tables):
         draw_table(
             c,
             title,
             df,
-            start_x + i * (table_w + gap),
-            y,
-            table_w,
-            [0.14, 0.48, 0.18, 0.20]
+            hitting_start_x + i * (hitting_table_w + hitting_gap),
+            hitting_y,
+            hitting_table_w,
+            [0.12, 0.51, 0.17, 0.20],
+            HITTING_ICON
         )
 
-    draw_section_banner(c, "BASERUNNING / DEFENSE", 245, 342, 302)
+    c.setFillColor(panel)
+    c.roundRect(10, 229, width - 20, 123, 6, stroke=0, fill=1)
+    draw_section_banner(c, "BASERUNNING / DEFENSE", (width - 302) / 2, 340, 302)
 
     middle_tables = [
-        ("SB LEADERS", top_leaders_with_extra(baserunning_df, "SB", "SB%"), 145, [0.14, 0.48, 0.18, 0.20]),
-        ("INF ERRORS", top_leaders_with_context(infield_df, "E", "InnIF", ascending=True), 145, [0.14, 0.46, 0.22, 0.18]),
-        ("INF FLD%", top_leaders_with_context(infield_df, "FLD%", "InnIF"), 145, [0.14, 0.46, 0.22, 0.18]),
-        ("OF ERRORS", top_leaders_with_context(outfield_df, "E", "InnOF", ascending=True), 145, [0.14, 0.46, 0.22, 0.18]),
-        ("OF FLD%", top_leaders_with_context(outfield_df, "FLD%", "InnOF"), 145, [0.14, 0.46, 0.22, 0.18]),
+        ("SB LEADERS", top_leaders_with_extra(baserunning_df, "SB", "SB%"), 140, [0.12, 0.50, 0.16, 0.22], BASERUNNING_ICON),
+        ("INF ERRORS", top_leaders_with_context(infield_df, "E", "InnIF", ascending=True, min_col="InnIF", minimum=min_inn_if), 140, [0.12, 0.50, 0.24, 0.14], DEFENSE_ICON),
+        ("INF FLD%", top_leaders_with_context(infield_df, "FLD%", "InnIF", min_col="InnIF", minimum=min_inn_if), 140, [0.12, 0.48, 0.22, 0.18], DEFENSE_ICON),
+        ("OF ERRORS", top_leaders_with_context(outfield_df, "E", "InnOF", ascending=True, min_col="InnOF", minimum=min_inn_of), 140, [0.12, 0.50, 0.24, 0.14], DEFENSE_ICON),
+        ("OF FLD%", top_leaders_with_context(outfield_df, "FLD%", "InnOF", min_col="InnOF", minimum=min_inn_of), 140, [0.12, 0.44, 0.22, 0.22], DEFENSE_ICON),
     ]
 
-    start_x = 16
-    gap = 12
-    y = 326
+    middle_gap = 8
+    middle_total_w = sum(t[2] for t in middle_tables) + (len(middle_tables) - 1) * middle_gap
+    middle_start_x = (width - middle_total_w) / 2
+    middle_y = 324
 
-    current_x = start_x
-    for title, df, tw, weights in middle_tables:
-        draw_table(c, title, df, current_x, y, tw, weights)
-        current_x += tw + gap
+    current_x = middle_start_x
+    for title, df, tw, weights, icon in middle_tables:
+        draw_table(c, title, df, current_x, middle_y, tw, weights, icon)
+        current_x += tw + middle_gap
 
-    draw_section_banner(c, "CATCHING", 315, 194, 162)
+    catch_left_w = 230
+    catch_right_w = 260
+    catch_gap = 20
+    catch_total_w = catch_left_w + catch_right_w + catch_gap
+    catch_start_x = (width - catch_total_w) / 2
+    catch_panel_x = catch_start_x - 15
+    catch_panel_w = catch_total_w + 30
+
+    c.setFillColor(panel)
+    c.roundRect(catch_panel_x, 82, catch_panel_w, 122, 6, stroke=0, fill=1)
+    draw_section_banner(c, "CATCHING", (width - 162) / 2, 192, 162)
 
     catching_tables = [
-        ("SL+", top_leaders_with_context(catching_df, "SL+", "P"), 215, [0.14, 0.50, 0.18, 0.18]),
-        ("CS% / SBA", top_leaders_with_extra(catching_df, "CS%", "SBA"), 245, [0.14, 0.48, 0.19, 0.19]),
+        ("SL+", top_leaders_with_context(catching_df, "SL+", "P", min_col="P", minimum=min_catcher_p), catch_left_w, [0.12, 0.55, 0.15, 0.18], CATCHING_ICON),
+        ("CS% / SBA", top_leaders_with_extra(catching_df, "CS%", "SBA", min_col="SBA", minimum=min_sba), catch_right_w, [0.12, 0.52, 0.18, 0.18], CATCHING_ICON),
     ]
 
-    y = 178
-    draw_table(c, catching_tables[0][0], catching_tables[0][1], 164, y, catching_tables[0][2], catching_tables[0][3])
-    draw_table(c, catching_tables[1][0], catching_tables[1][1], 400, y, catching_tables[1][2], catching_tables[1][3])
+    catch_y = 176
+
+    draw_table(
+        c,
+        catching_tables[0][0],
+        catching_tables[0][1],
+        catch_start_x,
+        catch_y,
+        catching_tables[0][2],
+        catching_tables[0][3],
+        catching_tables[0][4]
+    )
+
+    draw_table(
+        c,
+        catching_tables[1][0],
+        catching_tables[1][1],
+        catch_start_x + catch_left_w + catch_gap,
+        catch_y,
+        catching_tables[1][2],
+        catching_tables[1][3],
+        catching_tables[1][4]
+    )
 
     c.setStrokeColor(navy)
     c.setLineWidth(1)
-    c.line(25, 25, 330, 25)
-    c.line(462, 25, 767, 25)
+
+    footer_left_line_start = 25
+    footer_left_line_end = (width / 2) - 66
+    footer_right_line_start = (width / 2) + 66
+    footer_right_line_end = width - 25
+
+    c.line(footer_left_line_start, 25, footer_left_line_end, 25)
+    c.line(footer_right_line_start, 25, footer_right_line_end, 25)
 
     c.setFillColor(red)
     c.setFont("Helvetica-Bold", 14)
-    for sx in [350, 373, 419, 442]:
-        c.drawCentredString(sx, 19, "★")
+    for i in [-2, -1, 1, 2]:
+        c.drawCentredString(center_x + (i * star_spacing), 19, "★")
 
     c.setFillColor(navy)
     c.setFont("Helvetica-Oblique", 7)
-    c.drawString(25, 12, "TOP 5 PLAYERS PER STATISTIC")
-    c.drawRightString(767, 12, "GENERATED FROM UPLOADED CSV FILES")
+    c.drawString(25, 12, f"MIN PA {min_pa} | MIN INF {min_inn_if} | MIN OF {min_inn_of} | MIN C P {min_catcher_p}")
+    c.drawRightString(width - 25, 12, "GENERATED FROM UPLOADED CSV FILES")
 
     c.showPage()
     c.save()
