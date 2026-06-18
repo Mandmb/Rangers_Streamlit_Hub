@@ -1,53 +1,37 @@
 import os
-import streamlit as st
-import pandas as pd
 from io import BytesIO
 from datetime import date
 
-from reportlab.lib.pagesizes import landscape, letter
+import pandas as pd
+import streamlit as st
 from reportlab.lib import colors
-from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import landscape, letter
 from reportlab.lib.utils import ImageReader
+from reportlab.pdfgen import canvas
 
 
 st.set_page_config(page_title="Leaderboard Report", layout="wide")
 
 st.title("Player Leaderboard Report")
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CURRENT_DIR = os.getcwd()
-
-
-def find_icon(filename):
-    """Find icon in common local locations so Streamlit can draw it in the PDF."""
-    possible_paths = [
-        os.path.join(SCRIPT_DIR, filename),
-        os.path.join(CURRENT_DIR, filename),
-        os.path.join(SCRIPT_DIR, "assets", filename),
-        os.path.join(CURRENT_DIR, "assets", filename),
-    ]
-    for path in possible_paths:
-        if os.path.exists(path):
-            return path
-    return None
-
-
-HITTING_ICON = find_icon("Hitting.png")
-BASERUNNING_ICON = find_icon("Baserunning.png") or find_icon("baserunning.png")
-DEFENSE_ICON = find_icon("Defense.png")
-CATCHING_ICON = find_icon("Catching.png")
-
 st.sidebar.header("Upload CSVs")
 
 uploaded_files = st.sidebar.file_uploader(
     "Upload all CSVs at once",
     type="csv",
-    accept_multiple_files=True
+    accept_multiple_files=True,
 )
 
 st.sidebar.header("Report Info")
 team_name = st.sidebar.text_input("Team / Group", "DSL Rangers")
 report_date = st.sidebar.date_input("Report Date", date.today())
+
+leaderboard_type = st.sidebar.selectbox(
+    "Leaderboard Type",
+    ["Top 5", "Bottom 5"],
+)
+show_bottom = leaderboard_type == "Bottom 5"
+ranking_label = "Bottom 5" if show_bottom else "Top 5"
 
 st.sidebar.header("Minimum Qualifiers")
 min_pa = st.sidebar.number_input("Minimum PA for hitters", min_value=0, value=40)
@@ -55,12 +39,6 @@ min_inn_if = st.sidebar.number_input("Minimum InnIF", min_value=0, value=40)
 min_inn_of = st.sidebar.number_input("Minimum InnOF", min_value=0, value=40)
 min_catcher_p = st.sidebar.number_input("Minimum Catcher P", min_value=0, value=100)
 min_sba = st.sidebar.number_input("Minimum SBA for CS%", min_value=0, value=5)
-
-st.sidebar.header("PDF Icons")
-st.sidebar.write("Hitting:", "Found" if HITTING_ICON else "Missing Hitting.png")
-st.sidebar.write("Baserunning:", "Found" if BASERUNNING_ICON else "Missing Baserunning.png / baserunning.png")
-st.sidebar.write("Defense:", "Found" if DEFENSE_ICON else "Missing Defense.png")
-st.sidebar.write("Catching:", "Found" if CATCHING_ICON else "Missing Catching.png")
 
 hitting_file = None
 baserunning_file = None
@@ -120,7 +98,7 @@ def to_number(series):
         series.astype(str)
         .str.replace("%", "", regex=False)
         .str.replace(",", "", regex=False),
-        errors="coerce"
+        errors="coerce",
     )
 
 
@@ -159,31 +137,31 @@ def top_leaders_with_context(df, stat_col, context_col, n=5, ascending=False, mi
 hitting_df = clean_df(
     load_csv(hitting_file),
     {"playerFullName": "Player", "BA": "AVG"},
-    ["Player", "G", "PA", "AB", "AVG", "OBP", "SLG", "OPS", "K%", "BB%"]
+    ["Player", "G", "PA", "AB", "AVG", "OBP", "SLG", "OPS", "K%", "BB%"],
 )
 
 baserunning_df = clean_df(
     load_csv(baserunning_file),
     {"playerFullName": "Player"},
-    ["Player", "G", "SBA", "SB", "CS", "SB%"]
+    ["Player", "G", "SBA", "SB", "CS", "SB%"],
 )
 
 infield_df = clean_df(
     load_csv(infield_file),
     {"playerFullName": "Player", "IFErr": "E", "IFFld%": "FLD%"},
-    ["Player", "InnIF", "IFChances", "IFPutout", "IFAst", "E", "FLD%"]
+    ["Player", "InnIF", "IFChances", "IFPutout", "IFAst", "E", "FLD%"],
 )
 
 outfield_df = clean_df(
     load_csv(outfield_file),
     {"playerFullName": "Player", "OFErr": "E", "OFFld%": "FLD%"},
-    ["Player", "InnOF", "OFChances", "OFPutout", "OFAst", "E", "FLD%"]
+    ["Player", "InnOF", "OFChances", "OFPutout", "OFAst", "E", "FLD%"],
 )
 
 catching_df = clean_df(
     load_csv(catching_file),
     {"playerFullName": "Player"},
-    ["Player", "CS%", "SBA", "SL+", "FrmdB50%+", "P", "StrkFrmd", "BallFrmd"]
+    ["Player", "CS%", "SBA", "SL+", "FrmdB50%+", "P", "StrkFrmd", "BallFrmd"],
 )
 
 
@@ -191,7 +169,7 @@ def short_name(name, max_len=18):
     name = str(name)
     if len(name) <= max_len:
         return name
-    return name[:max_len - 2] + ".."
+    return name[: max_len - 2] + ".."
 
 
 def draw_centered_text(c, text, x, y, w, font="Helvetica", size=6.3):
@@ -201,16 +179,25 @@ def draw_centered_text(c, text, x, y, w, font="Helvetica", size=6.3):
     c.drawString(x + (w / 2) - (text_width / 2), y, text)
 
 
-def draw_fallback_icon(c, x, y, size=14):
-    c.setStrokeColor(colors.white)
-    c.setLineWidth(1.1)
-    c.circle(x, y, size / 2, stroke=1, fill=0)
-    c.line(x - 3, y + 4, x - 1, y - 4)
-    c.line(x + 3, y + 4, x + 1, y - 4)
+def find_asset(filename):
+    candidates = [
+        filename,
+        os.path.join(os.getcwd(), filename),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), filename),
+        os.path.join(os.getcwd(), "assets", filename),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", filename),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", filename),
+    ]
+
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return filename
 
 
-def draw_image_icon(c, icon_path, x, y, size=18):
-    if icon_path and os.path.exists(icon_path):
+def draw_image_icon(c, icon_path, x, y, size=17):
+    icon_path = find_asset(icon_path)
+    if os.path.exists(icon_path):
         try:
             img = ImageReader(icon_path)
             c.drawImage(
@@ -219,13 +206,14 @@ def draw_image_icon(c, icon_path, x, y, size=18):
                 y - size / 2,
                 width=size,
                 height=size,
-                mask="auto"
+                mask="auto",
             )
             return
         except Exception:
             pass
 
-    draw_fallback_icon(c, x, y, size=size)
+    c.setStrokeColor(colors.white)
+    c.circle(x, y, size / 2, stroke=1, fill=0)
 
 
 def draw_crossed_bats(c, x, y):
@@ -271,11 +259,11 @@ def draw_table(c, title, df, x, y, w, col_weights, icon_path):
     c.setFillColor(header_blue)
     c.roundRect(x, y - title_h, w, title_h, 4, stroke=0, fill=1)
 
-    draw_image_icon(c, icon_path, x + 14, y - 9, size=18)
+    draw_image_icon(c, icon_path, x + 14, y - 9, size=17)
 
     c.setFillColor(colors.white)
     c.setFont("Helvetica-Bold", 8)
-    c.drawCentredString(x + (w / 2) + 5, y - 12, title)
+    c.drawCentredString(x + w / 2 + 5, y - 12, title)
 
     if df is None or df.empty:
         cols = ["#", "PLAYER", ""]
@@ -322,15 +310,7 @@ def draw_table(c, title, df, x, y, w, col_weights, icon_path):
         c.line(x, row_bottom, x + w, row_bottom)
 
         c.setFillColor(colors.black)
-        draw_centered_text(
-            c,
-            str(r + 1),
-            x,
-            row_bottom + 4,
-            col_widths[0],
-            "Helvetica-Bold",
-            6.2
-        )
+        draw_centered_text(c, str(r + 1), x, row_bottom + 4, col_widths[0], "Helvetica-Bold", 6.2)
 
         if r < len(rows):
             values = rows[r]
@@ -353,7 +333,7 @@ def draw_table(c, title, df, x, y, w, col_weights, icon_path):
                     row_bottom + 4,
                     cw,
                     "Helvetica-Bold" if r == 0 else "Helvetica",
-                    size
+                    size,
                 )
 
                 current_x += cw
@@ -372,6 +352,11 @@ def build_pdf():
     red = colors.HexColor("#C0111F")
     panel = colors.HexColor("#F4F6F9")
 
+    hitting_icon = "Hitting.png"
+    baserunning_icon = "baserunning.png"
+    defense_icon = "Defense.png"
+    catching_icon = "Catching.png"
+
     c.setFillColor(colors.white)
     c.rect(0, 0, width, height, fill=1, stroke=0)
 
@@ -384,7 +369,7 @@ def build_pdf():
 
     c.setFillColor(colors.HexColor("#334155"))
     c.setFont("Helvetica", 9)
-    subtitle = f"{team_name} | Through {report_date.strftime('%B %d, %Y')} | Top 5 by Category"
+    subtitle = f"{team_name} | Through {report_date.strftime('%B %d, %Y')} | {ranking_label} by Category"
     c.drawCentredString(width / 2, 538, subtitle)
 
     c.setStrokeColor(red)
@@ -404,12 +389,12 @@ def build_pdf():
     draw_section_banner(c, "HITTING", (width - 262) / 2, 488, 262)
 
     hitting_tables = [
-        ("AVG", top_leaders_with_context(hitting_df, "AVG", "PA", min_col="PA", minimum=min_pa)),
-        ("OBP", top_leaders_with_context(hitting_df, "OBP", "PA", min_col="PA", minimum=min_pa)),
-        ("SLG", top_leaders_with_context(hitting_df, "SLG", "PA", min_col="PA", minimum=min_pa)),
-        ("OPS", top_leaders_with_context(hitting_df, "OPS", "PA", min_col="PA", minimum=min_pa)),
-        ("BB%", top_leaders_with_context(hitting_df, "BB%", "PA", min_col="PA", minimum=min_pa)),
-        ("K%", top_leaders_with_context(hitting_df, "K%", "PA", ascending=True, min_col="PA", minimum=min_pa)),
+        ("AVG", top_leaders_with_context(hitting_df, "AVG", "PA", ascending=show_bottom, min_col="PA", minimum=min_pa)),
+        ("OBP", top_leaders_with_context(hitting_df, "OBP", "PA", ascending=show_bottom, min_col="PA", minimum=min_pa)),
+        ("SLG", top_leaders_with_context(hitting_df, "SLG", "PA", ascending=show_bottom, min_col="PA", minimum=min_pa)),
+        ("OPS", top_leaders_with_context(hitting_df, "OPS", "PA", ascending=show_bottom, min_col="PA", minimum=min_pa)),
+        ("BB%", top_leaders_with_context(hitting_df, "BB%", "PA", ascending=show_bottom, min_col="PA", minimum=min_pa)),
+        ("K%", top_leaders_with_context(hitting_df, "K%", "PA", ascending=not show_bottom, min_col="PA", minimum=min_pa)),
     ]
 
     hitting_table_w = 114
@@ -427,7 +412,7 @@ def build_pdf():
             hitting_y,
             hitting_table_w,
             [0.12, 0.51, 0.17, 0.20],
-            HITTING_ICON
+            hitting_icon,
         )
 
     c.setFillColor(panel)
@@ -435,11 +420,11 @@ def build_pdf():
     draw_section_banner(c, "BASERUNNING / DEFENSE", (width - 302) / 2, 340, 302)
 
     middle_tables = [
-        ("SB LEADERS", top_leaders_with_extra(baserunning_df, "SB", "SB%"), 140, [0.12, 0.50, 0.16, 0.22], BASERUNNING_ICON),
-        ("INF ERRORS", top_leaders_with_context(infield_df, "E", "InnIF", ascending=True, min_col="InnIF", minimum=min_inn_if), 140, [0.12, 0.50, 0.24, 0.14], DEFENSE_ICON),
-        ("INF FLD%", top_leaders_with_context(infield_df, "FLD%", "InnIF", min_col="InnIF", minimum=min_inn_if), 140, [0.12, 0.48, 0.22, 0.18], DEFENSE_ICON),
-        ("OF ERRORS", top_leaders_with_context(outfield_df, "E", "InnOF", ascending=True, min_col="InnOF", minimum=min_inn_of), 140, [0.12, 0.50, 0.24, 0.14], DEFENSE_ICON),
-        ("OF FLD%", top_leaders_with_context(outfield_df, "FLD%", "InnOF", min_col="InnOF", minimum=min_inn_of), 140, [0.12, 0.44, 0.22, 0.22], DEFENSE_ICON),
+        ("SB LEADERS", top_leaders_with_extra(baserunning_df, "SB", "SB%", ascending=show_bottom), 140, [0.12, 0.50, 0.16, 0.22], baserunning_icon),
+        ("INF ERRORS", top_leaders_with_context(infield_df, "E", "InnIF", ascending=not show_bottom, min_col="InnIF", minimum=min_inn_if), 140, [0.12, 0.50, 0.24, 0.14], defense_icon),
+        ("INF FLD%", top_leaders_with_context(infield_df, "FLD%", "InnIF", ascending=show_bottom, min_col="InnIF", minimum=min_inn_if), 140, [0.12, 0.48, 0.22, 0.18], defense_icon),
+        ("OF ERRORS", top_leaders_with_context(outfield_df, "E", "InnOF", ascending=not show_bottom, min_col="InnOF", minimum=min_inn_of), 140, [0.12, 0.50, 0.24, 0.14], defense_icon),
+        ("OF FLD%", top_leaders_with_context(outfield_df, "FLD%", "InnOF", ascending=show_bottom, min_col="InnOF", minimum=min_inn_of), 140, [0.12, 0.44, 0.22, 0.22], defense_icon),
     ]
 
     middle_gap = 8
@@ -465,33 +450,14 @@ def build_pdf():
     draw_section_banner(c, "CATCHING", (width - 162) / 2, 192, 162)
 
     catching_tables = [
-        ("SL+", top_leaders_with_context(catching_df, "SL+", "P", min_col="P", minimum=min_catcher_p), catch_left_w, [0.12, 0.55, 0.15, 0.18], CATCHING_ICON),
-        ("CS% / SBA", top_leaders_with_extra(catching_df, "CS%", "SBA", min_col="SBA", minimum=min_sba), catch_right_w, [0.12, 0.52, 0.18, 0.18], CATCHING_ICON),
+        ("SL+", top_leaders_with_context(catching_df, "SL+", "P", ascending=show_bottom, min_col="P", minimum=min_catcher_p), catch_left_w, [0.12, 0.55, 0.15, 0.18], catching_icon),
+        ("CS% / SBA", top_leaders_with_extra(catching_df, "CS%", "SBA", ascending=show_bottom, min_col="SBA", minimum=min_sba), catch_right_w, [0.12, 0.52, 0.18, 0.18], catching_icon),
     ]
 
     catch_y = 176
 
-    draw_table(
-        c,
-        catching_tables[0][0],
-        catching_tables[0][1],
-        catch_start_x,
-        catch_y,
-        catching_tables[0][2],
-        catching_tables[0][3],
-        catching_tables[0][4]
-    )
-
-    draw_table(
-        c,
-        catching_tables[1][0],
-        catching_tables[1][1],
-        catch_start_x + catch_left_w + catch_gap,
-        catch_y,
-        catching_tables[1][2],
-        catching_tables[1][3],
-        catching_tables[1][4]
-    )
+    draw_table(c, catching_tables[0][0], catching_tables[0][1], catch_start_x, catch_y, catching_tables[0][2], catching_tables[0][3], catching_tables[0][4])
+    draw_table(c, catching_tables[1][0], catching_tables[1][1], catch_start_x + catch_left_w + catch_gap, catch_y, catching_tables[1][2], catching_tables[1][3], catching_tables[1][4])
 
     c.setStrokeColor(navy)
     c.setLineWidth(1)
@@ -511,7 +477,7 @@ def build_pdf():
 
     c.setFillColor(navy)
     c.setFont("Helvetica-Oblique", 7)
-    c.drawString(25, 12, f"MIN PA {min_pa} | MIN INF {min_inn_if} | MIN OF {min_inn_of} | MIN C P {min_catcher_p}")
+    c.drawString(25, 12, f"{ranking_label.upper()} | MIN PA {min_pa} | MIN INF {min_inn_if} | MIN OF {min_inn_of} | MIN C P {min_catcher_p}")
     c.drawRightString(width - 25, 12, "GENERATED FROM UPLOADED CSV FILES")
 
     c.showPage()
@@ -561,17 +527,17 @@ all_uploaded = all([
     baserunning_df is not None,
     infield_df is not None,
     outfield_df is not None,
-    catching_df is not None
+    catching_df is not None,
 ])
 
 if all_uploaded:
     pdf = build_pdf()
 
     st.download_button(
-        label="Download Beautiful PDF Report",
+        label=f"Download Beautiful PDF Report ({ranking_label})",
         data=pdf,
-        file_name="player_leaderboard_report.pdf",
-        mime="application/pdf"
+        file_name=f"player_leaderboard_report_{ranking_label.lower().replace(' ', '_')}.pdf",
+        mime="application/pdf",
     )
 else:
     st.info("Upload all 5 CSVs to enable PDF export.")
