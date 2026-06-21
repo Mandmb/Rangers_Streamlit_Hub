@@ -10,3 +10,4 @@ requests>=2.31
 streamlit
 streamlit>=1.32
 xlsxwriter
+plotly
