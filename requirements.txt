@@ -11,3 +11,10 @@ streamlit
 streamlit>=1.32
 xlsxwriter
 plotly
+streamlit
+pandas
+numpy
+plotly
+reportlab
+matplotlib
+openpyxl
