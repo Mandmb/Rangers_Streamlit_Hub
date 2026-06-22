@@ -354,7 +354,7 @@ def pitching_lower_is_better(stat: str) -> bool:
 
 
 def build_pitching_from_csv(df: pd.DataFrame) -> pd.DataFrame:
-    """Clean LIDOM Draft pitching CSV and return one row per team."""
+    """Clean Lidom Draft SP/RP pitching CSV and return one row per team."""
     if df is None or df.empty:
         return pd.DataFrame(columns=["fullName"] + PITCHING_STATS)
     out = df.copy()
@@ -475,15 +475,17 @@ def make_pitching_bar_chart(df: pd.DataFrame, stat: str, title: str):
     return fig
 
 
-def to_excel(hitting, baserunning, rolling_hitting, rolling_baserunning, pitching=None, defense=None):
+def to_excel(hitting, baserunning, rolling_hitting, rolling_baserunning, pitching_sp=None, pitching_rp=None, defense=None):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         hitting.to_excel(writer, index=False, sheet_name="Hitting Leaderboard")
         baserunning.to_excel(writer, index=False, sheet_name="Baserunning")
         rolling_hitting.to_excel(writer, index=False, sheet_name="Rolling Hitting")
         rolling_baserunning.to_excel(writer, index=False, sheet_name="Rolling Baserunning")
-        if pitching is not None and not pitching.empty:
-            pitching.to_excel(writer, index=False, sheet_name="Pitching Leaderboard")
+        if pitching_sp is not None and not pitching_sp.empty:
+            pitching_sp.to_excel(writer, index=False, sheet_name="Starting Pitching")
+        if pitching_rp is not None and not pitching_rp.empty:
+            pitching_rp.to_excel(writer, index=False, sheet_name="Relief Pitching")
         if defense is not None and not defense.empty:
             defense.to_excel(writer, index=False, sheet_name="Defense Leaderboard")
     output.seek(0)
@@ -1330,7 +1332,7 @@ def draw_chart_grid(c, rolling_hitting, rolling_baserunning, x, y, w, h, logo_pa
         c.drawString(lx + 19, legend_y - 2.2, team.replace(" del ", " ").replace(" Orientales", ""))
         lx += 112
 
-def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd.DataFrame, rolling_baserunning: pd.DataFrame, pitching: pd.DataFrame | None = None, defense: pd.DataFrame | None = None, logo_uploads: dict | None = None, selected_team: str = "Leones del Escogido") -> BytesIO:
+def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd.DataFrame, rolling_baserunning: pd.DataFrame, pitching_sp: pd.DataFrame | None = None, pitching_rp: pd.DataFrame | None = None, defense: pd.DataFrame | None = None, logo_uploads: dict | None = None, selected_team: str = "Leones del Escogido") -> BytesIO:
     if not REPORTLAB_AVAILABLE:
         raise ImportError("ReportLab is not installed. Run: pip install reportlab")
 
@@ -1465,57 +1467,75 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
     draw_footer(c, 3, logo_paths, footer_bg, selected_team)
     c.showPage()
 
-    # Page 4 - Pitching category leaderboards from LIDOM Draft snapshot
-    draw_header(c, "LIDOM TEAM PITCHING LEADERBOARDS", date_txt, primary, logo_paths, "blue", accent=accent, text_color=header_text)
-    draw_section_title(c, "PITCHING LEADERBOARDS BY CATEGORY   ★", 24, H - 119, section_color)
+    def draw_pitching_leaderboard_page(page_num, page_title, pitching_df, empty_message, summary_title):
+        draw_header(c, page_title, date_txt, primary, logo_paths, "blue", accent=accent, text_color=header_text)
+        draw_section_title(c, "PITCHING LEADERBOARDS BY CATEGORY   ★", 24, H - 119, section_color)
 
-    if pitching is None or pitching.empty:
-        c.setFillColor(colors.HexColor("#444444"))
-        c.setFont("Helvetica-Bold", 14)
-        c.drawCentredString(W / 2, H / 2, "Upload the LIDOM Draft pitching CSV to generate this page.")
-    else:
-        p_left = 42
-        p_top = H - 148
-        p_gap_x = 20
-        p_gap_y = 14
-        p_table_w = (W - 2 * p_left - 2 * p_gap_x) / 3
-        p_table_h = 126
-        for idx, stat in enumerate(PITCHING_STATS):
-            row = idx // 3
-            col = idx % 3
-            x = p_left + col * (p_table_w + p_gap_x)
-            y = p_top - (row + 1) * p_table_h - row * p_gap_y
-            draw_stat_table(
+        if pitching_df is None or pitching_df.empty:
+            c.setFillColor(colors.HexColor("#444444"))
+            c.setFont("Helvetica-Bold", 14)
+            c.drawCentredString(W / 2, H / 2, empty_message)
+        else:
+            p_left = 42
+            p_top = H - 148
+            p_gap_x = 20
+            p_gap_y = 14
+            p_table_w = (W - 2 * p_left - 2 * p_gap_x) / 3
+            p_table_h = 126
+            for idx, stat in enumerate(PITCHING_STATS):
+                row = idx // 3
+                col = idx % 3
+                x = p_left + col * (p_table_w + p_gap_x)
+                y = p_top - (row + 1) * p_table_h - row * p_gap_y
+                draw_stat_table(
+                    c,
+                    pitching_df,
+                    stat,
+                    x,
+                    y,
+                    p_table_w,
+                    p_table_h,
+                    logo_paths,
+                    theme=primary,
+                    ascending=pitching_lower_is_better(stat),
+                    selected_team=selected_team,
+                    highlight_bg=highlight_bg,
+                    highlight_text=highlight_text,
+                    table_text=table_text,
+                )
+            draw_summary_box(
                 c,
-                pitching,
-                stat,
-                x,
-                y,
-                p_table_w,
-                p_table_h,
+                f"{team_short_name(selected_team)} {summary_title}",
+                make_team_pitching_summary(pitching_df, selected_team),
+                p_left + (p_table_w + p_gap_x),
+                62,
+                (p_table_w * 2) + p_gap_x,
+                94,
                 logo_paths,
-                theme=primary,
-                ascending=pitching_lower_is_better(stat),
-                selected_team=selected_team,
-                highlight_bg=highlight_bg,
-                highlight_text=highlight_text,
-                table_text=table_text,
+                selected_team,
             )
-        draw_summary_box(
-            c,
-            f"{team_short_name(selected_team)} Pitching Summary",
-            make_team_pitching_summary(pitching, selected_team),
-            p_left + (p_table_w + p_gap_x),
-            62,
-            (p_table_w * 2) + p_gap_x,
-            94,
-            logo_paths,
-        selected_team,
-        )
-    draw_footer(c, 4, logo_paths, footer_bg, selected_team)
-    c.showPage()
+        draw_footer(c, page_num, logo_paths, footer_bg, selected_team)
+        c.showPage()
 
-    # Page 5 - Defense category leaderboards from catcher, infield, and outfield snapshots
+    # Page 4 - Starting pitching category leaderboards from Lidom Draft SP snapshot
+    draw_pitching_leaderboard_page(
+        4,
+        "LIDOM TEAM STARTING PITCHING LEADERBOARDS",
+        pitching_sp,
+        "Upload the Lidom Draft SP CSV to generate this page.",
+        "Starting Pitching Summary",
+    )
+
+    # Page 5 - Relief pitching category leaderboards from Lidom Draft RP snapshot
+    draw_pitching_leaderboard_page(
+        5,
+        "LIDOM TEAM RELIEF PITCHING LEADERBOARDS",
+        pitching_rp,
+        "Upload the Lidom Draft RP CSV to generate this page.",
+        "Relief Pitching Summary",
+    )
+
+    # Page 6 - Defense category leaderboards from catcher, infield, and outfield snapshots
     draw_header(c, "LIDOM TEAM DEFENSE LEADERBOARDS", date_txt, primary, logo_paths, "red", accent=accent, text_color=header_text)
     draw_section_title(c, "DEFENSE LEADERBOARDS BY CATEGORY   ★", 24, H - 119, section_color)
 
@@ -1563,7 +1583,7 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
             logo_paths,
         selected_team,
         )
-    draw_footer(c, 5, logo_paths, footer_bg, selected_team)
+    draw_footer(c, 6, logo_paths, footer_bg, selected_team)
     c.save()
     output.seek(0)
     return output
@@ -1576,7 +1596,7 @@ def safe_filename(name: str) -> str:
     return cleaned or "Team"
 
 
-def build_all_team_pdfs_zip(hitting, baserunning, rolling_hitting, rolling_baserunning, pitching, defense, logo_uploads, team_list) -> bytes:
+def build_all_team_pdfs_zip(hitting, baserunning, rolling_hitting, rolling_baserunning, pitching_sp, pitching_rp, defense, logo_uploads, team_list) -> bytes:
     """Create a ZIP containing one PDF per selected/reportable LIDOM team."""
     zip_buffer = BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -1586,7 +1606,8 @@ def build_all_team_pdfs_zip(hitting, baserunning, rolling_hitting, rolling_baser
                 baserunning,
                 rolling_hitting,
                 rolling_baserunning,
-                pitching,
+                pitching_sp,
+                pitching_rp,
                 defense,
                 logo_uploads,
                 team,
@@ -1600,14 +1621,14 @@ def build_all_team_pdfs_zip(hitting, baserunning, rolling_hitting, rolling_baser
 # UI
 # =====================================================
 st.title("⚾ LIDOM Team Leaderboard Report")
-st.caption("✅ PDF DESIGN VERSION: 5-PAGE BEAUTIFUL REPORT — team POV summaries, one upload box, category tables, logos, rolling charts")
-st.caption("Upload all CSVs together: six team Pregame files, LIDOM Draft pitching, 2022 Game Review catching, Infield Counting, and Outfield Counting.")
+st.caption("✅ PDF DESIGN VERSION: 6-PAGE BEAUTIFUL REPORT — team POV summaries, one upload box, category tables, logos, rolling charts")
+st.caption("Upload all CSVs together: six team Pregame files, Lidom Draft SP, Lidom Draft RP, 2022 Game Review catching, Infield Counting, and Outfield Counting.")
 
 all_csv_files = st.file_uploader(
     "Upload all LIDOM CSV files here",
     type=["csv"],
     accept_multiple_files=True,
-    help="You can select every CSV at once. The app will identify team, pitching, catcher, infield, and outfield files automatically by filename and columns.",
+    help="You can select every CSV at once. The app will identify team, starter pitching, reliever pitching, catcher, infield, and outfield files automatically by filename and columns.",
 )
 
 with st.sidebar.expander("🖼️ PDF Logos", expanded=False):
@@ -1628,14 +1649,16 @@ if not all_csv_files:
     st.stop()
 
 team_frames = []
-pitching_source_df = None
+pitching_sp_source_df = None
+pitching_rp_source_df = None
 catcher_df = None
 infield_df = None
 outfield_df = None
 errors = []
 loaded_names = {
     "team": [],
-    "pitching": None,
+    "pitching_sp": None,
+    "pitching_rp": None,
     "catcher": None,
     "infield": None,
     "outfield": None,
@@ -1657,8 +1680,13 @@ def _classify_csv_file(file_name: str, df: pd.DataFrame) -> str:
     name = file_name.lower()
     cols = set(str(c).strip() for c in df.columns)
 
+    if "lidom draft sp" in name or "draft sp" in name:
+        return "pitching_sp"
+    if "lidom draft rp" in name or "draft rp" in name:
+        return "pitching_rp"
     if "lidom draft" in name or ("teamFullName" in cols and {"ERA", "FIP", "WHIP"}.issubset(cols)):
-        return "pitching"
+        # Backward-compatible fallback: old single pitching file is treated as starters.
+        return "pitching_sp"
     if "game review" in name or "2022 game review" in name:
         return "catcher"
     if "infield counting" in name or {"IFErr", "INFld%"}.issubset(cols) or {"IFErr", "IFFld%"}.issubset(cols):
@@ -1681,9 +1709,12 @@ for file in all_csv_files:
             else:
                 team_frames.append((file.name, df))
                 loaded_names["team"].append(file.name)
-        elif kind == "pitching":
-            pitching_source_df = df
-            loaded_names["pitching"] = file.name
+        elif kind == "pitching_sp":
+            pitching_sp_source_df = df
+            loaded_names["pitching_sp"] = file.name
+        elif kind == "pitching_rp":
+            pitching_rp_source_df = df
+            loaded_names["pitching_rp"] = file.name
         elif kind == "catcher":
             catcher_df = df
             loaded_names["catcher"] = file.name
@@ -1699,17 +1730,20 @@ for file in all_csv_files:
         errors.append(f"{file.name}: {e}")
 
 with st.expander("📦 Loaded CSV status", expanded=True):
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
     c1.metric("Team files", len(loaded_names["team"]))
-    c2.metric("Pitching", "Yes" if loaded_names["pitching"] else "No")
-    c3.metric("Catching", "Yes" if loaded_names["catcher"] else "No")
-    c4.metric("Infield", "Yes" if loaded_names["infield"] else "No")
-    c5.metric("Outfield", "Yes" if loaded_names["outfield"] else "No")
+    c2.metric("SP Pitching", "Yes" if loaded_names["pitching_sp"] else "No")
+    c3.metric("RP Pitching", "Yes" if loaded_names["pitching_rp"] else "No")
+    c4.metric("Catching", "Yes" if loaded_names["catcher"] else "No")
+    c5.metric("Infield", "Yes" if loaded_names["infield"] else "No")
+    c6.metric("Outfield", "Yes" if loaded_names["outfield"] else "No")
 
     if loaded_names["team"]:
         st.success("Team files: " + ", ".join(loaded_names["team"]))
-    if loaded_names["pitching"]:
-        st.success(f"Pitching file: {loaded_names['pitching']}")
+    if loaded_names["pitching_sp"]:
+        st.success(f"Starting pitching file: {loaded_names['pitching_sp']}")
+    if loaded_names["pitching_rp"]:
+        st.success(f"Relief pitching file: {loaded_names['pitching_rp']}")
     if loaded_names["catcher"]:
         st.success(f"Catcher defense file: {loaded_names['catcher']}")
     if loaded_names["infield"]:
@@ -1753,12 +1787,18 @@ baserunning = build_team_baserunning(br_df)
 rolling_hitting = build_rolling_hitting(pa_df)
 rolling_baserunning = build_rolling_baserunning(br_df)
 
-pitching = pd.DataFrame(columns=["fullName"] + PITCHING_STATS)
-if pitching_source_df is not None:
+pitching_sp = pd.DataFrame(columns=["fullName"] + PITCHING_STATS)
+pitching_rp = pd.DataFrame(columns=["fullName"] + PITCHING_STATS)
+if pitching_sp_source_df is not None:
     try:
-        pitching = build_pitching_from_csv(pitching_source_df)
+        pitching_sp = build_pitching_from_csv(pitching_sp_source_df)
     except Exception as e:
-        st.error(f"Could not process pitching CSV: {e}")
+        st.error(f"Could not process starting pitching CSV: {e}")
+if pitching_rp_source_df is not None:
+    try:
+        pitching_rp = build_pitching_from_csv(pitching_rp_source_df)
+    except Exception as e:
+        st.error(f"Could not process relief pitching CSV: {e}")
 
 defense = pd.DataFrame(columns=["fullName"] + DEFENSE_STATS)
 try:
@@ -1770,7 +1810,7 @@ except Exception as e:
 hitting = hitting.sort_values("OPS", ascending=False).reset_index(drop=True)
 baserunning = baserunning.sort_values("SB", ascending=False).reset_index(drop=True)
 
-report_team_options = [t for t in REPORT_TEAM_OPTIONS if t in set(pd.concat([hitting[["fullName"]], baserunning[["fullName"]], pitching[["fullName"]] if not pitching.empty else pd.DataFrame(columns=["fullName"]), defense[["fullName"]] if not defense.empty else pd.DataFrame(columns=["fullName"])], ignore_index=True)["fullName"].dropna().apply(normalize_team_name))]
+report_team_options = [t for t in REPORT_TEAM_OPTIONS if t in set(pd.concat([hitting[["fullName"]], baserunning[["fullName"]], pitching_sp[["fullName"]] if not pitching_sp.empty else pd.DataFrame(columns=["fullName"]), pitching_rp[["fullName"]] if not pitching_rp.empty else pd.DataFrame(columns=["fullName"]), defense[["fullName"]] if not defense.empty else pd.DataFrame(columns=["fullName"])], ignore_index=True)["fullName"].dropna().apply(normalize_team_name))]
 if not report_team_options:
     report_team_options = REPORT_TEAM_OPTIONS
 selected_report_team = st.sidebar.selectbox("📌 Report POV Team", report_team_options, index=0, help="Choose which team is highlighted and used for all summary sections.")
@@ -1799,15 +1839,26 @@ with tab1:
             st.dataframe(style_table(leaderboard_table(baserunning, stat, ascending=False)), use_container_width=True, hide_index=True)
 
     st.divider()
-    st.subheader("Pitching Leaderboards")
-    if pitching.empty:
-        st.info("Upload the pitching CSV labeled LIDOM Draft to view pitching leaderboards.")
+    st.subheader("Starting Pitching Leaderboards")
+    if pitching_sp.empty:
+        st.info("Upload Lidom Draft SP to view starting pitching leaderboards.")
     else:
         cols = st.columns(3)
         for i, stat in enumerate(PITCHING_STATS):
             with cols[i % 3]:
                 st.markdown(f"#### {stat}")
-                st.dataframe(style_table(leaderboard_table(pitching, stat, ascending=pitching_lower_is_better(stat))), use_container_width=True, hide_index=True)
+                st.dataframe(style_table(leaderboard_table(pitching_sp, stat, ascending=pitching_lower_is_better(stat))), use_container_width=True, hide_index=True)
+
+    st.divider()
+    st.subheader("Relief Pitching Leaderboards")
+    if pitching_rp.empty:
+        st.info("Upload Lidom Draft RP to view relief pitching leaderboards.")
+    else:
+        cols = st.columns(3)
+        for i, stat in enumerate(PITCHING_STATS):
+            with cols[i % 3]:
+                st.markdown(f"#### {stat}")
+                st.dataframe(style_table(leaderboard_table(pitching_rp, stat, ascending=pitching_lower_is_better(stat))), use_container_width=True, hide_index=True)
 
     st.divider()
     st.subheader("Defense Leaderboards")
@@ -1843,14 +1894,23 @@ with tab3:
         display_br["SB%"] = display_br["SB%"].apply(lambda v: format_value("SB%", v))
     st.dataframe(style_table(display_br.rename(columns={"fullName": "Team"})), use_container_width=True, hide_index=True)
 
-    st.subheader("Team Pitching Summary")
-    if pitching.empty:
-        st.info("Upload LIDOM Draft pitching CSV to view pitching summary.")
+    st.subheader("Team Starting Pitching Summary")
+    if pitching_sp.empty:
+        st.info("Upload Lidom Draft SP to view starting pitching summary.")
     else:
-        display_pitching = pitching.copy()
+        display_pitching_sp = pitching_sp.copy()
         for stat in PITCHING_STATS:
-            display_pitching[stat] = display_pitching[stat].apply(lambda v, s=stat: format_value(s, v))
-        st.dataframe(style_table(display_pitching.rename(columns={"fullName": "Team"})), use_container_width=True, hide_index=True)
+            display_pitching_sp[stat] = display_pitching_sp[stat].apply(lambda v, s=stat: format_value(s, v))
+        st.dataframe(style_table(display_pitching_sp.rename(columns={"fullName": "Team"})), use_container_width=True, hide_index=True)
+
+    st.subheader("Team Relief Pitching Summary")
+    if pitching_rp.empty:
+        st.info("Upload Lidom Draft RP to view relief pitching summary.")
+    else:
+        display_pitching_rp = pitching_rp.copy()
+        for stat in PITCHING_STATS:
+            display_pitching_rp[stat] = display_pitching_rp[stat].apply(lambda v, s=stat: format_value(s, v))
+        st.dataframe(style_table(display_pitching_rp.rename(columns={"fullName": "Team"})), use_container_width=True, hide_index=True)
 
     st.subheader("Team Defense Summary")
     if defense.empty:
@@ -1869,7 +1929,7 @@ with tab4:
     with col1:
         st.download_button(
             "📊 Download Excel Report",
-            data=to_excel(hitting, baserunning, rolling_hitting, rolling_baserunning, pitching, defense),
+            data=to_excel(hitting, baserunning, rolling_hitting, rolling_baserunning, pitching_sp, pitching_rp, defense),
             file_name="lidom_team_leaderboard_report.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
@@ -1878,7 +1938,7 @@ with tab4:
         if REPORTLAB_AVAILABLE:
             st.download_button(
                 "📄 Download Selected Team PDF",
-                data=to_pdf(hitting, baserunning, rolling_hitting, rolling_baserunning, pitching, defense, logo_uploads, selected_report_team).getvalue(),
+                data=to_pdf(hitting, baserunning, rolling_hitting, rolling_baserunning, pitching_sp, pitching_rp, defense, logo_uploads, selected_report_team).getvalue(),
                 file_name=f"lidom_report_{safe_filename(team_short_name(selected_report_team))}.pdf",
                 mime="application/pdf",
                 key="download_selected_team_pdf",
@@ -1893,7 +1953,8 @@ with tab4:
                 baserunning,
                 rolling_hitting,
                 rolling_baserunning,
-                pitching,
+                pitching_sp,
+                pitching_rp,
                 defense,
                 logo_uploads,
                 report_team_options,
@@ -1908,4 +1969,4 @@ with tab4:
         else:
             st.warning("PDF ZIP requires ReportLab.")
 
-    st.caption("Excel includes final leaderboards and rolling cumulative data. PDF includes page 1 hitting, page 2 baserunning, page 3 rolling charts, page 4 pitching, and page 5 defense leaderboards. The ZIP export creates one PDF per POV team.")
+    st.caption("Excel includes final leaderboards and rolling cumulative data. PDF includes page 1 hitting, page 2 baserunning, page 3 rolling charts, page 4 starting pitching, page 5 relief pitching, and page 6 defense leaderboards. The ZIP export creates one PDF per POV team.")
