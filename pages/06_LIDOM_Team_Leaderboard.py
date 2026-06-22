@@ -38,6 +38,7 @@ st.set_page_config(
 # TEAM COLORS
 # =====================================================
 TEAM_COLORS = {
+    # LIDOM
     "Leones del Escogido": "#D71920",   # red
     "Tigres del Licey": "#0057B8",      # blue
     "Toros del Este": "#F58220",        # orange
@@ -45,6 +46,16 @@ TEAM_COLORS = {
     "Estrellas Orientales": "#00843D",  # green
     "Aguilas Cibaenas": "#FFD200",      # yellow
     "Águilas Cibaeñas": "#FFD200",
+    # LBPRC / Puerto Rico
+    "Gigantes de Carolina": "#0057B8",
+    "Indios de Mayaguez": "#7A1F2B",
+    "Indios de Mayagüez": "#7A1F2B",
+    "Cangrejeros de Santurce": "#0A2A66",
+    "Criollos de Caguas": "#C8102E",
+    "Criollos de Cagua": "#C8102E",
+    "Leones de Ponce": "#D71920",
+    "Senadores de San Juan": "#C8102E",
+    "Senadores de Sanjuan": "#C8102E",
 }
 
 HITTING_STATS = [
@@ -101,10 +112,20 @@ def normalize_team_name(name: str, fallback: str = "Unknown") -> str:
     name = clean_text(name)
     if not name:
         return fallback
-    # Normalize common no-accent file values to official display if desired.
-    if name.lower() in {"aguilas cibaenas", "águilas cibaeñas"}:
-        return "Aguilas Cibaenas"
-    return name
+    # Normalize common file values to official display if desired.
+    n = name.lower().replace("á", "a").replace("é", "e").replace("í", "i").replace("ó", "o").replace("ú", "u").replace("ñ", "n")
+    aliases = {
+        "aguilas cibaenas": "Aguilas Cibaenas",
+        "gigantes de carolina": "Gigantes de Carolina",
+        "indios de mayaguez": "Indios de Mayaguez",
+        "cangrejeros de santurce": "Cangrejeros de Santurce",
+        "criollos de cagua": "Criollos de Caguas",
+        "criollos de caguas": "Criollos de Caguas",
+        "leones de ponce": "Leones de Ponce",
+        "senadores de sanjuan": "Senadores de San Juan",
+        "senadores de san juan": "Senadores de San Juan",
+    }
+    return aliases.get(n, name)
 
 
 def required_columns_ok(df: pd.DataFrame):
@@ -502,6 +523,7 @@ def pdf_rank_table(df: pd.DataFrame, stat: str, ascending: bool = False) -> pd.D
 
 
 TEAM_LOGO_KEYS = {
+    # LIDOM
     "Aguilas Cibaenas": "aguilas",
     "Águilas Cibaeñas": "aguilas",
     "Leones del Escogido": "escogido",
@@ -509,16 +531,33 @@ TEAM_LOGO_KEYS = {
     "Gigantes del Cibao": "gigantes",
     "Tigres del Licey": "licey",
     "Toros del Este": "toros",
+    # LBPRC / Puerto Rico
+    "Gigantes de Carolina": "carolina",
+    "Indios de Mayaguez": "indios",
+    "Indios de Mayagüez": "indios",
+    "Cangrejeros de Santurce": "cangrejeros",
+    "Criollos de Caguas": "criollos",
+    "Criollos de Cagua": "criollos",
+    "Leones de Ponce": "ponce",
+    "Senadores de San Juan": "senadores",
+    "Senadores de Sanjuan": "senadores",
 }
 
 LOGO_FILENAMES = {
     "lidom": "LIDOM.png",
+    "lbprc": "LBPRC.png",
     "aguilas": "aguilas.png",
     "escogido": "escogido.png",
     "estrellas": "estrellas.png",
     "gigantes": "gigantes.png",
     "licey": "licey.png",
     "toros": "toros.png",
+    "carolina": "carolina.png",
+    "indios": "indios.png",
+    "cangrejeros": "cangrejeros.png",
+    "criollos": "criollos.png",
+    "ponce": "ponce.png",
+    "senadores": "senadores.png",
     "baserunning": "baserunning.png",
 }
 
@@ -627,22 +666,57 @@ def team_logo_key(team: str) -> str | None:
     return TEAM_LOGO_KEYS.get(normalize_team_name(team))
 
 
-REPORT_TEAM_OPTIONS = [
-    "Leones del Escogido",
-    "Aguilas Cibaenas",
-    "Tigres del Licey",
-    "Estrellas Orientales",
-    "Gigantes del Cibao",
-    "Toros del Este",
-]
+LEAGUE_CONFIG = {
+    "LIDOM": {
+        "display": "LIDOM",
+        "logo_key": "lidom",
+        "teams": [
+            "Leones del Escogido",
+            "Aguilas Cibaenas",
+            "Tigres del Licey",
+            "Estrellas Orientales",
+            "Gigantes del Cibao",
+            "Toros del Este",
+        ],
+        "zip_prefix": "LIDOM_Report",
+        "excel_prefix": "lidom",
+    },
+    "LBPRC": {
+        "display": "LBPRC",
+        "logo_key": "lbprc",
+        "teams": [
+            "Gigantes de Carolina",
+            "Indios de Mayaguez",
+            "Cangrejeros de Santurce",
+            "Criollos de Caguas",
+            "Leones de Ponce",
+            "Senadores de San Juan",
+        ],
+        "zip_prefix": "LBPRC_Report",
+        "excel_prefix": "lbprc",
+    },
+}
+
+REPORT_TEAM_OPTIONS = LEAGUE_CONFIG["LIDOM"]["teams"]
 
 TEAM_SHORT_NAMES = {
+    # LIDOM
     "Leones del Escogido": "Escogido",
     "Aguilas Cibaenas": "Aguilas",
     "Tigres del Licey": "Licey",
     "Estrellas Orientales": "Estrellas",
     "Gigantes del Cibao": "Gigantes",
     "Toros del Este": "Toros",
+    # LBPRC
+    "Gigantes de Carolina": "Carolina",
+    "Indios de Mayaguez": "Mayaguez",
+    "Indios de Mayagüez": "Mayaguez",
+    "Cangrejeros de Santurce": "Santurce",
+    "Criollos de Caguas": "Caguas",
+    "Criollos de Cagua": "Caguas",
+    "Leones de Ponce": "Ponce",
+    "Senadores de San Juan": "SanJuan",
+    "Senadores de Sanjuan": "SanJuan",
 }
 
 
@@ -729,6 +803,31 @@ TEAM_THEMES = {
         "header_text": "#111111",
         "table_text": "#111111",
         "footer_bg": "#111111",
+    },
+    # LBPRC / Puerto Rico
+    "Gigantes de Carolina": {
+        "primary": "#0057B8", "secondary": "#FFFFFF", "accent": "#C8102E", "section": "#0057B8",
+        "highlight_bg": "#EEF4FF", "highlight_text": "#0057B8", "header_text": "#FFFFFF", "table_text": "#FFFFFF", "footer_bg": "#002B5C",
+    },
+    "Indios de Mayaguez": {
+        "primary": "#FDBB30", "secondary": "#7A1F2B", "accent": "#7A1F2B", "section": "#7A1F2B",
+        "highlight_bg": "#FFF4D6", "highlight_text": "#7A1F2B", "header_text": "#7A1F2B", "table_text": "#7A1F2B", "footer_bg": "#7A1F2B",
+    },
+    "Cangrejeros de Santurce": {
+        "primary": "#0A2A66", "secondary": "#F15A24", "accent": "#F15A24", "section": "#0A2A66",
+        "highlight_bg": "#EEF4FF", "highlight_text": "#0A2A66", "header_text": "#FFFFFF", "table_text": "#FFFFFF", "footer_bg": "#0A2A66",
+    },
+    "Criollos de Caguas": {
+        "primary": "#C8102E", "secondary": "#111111", "accent": "#111111", "section": "#C8102E",
+        "highlight_bg": "#FFF1F3", "highlight_text": "#C8102E", "header_text": "#FFFFFF", "table_text": "#FFFFFF", "footer_bg": "#111111",
+    },
+    "Leones de Ponce": {
+        "primary": "#D71920", "secondary": "#111111", "accent": "#111111", "section": "#D71920",
+        "highlight_bg": "#FFF1F3", "highlight_text": "#D71920", "header_text": "#FFFFFF", "table_text": "#FFFFFF", "footer_bg": "#111111",
+    },
+    "Senadores de San Juan": {
+        "primary": "#C8102E", "secondary": "#FFD200", "accent": "#FFD200", "section": "#C8102E",
+        "highlight_bg": "#FFF1F3", "highlight_text": "#C8102E", "header_text": "#FFFFFF", "table_text": "#FFFFFF", "footer_bg": "#C8102E",
     },
 }
 
@@ -1324,19 +1423,27 @@ def draw_chart_grid(c, rolling_hitting, rolling_baserunning, x, y, w, h, logo_pa
     legend_y = 72
     lx = x + 4
     c.setFont("Helvetica", 6.0)
-    for team in ["Aguilas Cibaenas", "Estrellas Orientales", "Toros del Este", "Leones del Escogido", "Gigantes del Cibao", "Tigres del Licey"]:
-        c.setStrokeColor(colors.HexColor(TEAM_COLORS.get(team, "#333333")))
+    legend_teams = list(pd.concat([rolling_hitting[["fullName"]], rolling_baserunning[["fullName"]]], ignore_index=True)["fullName"].dropna().drop_duplicates())[:6]
+    for team in legend_teams:
+        c.setStrokeColor(colors.HexColor(TEAM_COLORS.get(normalize_team_name(team), "#333333")))
         c.setLineWidth(2.0)
         c.line(lx, legend_y, lx + 15, legend_y)
         c.setFillColor(colors.HexColor("#222222"))
-        c.drawString(lx + 19, legend_y - 2.2, team.replace(" del ", " ").replace(" Orientales", ""))
+        label = team_short_name(team)
+        c.drawString(lx + 19, legend_y - 2.2, label[:18])
         lx += 112
 
-def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd.DataFrame, rolling_baserunning: pd.DataFrame, pitching_sp: pd.DataFrame | None = None, pitching_rp: pd.DataFrame | None = None, defense: pd.DataFrame | None = None, logo_uploads: dict | None = None, selected_team: str = "Leones del Escogido") -> BytesIO:
+def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd.DataFrame, rolling_baserunning: pd.DataFrame, pitching_sp: pd.DataFrame | None = None, pitching_rp: pd.DataFrame | None = None, defense: pd.DataFrame | None = None, logo_uploads: dict | None = None, selected_team: str = "Leones del Escogido", selected_league: str = "LIDOM") -> BytesIO:
     if not REPORTLAB_AVAILABLE:
         raise ImportError("ReportLab is not installed. Run: pip install reportlab")
 
     logo_paths = prepare_logo_paths(logo_uploads)
+    league_cfg = LEAGUE_CONFIG.get(selected_league, LEAGUE_CONFIG["LIDOM"])
+    league_display = league_cfg["display"]
+    league_logo_key = league_cfg.get("logo_key", "lidom")
+    if league_logo_key != "lidom" and logo_paths.get(league_logo_key):
+        # draw_header already looks for logo_paths["lidom"], so point it to the active league logo.
+        logo_paths["lidom"] = logo_paths[league_logo_key]
     output = BytesIO()
     c = canvas.Canvas(output, pagesize=landscape(letter))
     W, H = landscape(letter)
@@ -1352,7 +1459,7 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
     footer_bg = report_theme.get("footer_bg", primary)
 
     # Page 1 - Hitting category leaderboards, cleaner 3-column layout
-    draw_header(c, "LIDOM TEAM HITTING LEADERBOARDS", date_txt, primary, logo_paths, "blue", accent=accent, text_color=header_text)
+    draw_header(c, f"{league_display} TEAM HITTING LEADERBOARDS", date_txt, primary, logo_paths, "blue", accent=accent, text_color=header_text)
     draw_section_title(c, "HITTING LEADERBOARDS BY CATEGORY   ★   ★", 24, H - 119, section_color)
 
     left = 24
@@ -1388,7 +1495,7 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
     c.showPage()
 
     # Page 2 - Baserunning category leaderboards, bigger feature cards
-    draw_header(c, "LIDOM TEAM BASERUNNING LEADERBOARDS", date_txt, primary, logo_paths, "red", accent=accent, text_color=header_text)
+    draw_header(c, f"{league_display} TEAM BASERUNNING LEADERBOARDS", date_txt, primary, logo_paths, "red", accent=accent, text_color=header_text)
     # Baserunning section icon: always prefer baserunning.png from the app folder/sidebar, with embedded fallback.
     safe_draw_image(c, logo_paths.get("baserunning"), 34, H - 132, 18, 18)
     draw_section_title(c, "BASERUNNING LEADERBOARDS BY CATEGORY   ★", 58, H - 119, section_color)
@@ -1448,7 +1555,7 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
     c.showPage()
 
     # Page 3 - Rolling performance, larger key charts only
-    draw_header(c, "LIDOM TEAM ROLLING PERFORMANCE", f"Rolling Cumulative Charts - {date_txt}", primary, logo_paths, "blue", accent=accent, text_color=header_text)
+    draw_header(c, f"{league_display} TEAM ROLLING PERFORMANCE", f"Rolling Cumulative Charts - {date_txt}", primary, logo_paths, "blue", accent=accent, text_color=header_text)
     draw_section_title(c, "HITTING METRICS (Rolling Cumulative)   ★", 30, H - 120, section_color)
     safe_draw_image(c, logo_paths.get("baserunning"), 30, 213, 16, 16)
     draw_section_title(c, "BASERUNNING METRICS (Rolling Cumulative)   ★", 52, 226, accent)
@@ -1520,7 +1627,7 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
     # Page 4 - Starting pitching category leaderboards from Lidom Draft SP snapshot
     draw_pitching_leaderboard_page(
         4,
-        "LIDOM TEAM STARTING PITCHING LEADERBOARDS",
+        f"{league_display} TEAM STARTING PITCHING LEADERBOARDS",
         pitching_sp,
         "Upload the Lidom Draft SP CSV to generate this page.",
         "Starting Pitching Summary",
@@ -1529,14 +1636,14 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
     # Page 5 - Relief pitching category leaderboards from Lidom Draft RP snapshot
     draw_pitching_leaderboard_page(
         5,
-        "LIDOM TEAM RELIEF PITCHING LEADERBOARDS",
+        f"{league_display} TEAM RELIEF PITCHING LEADERBOARDS",
         pitching_rp,
         "Upload the Lidom Draft RP CSV to generate this page.",
         "Relief Pitching Summary",
     )
 
     # Page 6 - Defense category leaderboards from catcher, infield, and outfield snapshots
-    draw_header(c, "LIDOM TEAM DEFENSE LEADERBOARDS", date_txt, primary, logo_paths, "red", accent=accent, text_color=header_text)
+    draw_header(c, f"{league_display} TEAM DEFENSE LEADERBOARDS", date_txt, primary, logo_paths, "red", accent=accent, text_color=header_text)
     draw_section_title(c, "DEFENSE LEADERBOARDS BY CATEGORY   ★", 24, H - 119, section_color)
 
     if defense is None or defense.empty:
@@ -1596,8 +1703,8 @@ def safe_filename(name: str) -> str:
     return cleaned or "Team"
 
 
-def build_all_team_pdfs_zip(hitting, baserunning, rolling_hitting, rolling_baserunning, pitching_sp, pitching_rp, defense, logo_uploads, team_list) -> bytes:
-    """Create a ZIP containing one PDF per selected/reportable LIDOM team."""
+def build_all_team_pdfs_zip(hitting, baserunning, rolling_hitting, rolling_baserunning, pitching_sp, pitching_rp, defense, logo_uploads, team_list, selected_league="LIDOM") -> bytes:
+    """Create a ZIP containing one PDF per selected/reportable team in the selected league."""
     zip_buffer = BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for team in team_list:
@@ -1611,9 +1718,11 @@ def build_all_team_pdfs_zip(hitting, baserunning, rolling_hitting, rolling_baser
                 defense,
                 logo_uploads,
                 team,
+                selected_league,
             )
             pdf_buffer.seek(0)
-            zf.writestr(f"LIDOM_Report_{safe_filename(team_short_name(team))}.pdf", pdf_buffer.getvalue())
+            prefix = LEAGUE_CONFIG.get(selected_league, LEAGUE_CONFIG["LIDOM"]).get("zip_prefix", "Team_Report")
+            zf.writestr(f"{prefix}_{safe_filename(team_short_name(team))}.pdf", pdf_buffer.getvalue())
     zip_buffer.seek(0)
     return zip_buffer.getvalue()
 
@@ -1935,56 +2044,33 @@ def _draw_underlined_heading(c, text, x, y, color, font_size=5.7):
 
 
 def _draw_summary_column(c, heading, bullets, x, y, w, h, color, positive=True):
-    """Draw one internal summary box without cutting sentences mid-thought.
-
-    The previous version limited every bullet to two wrapped lines. That made
-    the PDF look cleaner, but it could stop a sentence before it finished.
-    This version only draws bullets that fit completely. If space runs out, it
-    skips the next bullet instead of printing a half sentence.
-    """
+    """Draw one small internal box inside the summary area."""
     fill = "#FBFCFE" if positive else "#FFFFFF"
     c.setFillColor(colors.HexColor(fill))
     c.setStrokeColor(colors.HexColor(color))
     c.setLineWidth(0.45)
     c.roundRect(x, y, w, h, 4, fill=1, stroke=1)
 
-    pad = 5.0 if w < 120 else 7
-    heading_size = 4.7 if w < 120 else 5.8
-    bullet_size = 3.85 if w < 120 else 4.85
-    leading = 4.45 if w < 120 else 5.6
+    pad = 5.5 if w < 120 else 7
+    heading_size = 4.9 if w < 120 else 5.8
+    bullet_size = 4.25 if w < 120 else 5.15
+    leading = 4.9 if w < 120 else 5.95
     bullet_symbol = "✓" if positive else "•"
 
     _draw_underlined_heading(c, heading, x + pad, y + h - 10, color, heading_size)
     ty = y + h - 18
     max_lines = max(3, int((h - 22) / leading))
     lines_used = 0
-
     c.setFillColor(colors.HexColor("#111111"))
     c.setFont("Helvetica", bullet_size)
-    avg_char = max(bullet_size * 0.47, 2.0)
-    max_chars = max(18, int((w - 2 * pad - 7) / avg_char))
+    avg_char = max(bullet_size * 0.48, 2.2)
+    max_chars = max(15, int((w - 2 * pad - 5) / avg_char))
 
-    # Keep the section readable: use the strongest 2-3 complete bullets.
-    for bullet in bullets[:3]:
-        clean_bullet = " ".join(str(bullet).replace("\n", " ").split())
-        wrapped = textwrap.wrap(
-            clean_bullet,
-            max_chars,
-            break_long_words=False,
-            break_on_hyphens=False,
-        ) or [clean_bullet]
-
-        # Add a small blank line between bullets. If the full bullet cannot fit,
-        # do not draw it; this prevents unfinished sentences in the PDF.
-        needed = len(wrapped) + (1 if lines_used > 0 else 0)
-        if lines_used + needed > max_lines:
-            continue
-
-        if lines_used > 0:
-            ty -= leading * 0.35
-            lines_used += 1
-
-        for j, line in enumerate(wrapped):
+    for bullet in bullets[:5]:
+        wrapped = textwrap.wrap(str(bullet), max_chars) or [str(bullet)]
+        for j, line in enumerate(wrapped[:2]):
+            if lines_used >= max_lines:
+                return
             prefix = bullet_symbol + " " if j == 0 else "  "
             c.drawString(x + pad, ty, prefix + line)
             ty -= leading
@@ -2056,32 +2142,49 @@ def draw_summary_box(c, title, body, x, y, w, h, logo_paths, selected_team="Leon
 # =====================================================
 # UI
 # =====================================================
-st.title("⚾ LIDOM Team Leaderboard Report")
-st.caption("✅ PDF DESIGN VERSION: 6-PAGE BEAUTIFUL REPORT — team POV summaries, one upload box, category tables, logos, rolling charts")
-st.caption("Upload all CSVs together: six team Pregame files, Lidom Draft SP, Lidom Draft RP, 2022 Game Review catching, Infield Counting, and Outfield Counting.")
+st.title("⚾ Winter League Team Leaderboard Report")
+st.caption("✅ PDF DESIGN VERSION: 6-PAGE BEAUTIFUL REPORT — league selector, team POV summaries, one upload box, category tables, logos, rolling charts")
+st.caption("Upload all CSVs together: team Pregame files, Draft SP, Draft RP, catching, infield, and outfield defense files.")
+
+selected_league = st.sidebar.selectbox(
+    "🏟️ League",
+    list(LEAGUE_CONFIG.keys()),
+    index=0,
+    format_func=lambda k: "LIDOM" if k == "LIDOM" else "Puerto Rico / LBPRC",
+    help="Choose which league's teams, logos, colors, PDF titles, and POV options should be used.",
+)
+league_cfg = LEAGUE_CONFIG[selected_league]
+league_team_options = league_cfg["teams"]
 
 all_csv_files = st.file_uploader(
-    "Upload all LIDOM CSV files here",
+    f"Upload all {league_cfg['display']} CSV files here",
     type=["csv"],
     accept_multiple_files=True,
     help="You can select every CSV at once. The app will identify team, starter pitching, reliever pitching, catcher, infield, and outfield files automatically by filename and columns.",
 )
 
 with st.sidebar.expander("🖼️ PDF Logos", expanded=False):
-    st.caption("Optional: upload logos here, or keep files named aguilas.png, escogido.png, estrellas.png, gigantes.png, licey.png, toros.png, baserunning.png, and LIDOM.png in the same folder as the app.")
+    st.caption("Optional: upload logos here, or keep the PNG files in the same folder as the app. For PR/LBPRC use LBPRC.png, carolina.png, indios.png, cangrejeros.png, criollos.png, ponce.png, and senadores.png.")
     logo_uploads = {
         "lidom": st.file_uploader("LIDOM logo", type=["png", "jpg", "jpeg"], key="logo_lidom"),
+        "lbprc": st.file_uploader("LBPRC / Puerto Rico logo", type=["png", "jpg", "jpeg"], key="logo_lbprc"),
         "aguilas": st.file_uploader("Aguilas logo", type=["png", "jpg", "jpeg"], key="logo_aguilas"),
         "escogido": st.file_uploader("Escogido logo", type=["png", "jpg", "jpeg"], key="logo_escogido"),
         "estrellas": st.file_uploader("Estrellas logo", type=["png", "jpg", "jpeg"], key="logo_estrellas"),
         "gigantes": st.file_uploader("Gigantes logo", type=["png", "jpg", "jpeg"], key="logo_gigantes"),
         "licey": st.file_uploader("Licey logo", type=["png", "jpg", "jpeg"], key="logo_licey"),
         "toros": st.file_uploader("Toros logo", type=["png", "jpg", "jpeg"], key="logo_toros"),
+        "carolina": st.file_uploader("Gigantes de Carolina logo", type=["png", "jpg", "jpeg"], key="logo_carolina"),
+        "indios": st.file_uploader("Indios de Mayaguez logo", type=["png", "jpg", "jpeg"], key="logo_indios"),
+        "cangrejeros": st.file_uploader("Cangrejeros de Santurce logo", type=["png", "jpg", "jpeg"], key="logo_cangrejeros"),
+        "criollos": st.file_uploader("Criollos de Caguas logo", type=["png", "jpg", "jpeg"], key="logo_criollos"),
+        "ponce": st.file_uploader("Leones de Ponce logo", type=["png", "jpg", "jpeg"], key="logo_ponce"),
+        "senadores": st.file_uploader("Senadores de San Juan logo", type=["png", "jpg", "jpeg"], key="logo_senadores"),
         "baserunning": st.file_uploader("Baserunning icon", type=["png", "jpg", "jpeg"], key="logo_baserunning"),
     }
 
 if not all_csv_files:
-    st.info("Upload all LIDOM CSVs together to generate the report.")
+    st.info(f"Upload all {league_cfg['display']} CSVs together to generate the report.")
     st.stop()
 
 team_frames = []
@@ -2246,11 +2349,18 @@ except Exception as e:
 hitting = hitting.sort_values("OPS", ascending=False).reset_index(drop=True)
 baserunning = baserunning.sort_values("SB", ascending=False).reset_index(drop=True)
 
-report_team_options = [t for t in REPORT_TEAM_OPTIONS if t in set(pd.concat([hitting[["fullName"]], baserunning[["fullName"]], pitching_sp[["fullName"]] if not pitching_sp.empty else pd.DataFrame(columns=["fullName"]), pitching_rp[["fullName"]] if not pitching_rp.empty else pd.DataFrame(columns=["fullName"]), defense[["fullName"]] if not defense.empty else pd.DataFrame(columns=["fullName"])], ignore_index=True)["fullName"].dropna().apply(normalize_team_name))]
+available_teams = set(pd.concat([
+    hitting[["fullName"]],
+    baserunning[["fullName"]],
+    pitching_sp[["fullName"]] if not pitching_sp.empty else pd.DataFrame(columns=["fullName"]),
+    pitching_rp[["fullName"]] if not pitching_rp.empty else pd.DataFrame(columns=["fullName"]),
+    defense[["fullName"]] if not defense.empty else pd.DataFrame(columns=["fullName"]),
+], ignore_index=True)["fullName"].dropna().apply(normalize_team_name))
+report_team_options = [t for t in league_team_options if t in available_teams]
 if not report_team_options:
-    report_team_options = REPORT_TEAM_OPTIONS
+    report_team_options = league_team_options
 selected_report_team = st.sidebar.selectbox("📌 Report POV Team", report_team_options, index=0, help="Choose which team is highlighted and used for all summary sections.")
-st.caption(f"Current report POV: {team_short_name(selected_report_team)} — PDF colors follow selected team identity.")
+st.caption(f"Current league: {league_cfg['display']} | Current report POV: {team_short_name(selected_report_team)} — PDF colors follow selected team identity.")
 
 # =====================================================
 # TABS
@@ -2366,7 +2476,7 @@ with tab4:
         st.download_button(
             "📊 Download Excel Report",
             data=to_excel(hitting, baserunning, rolling_hitting, rolling_baserunning, pitching_sp, pitching_rp, defense),
-            file_name="lidom_team_leaderboard_report.xlsx",
+            file_name=f"{league_cfg['excel_prefix']}_team_leaderboard_report.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
@@ -2374,8 +2484,8 @@ with tab4:
         if REPORTLAB_AVAILABLE:
             st.download_button(
                 "📄 Download Selected Team PDF",
-                data=to_pdf(hitting, baserunning, rolling_hitting, rolling_baserunning, pitching_sp, pitching_rp, defense, logo_uploads, selected_report_team).getvalue(),
-                file_name=f"lidom_report_{safe_filename(team_short_name(selected_report_team))}.pdf",
+                data=to_pdf(hitting, baserunning, rolling_hitting, rolling_baserunning, pitching_sp, pitching_rp, defense, logo_uploads, selected_report_team, selected_league).getvalue(),
+                file_name=f"{league_cfg['excel_prefix']}_report_{safe_filename(team_short_name(selected_report_team))}.pdf",
                 mime="application/pdf",
                 key="download_selected_team_pdf",
             )
@@ -2394,11 +2504,12 @@ with tab4:
                 defense,
                 logo_uploads,
                 report_team_options,
+                selected_league,
             )
             st.download_button(
                 "🗂️ Download ZIP: All Team PDFs",
                 data=all_pdf_zip,
-                file_name="lidom_all_team_reports.zip",
+                file_name=f"{league_cfg['excel_prefix']}_all_team_reports.zip",
                 mime="application/zip",
                 key="download_all_team_pdfs_zip",
             )
