@@ -1620,49 +1620,61 @@ def build_all_team_pdfs_zip(hitting, baserunning, rolling_hitting, rolling_baser
 
 
 # =====================================================
-# BULLET-STYLE SUMMARY HELPERS (Hallazgos / Oportunidades)
+# EXECUTIVE BASEBALL-OPS SUMMARY HELPERS (Hallazgos / Oportunidades)
 # =====================================================
 def team_report_personality(team: str) -> dict:
     """Distinct POV language so reports do not read like copy/paste templates."""
     voice = team_voice_key(team)
     profiles = {
         "escogido": {
-            "label": "Disciplina, tráfico y presión",
+            "identity": "disciplina, tráfico y presión constante",
+            "edge": "obligar al rival a lanzar bajo estrés",
+            "tone": "agresivo pero calculado",
             "hitting_focus": "convertir tráfico en daño real",
-            "running_focus": "correr mejor sin perder agresividad",
-            "pitching_focus": "subir dominio sin perder control",
-            "defense_focus": "extender la seguridad del infield a todo el campo",
+            "running_focus": "correr mejor sin apagar la agresividad",
+            "pitching_focus": "subir el dominio sin regalar control",
+            "defense_focus": "llevar la seguridad del infield al resto del campo",
         },
         "aguilas": {
-            "label": "Ventaja integral y sostener separación",
+            "identity": "separación, consistencia y ventaja integral",
+            "edge": "mantener la presión de un club que ya juega desde arriba",
+            "tone": "dominante y exigente",
             "hitting_focus": "proteger el liderazgo ofensivo y evitar regresión",
-            "running_focus": "agregar volumen manteniendo eficiencia",
-            "pitching_focus": "mantener ponche y reducir bases gratis",
+            "running_focus": "agregar volumen sin perder eficiencia",
+            "pitching_focus": "sostener ponche y reducir bases gratis",
             "defense_focus": "llevar la seguridad del outfield al infield",
         },
         "licey": {
-            "label": "Ritmo, ejecución y reconstrucción de impacto",
+            "identity": "orden, ritmo competitivo y necesidad de más impacto",
+            "edge": "mantenerse en juegos mientras reconstruye producción",
+            "tone": "exigente y orientado a ajustes",
             "hitting_focus": "crear más tráfico y elevar calidad de contacto",
-            "running_focus": "usar las bases para fabricar carreras sin regalar outs",
+            "running_focus": "fabricar carreras sin regalar outs",
             "pitching_focus": "sostener prevención y cerrar turnos con más autoridad",
-            "defense_focus": "convertir consistencia defensiva en apoyo al pitcheo",
+            "defense_focus": "convertir consistencia defensiva en apoyo directo al pitcheo",
         },
         "estrellas": {
-            "label": "Contacto, rallies y eficiencia situacional",
-            "hitting_focus": "transformar volumen de contacto en más extrabases",
-            "running_focus": "usar el corrido para alargar rallies",
+            "identity": "contacto, rallies y eficiencia situacional",
+            "edge": "convertir volumen en innings largos",
+            "tone": "paciente y oportunista",
+            "hitting_focus": "transformar contacto en más extrabases",
+            "running_focus": "usar el corrido para extender rallies",
             "pitching_focus": "convertir buen proceso en innings más limpios",
-            "defense_focus": "mantener outs rutinarios y limitar entradas extendidas",
+            "defense_focus": "mantener outs rutinarios y evitar entradas extendidas",
         },
         "gigantes": {
-            "label": "Control de daño y estabilidad inning a inning",
-            "hitting_focus": "aumentar frecuencia de tráfico y turnos de alto valor",
+            "identity": "control de daño, físico y estabilidad inning a inning",
+            "edge": "recortar el margen del rival con ejecución más limpia",
+            "tone": "firme y correctivo",
+            "hitting_focus": "aumentar tráfico y turnos de alto valor",
             "running_focus": "maximizar agresividad con mejor precisión",
             "pitching_focus": "recortar tráfico gratis y contacto de daño",
             "defense_focus": "completar la defensa alrededor del control del running game",
         },
         "toros": {
-            "label": "Poder, presión y ejecución de momentos",
+            "identity": "poder, presión y ejecución de momentos",
+            "edge": "cambiar innings rápido cuando aparece la oportunidad",
+            "tone": "explosivo y práctico",
             "hitting_focus": "sumar más embasamiento antes del daño grande",
             "running_focus": "convertir agresividad en ventaja neta",
             "pitching_focus": "evitar innings largos y daño con hombres en base",
@@ -1674,7 +1686,7 @@ def team_report_personality(team: str) -> dict:
 
 def _rank_item(df, stat, team, ascending=False):
     r, v = rank_position(df, stat, team=team, ascending=ascending)
-    return {"stat": stat, "rank": r, "value": v, "text": f"{stat} {ordinal_text(r)} ({safe_fmt(stat, v)})"}
+    return {"stat": stat, "rank": r, "value": v, "text": f"{stat} {ordinal_text(r)} ({safe_fmt(stat, v)})", "ascending": ascending}
 
 
 def _best_and_worst(items, top_n=4, opp_n=4):
@@ -1685,8 +1697,9 @@ def _best_and_worst(items, top_n=4, opp_n=4):
 
 
 def _line_join(title, good_lines, opportunity_lines):
-    good_lines = [str(x).strip() for x in good_lines if str(x).strip()][:5]
-    opportunity_lines = [str(x).strip() for x in opportunity_lines if str(x).strip()][:5]
+    # Keep summary boxes readable: 3 stronger bullets per side beat 5 crowded metric lines.
+    good_lines = [str(x).strip() for x in good_lines if str(x).strip()][:3]
+    opportunity_lines = [str(x).strip() for x in opportunity_lines if str(x).strip()][:3]
     return "\n".join(
         ["HALLAZGOS"]
         + [f"• {x}" for x in good_lines]
@@ -1703,16 +1716,32 @@ def _metric_sentence(item, positive=True):
         return ""
     if positive:
         if rank <= 2:
-            return f"{stat} {ordinal_text(rank)} ({val}) es una ventaja clara."
+            return f"{stat} {ordinal_text(rank)} ({val}) es una ventaja real frente a la liga."
         if rank <= 4:
-            return f"{stat} {ordinal_text(rank)} ({val}) se mantiene competitivo."
-        return f"{stat} {ordinal_text(rank)} ({val}) todavía aporta contexto útil."
+            return f"{stat} {ordinal_text(rank)} ({val}) mantiene al club en zona competitiva."
+        return f"{stat} {ordinal_text(rank)} ({val}) aporta contexto, pero no debe conformar al grupo."
     else:
         if rank >= 5:
-            return f"{stat} {ordinal_text(rank)} ({val}) debe ser prioridad de ajuste."
+            return f"{stat} {ordinal_text(rank)} ({val}) limita el techo actual del equipo."
         if rank >= 3:
-            return f"{stat} {ordinal_text(rank)} ({val}) tiene margen de mejora."
-        return f"{stat} {ordinal_text(rank)} ({val}) debe sostenerse."
+            return f"{stat} {ordinal_text(rank)} ({val}) deja margen claro para crecer."
+        return f"{stat} {ordinal_text(rank)} ({val}) debe sostenerse; ahí no hay espacio para relajarse."
+
+
+def _best_metric_phrase(items):
+    valid = [i for i in items if i["rank"] is not None]
+    if not valid:
+        return ""
+    i = sorted(valid, key=lambda x: x["rank"])[0]
+    return f"La métrica que marca el pulso es {i['stat']} {ordinal_text(i['rank'])} ({safe_fmt(i['stat'], i['value'])}); esa es la base sobre la que se puede construir."
+
+
+def _risk_metric_phrase(items):
+    valid = [i for i in items if i["rank"] is not None]
+    if not valid:
+        return ""
+    i = sorted(valid, key=lambda x: x["rank"], reverse=True)[0]
+    return f"El área que más aprieta el margen es {i['stat']} {ordinal_text(i['rank'])} ({safe_fmt(i['stat'], i['value'])}); ahí está el ajuste más urgente."
 
 
 def make_team_summary(section, hitting, baserunning, selected_team="Leones del Escogido"):
@@ -1731,9 +1760,21 @@ def make_team_summary(section, hitting, baserunning, selected_team="Leones del E
             _rank_item(hitting, "BB%", team_name, False),
             _rank_item(hitting, "K%", team_name, True),
         ]
-        best, worst = _best_and_worst(items, 4, 4)
-        good = [f"Perfil: {profile['label']}."] + [_metric_sentence(i, True) for i in best[:4]]
-        opp = [_metric_sentence(i, False) for i in worst[:3]] + [f"Enfoque: {profile['hitting_focus']}."]
+        ops = _rank_item(hitting, "OPS", team_name, False)
+        obp = _rank_item(hitting, "OBP", team_name, False)
+        bb = _rank_item(hitting, "BB%", team_name, False)
+        slg = _rank_item(hitting, "SLG", team_name, False)
+        hr = _rank_item(hitting, "Homerun", team_name, False)
+        good = [
+            f"La ofensiva de {team_short} tiene una identidad reconocible: {profile['identity']}. Cuando ese perfil aparece, el rival lanza bajo presión.",
+            _best_metric_phrase(items),
+            f"OBP {ordinal_text(obp['rank'])} ({safe_fmt('OBP', obp['value'])}) y BB% {ordinal_text(bb['rank'])} ({safe_fmt('BB%', bb['value'])}) cuentan la historia del proceso: el club se gana turnos y crea oportunidades.",
+        ]
+        opp = [
+            f"El siguiente salto no es solo llegar a base: es transformar ese tráfico en daño. OPS {ordinal_text(ops['rank'])} ({safe_fmt('OPS', ops['value'])}) y SLG {ordinal_text(slg['rank'])} ({safe_fmt('SLG', slg['value'])}) marcan el desafío.",
+            f"El poder situacional debe pesar más. HR {ordinal_text(hr['rank'])} ({safe_fmt('Homerun', hr['value'])}) muestra cuánto margen queda para cambiar innings con un solo swing.",
+            f"Enfoque ejecutivo: {profile['hitting_focus']}; sostener la disciplina, pero atacar mejor los conteos que se ganan.",
+        ]
         return _line_join("hitting", good, opp)
 
     if section == "baserunning":
@@ -1743,9 +1784,20 @@ def make_team_summary(section, hitting, baserunning, selected_team="Leones del E
             _rank_item(baserunning, "SB%", team_name, False),
             _rank_item(baserunning, "CS", team_name, True),
         ]
-        best, worst = _best_and_worst(items, 3, 3)
-        good = [f"Identidad en bases: {profile['label']}."] + [_metric_sentence(i, True) for i in best[:3]]
-        opp = [_metric_sentence(i, False) for i in worst[:3]] + [f"Enfoque: {profile['running_focus']}."]
+        sb = _rank_item(baserunning, "SB", team_name, False)
+        sba = _rank_item(baserunning, "SBA", team_name, False)
+        sbp = _rank_item(baserunning, "SB%", team_name, False)
+        cs = _rank_item(baserunning, "CS", team_name, True)
+        good = [
+            f"El corrido de bases de {team_short} no es decoración: es una forma de jugar con presión y obligar al rival a ejecutar perfecto.",
+            f"SB {ordinal_text(sb['rank'])} ({safe_fmt('SB', sb['value'])}) y SBA {ordinal_text(sba['rank'])} ({safe_fmt('SBA', sba['value'])}) muestran cuánto intenta el club cambiar el inning con las piernas.",
+            _best_metric_phrase(items),
+        ]
+        opp = [
+            f"La agresividad solo tiene valor si gana el intercambio. SB% {ordinal_text(sbp['rank'])} ({safe_fmt('SB%', sbp['value'])}) y CS {ordinal_text(cs['rank'])} ({safe_fmt('CS', cs['value'])}) definen si la presión produce ventaja o outs evitables.",
+            f"El ajuste no es correr menos; es correr con mejor información: pitcher, catcher, conteo, score e inning.",
+            f"Enfoque ejecutivo: {profile['running_focus']}; que cada intento tenga una razón clara y un retorno esperado positivo.",
+        ]
         return _line_join("baserunning", good, opp)
 
     if section == "rolling":
@@ -1756,16 +1808,14 @@ def make_team_summary(section, hitting, baserunning, selected_team="Leones del E
         sbp = _rank_item(baserunning, "SB%", team_name, False)
         cs = _rank_item(baserunning, "CS", team_name, True)
         good = [
-            f"La tendencia debe leerse desde {profile['label'].lower()}.",
-            _metric_sentence(obp, True),
-            _metric_sentence(bb, True),
-            _metric_sentence(sb, True),
+            f"La página de tendencias es donde se ve si {team_short} está construyendo algo sostenible o solo acumulando resultados aislados.",
+            f"OBP {ordinal_text(obp['rank'])} ({safe_fmt('OBP', obp['value'])}), BB% {ordinal_text(bb['rank'])} ({safe_fmt('BB%', bb['value'])}) y SB {ordinal_text(sb['rank'])} ({safe_fmt('SB', sb['value'])}) muestran las áreas que sostienen la identidad del club.",
+            f"Cuando las líneas se estabilizan, el mensaje para el dugout es claro: repetir el proceso y no perseguir resultados de corto plazo.",
         ]
         opp = [
-            _metric_sentence(ops, False),
-            _metric_sentence(sbp, False),
-            _metric_sentence(cs, False),
-            "Vigilar cualquier caída sostenida antes de que cambie el ranking.",
+            f"La señal a vigilar es la distancia entre crear tráfico y convertirlo en carreras. OPS {ordinal_text(ops['rank'])} ({safe_fmt('OPS', ops['value'])}) todavía puede empujar más el techo.",
+            f"En bases, SB% {ordinal_text(sbp['rank'])} ({safe_fmt('SB%', sbp['value'])}) y CS {ordinal_text(cs['rank'])} ({safe_fmt('CS', cs['value'])}) dicen si el volumen se está traduciendo en valor neto.",
+            "Enfoque ejecutivo: detectar temprano cualquier caída sostenida antes de que se convierta en problema de standings.",
         ]
         return _line_join("rolling", good, opp)
 
@@ -1778,9 +1828,10 @@ def make_escogido_summary(section, hitting, baserunning):
 
 def make_team_pitching_summary(pitching, selected_team="Leones del Escogido"):
     team_name = normalize_team_name(selected_team)
+    team_short = team_short_name(team_name)
     profile = team_report_personality(team_name)
     if pitching is None or pitching.empty:
-        return f"HALLAZGOS\n• Carga el archivo de pitcheo para generar lectura.\nOPORTUNIDADES\n• Validar SP/RP antes de exportar."
+        return "HALLAZGOS\n• Carga el archivo de pitcheo para generar lectura.\nOPORTUNIDADES\n• Validar SP/RP antes de exportar."
     items = [
         _rank_item(pitching, "ERA", team_name, True),
         _rank_item(pitching, "FIP", team_name, True),
@@ -1790,9 +1841,23 @@ def make_team_pitching_summary(pitching, selected_team="Leones del Escogido"):
         _rank_item(pitching, "HR%", team_name, True),
         _rank_item(pitching, "BAA", team_name, True),
     ]
-    best, worst = _best_and_worst(items, 4, 4)
-    good = [f"Perfil del staff: {profile['label']}."] + [_metric_sentence(i, True) for i in best[:4]]
-    opp = [_metric_sentence(i, False) for i in worst[:3]] + [f"Enfoque: {profile['pitching_focus']}."]
+    era = _rank_item(pitching, "ERA", team_name, True)
+    fip = _rank_item(pitching, "FIP", team_name, True)
+    whip = _rank_item(pitching, "WHIP", team_name, True)
+    k = _rank_item(pitching, "K%", team_name, False)
+    bb = _rank_item(pitching, "BB%", team_name, True)
+    hr = _rank_item(pitching, "HR%", team_name, True)
+    baa = _rank_item(pitching, "BAA", team_name, True)
+    good = [
+        f"El staff de {team_short} debe evaluarse por algo más que ERA: importa cómo controla tráfico, contacto y daño grande.",
+        f"FIP {ordinal_text(fip['rank'])} ({safe_fmt('FIP', fip['value'])}), WHIP {ordinal_text(whip['rank'])} ({safe_fmt('WHIP', whip['value'])}) y BAA {ordinal_text(baa['rank'])} ({safe_fmt('BAA', baa['value'])}) muestran la calidad real del proceso.",
+        _best_metric_phrase(items),
+    ]
+    opp = [
+        f"El techo del grupo depende de terminar más turnos por dominio. K% {ordinal_text(k['rank'])} ({safe_fmt('K%', k['value'])}) y BB% {ordinal_text(bb['rank'])} ({safe_fmt('BB%', bb['value'])}) definen el margen de error.",
+        f"HR% {ordinal_text(hr['rank'])} ({safe_fmt('HR%', hr['value'])}) y ERA {ordinal_text(era['rank'])} ({safe_fmt('ERA', era['value'])}) deben leerse juntos: limitar daño rápido cambia la noche completa.",
+        f"Enfoque ejecutivo: {profile['pitching_focus']}; ganar conteos y convertir ventajas en outs antes de que el inning respire.",
+    ]
     return _line_join("pitching", good, opp)
 
 
@@ -1802,6 +1867,7 @@ def make_escogido_pitching_summary(pitching):
 
 def make_team_defense_summary(defense, selected_team="Leones del Escogido"):
     team_name = normalize_team_name(selected_team)
+    team_short = team_short_name(team_name)
     profile = team_report_personality(team_name)
     if defense is None or defense.empty:
         return "HALLAZGOS\n• Carga archivos de defensa para generar lectura.\nOPORTUNIDADES\n• Validar catching, infield y outfield."
@@ -1812,15 +1878,26 @@ def make_team_defense_summary(defense, selected_team="Leones del Escogido"):
         _rank_item(defense, "OFErr", team_name, True),
         _rank_item(defense, "OFFld%", team_name, False),
     ]
-    best, worst = _best_and_worst(items, 4, 4)
-    good = [f"Base defensiva: {profile['label']}."] + [_metric_sentence(i, True) for i in best[:4]]
-    opp = [_metric_sentence(i, False) for i in worst[:3]] + [f"Enfoque: {profile['defense_focus']}."]
+    cs = _rank_item(defense, "CS%", team_name, False)
+    iferr = _rank_item(defense, "IFErr", team_name, True)
+    iffld = _rank_item(defense, "IFFld%", team_name, False)
+    oferr = _rank_item(defense, "OFErr", team_name, True)
+    offld = _rank_item(defense, "OFFld%", team_name, False)
+    good = [
+        f"La defensa de {team_short} es parte directa de la prevención de carreras; cada out limpio protege al staff y acorta innings.",
+        f"El infield marca el estándar: IFErr {ordinal_text(iferr['rank'])} ({safe_fmt('IFErr', iferr['value'])}) e IFFld% {ordinal_text(iffld['rank'])} ({safe_fmt('IFFld%', iffld['value'])}) muestran qué tan confiable es la conversión de contacto en outs.",
+        f"CS% {ordinal_text(cs['rank'])} ({safe_fmt('CS%', cs['value'])}) cuenta cuánto ayuda el catching a controlar el juego de correr del rival.",
+    ]
+    opp = [
+        f"La lectura completa exige balancear infield y outfield. OFErr {ordinal_text(oferr['rank'])} ({safe_fmt('OFErr', oferr['value'])}) y OFFld% {ordinal_text(offld['rank'])} ({safe_fmt('OFFld%', offld['value'])}) señalan dónde se pueden perder outs caros.",
+        "El objetivo defensivo no es verse limpio; es quitarle al rival oportunidades extra cuando el juego está apretado.",
+        f"Enfoque ejecutivo: {profile['defense_focus']}; comunicación, rutas y ejecución rutinaria sin regalar innings.",
+    ]
     return _line_join("defense", good, opp)
 
 
 def make_escogido_defense_summary(defense):
     return make_team_defense_summary(defense, "Leones del Escogido")
-
 
 def _split_summary_sections(body: str):
     """Return Hallazgos and Oportunidades bullet lists from the generated summary text."""
