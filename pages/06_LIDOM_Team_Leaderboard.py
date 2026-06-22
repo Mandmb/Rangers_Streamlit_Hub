@@ -1617,6 +1617,239 @@ def build_all_team_pdfs_zip(hitting, baserunning, rolling_hitting, rolling_baser
     zip_buffer.seek(0)
     return zip_buffer.getvalue()
 
+
+
+# =====================================================
+# BULLET-STYLE SUMMARY HELPERS (Hallazgos / Oportunidades)
+# =====================================================
+def team_report_personality(team: str) -> dict:
+    """Distinct POV language so reports do not read like copy/paste templates."""
+    voice = team_voice_key(team)
+    profiles = {
+        "escogido": {
+            "label": "Disciplina, tráfico y presión",
+            "hitting_focus": "convertir tráfico en daño real",
+            "running_focus": "correr mejor sin perder agresividad",
+            "pitching_focus": "subir dominio sin perder control",
+            "defense_focus": "extender la seguridad del infield a todo el campo",
+        },
+        "aguilas": {
+            "label": "Ventaja integral y sostener separación",
+            "hitting_focus": "proteger el liderazgo ofensivo y evitar regresión",
+            "running_focus": "agregar volumen manteniendo eficiencia",
+            "pitching_focus": "mantener ponche y reducir bases gratis",
+            "defense_focus": "llevar la seguridad del outfield al infield",
+        },
+        "licey": {
+            "label": "Ritmo, ejecución y reconstrucción de impacto",
+            "hitting_focus": "crear más tráfico y elevar calidad de contacto",
+            "running_focus": "usar las bases para fabricar carreras sin regalar outs",
+            "pitching_focus": "sostener prevención y cerrar turnos con más autoridad",
+            "defense_focus": "convertir consistencia defensiva en apoyo al pitcheo",
+        },
+        "estrellas": {
+            "label": "Contacto, rallies y eficiencia situacional",
+            "hitting_focus": "transformar volumen de contacto en más extrabases",
+            "running_focus": "usar el corrido para alargar rallies",
+            "pitching_focus": "convertir buen proceso en innings más limpios",
+            "defense_focus": "mantener outs rutinarios y limitar entradas extendidas",
+        },
+        "gigantes": {
+            "label": "Control de daño y estabilidad inning a inning",
+            "hitting_focus": "aumentar frecuencia de tráfico y turnos de alto valor",
+            "running_focus": "maximizar agresividad con mejor precisión",
+            "pitching_focus": "recortar tráfico gratis y contacto de daño",
+            "defense_focus": "completar la defensa alrededor del control del running game",
+        },
+        "toros": {
+            "label": "Poder, presión y ejecución de momentos",
+            "hitting_focus": "sumar más embasamiento antes del daño grande",
+            "running_focus": "convertir agresividad en ventaja neta",
+            "pitching_focus": "evitar innings largos y daño con hombres en base",
+            "defense_focus": "limpiar ejecución y sostener comunicación",
+        },
+    }
+    return profiles.get(voice, profiles["escogido"])
+
+
+def _rank_item(df, stat, team, ascending=False):
+    r, v = rank_position(df, stat, team=team, ascending=ascending)
+    return {"stat": stat, "rank": r, "value": v, "text": f"{stat} {ordinal_text(r)} ({safe_fmt(stat, v)})"}
+
+
+def _best_and_worst(items, top_n=4, opp_n=4):
+    valid = [i for i in items if i["rank"] is not None]
+    best = sorted(valid, key=lambda x: x["rank"])[:top_n]
+    worst = sorted(valid, key=lambda x: x["rank"], reverse=True)[:opp_n]
+    return best, worst
+
+
+def _line_join(title, good_lines, opportunity_lines):
+    good_lines = [str(x).strip() for x in good_lines if str(x).strip()][:5]
+    opportunity_lines = [str(x).strip() for x in opportunity_lines if str(x).strip()][:5]
+    return "\n".join(
+        ["HALLAZGOS"]
+        + [f"• {x}" for x in good_lines]
+        + ["OPORTUNIDADES"]
+        + [f"• {x}" for x in opportunity_lines]
+    )
+
+
+def _metric_sentence(item, positive=True):
+    stat = item["stat"]
+    rank = item["rank"]
+    val = safe_fmt(stat, item["value"])
+    if rank is None:
+        return ""
+    if positive:
+        if rank <= 2:
+            return f"{stat} {ordinal_text(rank)} ({val}) es una ventaja clara."
+        if rank <= 4:
+            return f"{stat} {ordinal_text(rank)} ({val}) se mantiene competitivo."
+        return f"{stat} {ordinal_text(rank)} ({val}) todavía aporta contexto útil."
+    else:
+        if rank >= 5:
+            return f"{stat} {ordinal_text(rank)} ({val}) debe ser prioridad de ajuste."
+        if rank >= 3:
+            return f"{stat} {ordinal_text(rank)} ({val}) tiene margen de mejora."
+        return f"{stat} {ordinal_text(rank)} ({val}) debe sostenerse."
+
+
+def make_team_summary(section, hitting, baserunning, selected_team="Leones del Escogido"):
+    team_name = normalize_team_name(selected_team)
+    team_short = team_short_name(team_name)
+    profile = team_report_personality(team_name)
+
+    if section == "hitting":
+        items = [
+            _rank_item(hitting, "OPS", team_name, False),
+            _rank_item(hitting, "OBP", team_name, False),
+            _rank_item(hitting, "SLG", team_name, False),
+            _rank_item(hitting, "BA", team_name, False),
+            _rank_item(hitting, "Hits", team_name, False),
+            _rank_item(hitting, "Homerun", team_name, False),
+            _rank_item(hitting, "BB%", team_name, False),
+            _rank_item(hitting, "K%", team_name, True),
+        ]
+        best, worst = _best_and_worst(items, 4, 4)
+        good = [f"Perfil: {profile['label']}."] + [_metric_sentence(i, True) for i in best[:4]]
+        opp = [_metric_sentence(i, False) for i in worst[:3]] + [f"Enfoque: {profile['hitting_focus']}."]
+        return _line_join("hitting", good, opp)
+
+    if section == "baserunning":
+        items = [
+            _rank_item(baserunning, "SB", team_name, False),
+            _rank_item(baserunning, "SBA", team_name, False),
+            _rank_item(baserunning, "SB%", team_name, False),
+            _rank_item(baserunning, "CS", team_name, True),
+        ]
+        best, worst = _best_and_worst(items, 3, 3)
+        good = [f"Identidad en bases: {profile['label']}."] + [_metric_sentence(i, True) for i in best[:3]]
+        opp = [_metric_sentence(i, False) for i in worst[:3]] + [f"Enfoque: {profile['running_focus']}."]
+        return _line_join("baserunning", good, opp)
+
+    if section == "rolling":
+        ops = _rank_item(hitting, "OPS", team_name, False)
+        obp = _rank_item(hitting, "OBP", team_name, False)
+        bb = _rank_item(hitting, "BB%", team_name, False)
+        sb = _rank_item(baserunning, "SB", team_name, False)
+        sbp = _rank_item(baserunning, "SB%", team_name, False)
+        cs = _rank_item(baserunning, "CS", team_name, True)
+        good = [
+            f"La tendencia debe leerse desde {profile['label'].lower()}.",
+            _metric_sentence(obp, True),
+            _metric_sentence(bb, True),
+            _metric_sentence(sb, True),
+        ]
+        opp = [
+            _metric_sentence(ops, False),
+            _metric_sentence(sbp, False),
+            _metric_sentence(cs, False),
+            "Vigilar cualquier caída sostenida antes de que cambie el ranking.",
+        ]
+        return _line_join("rolling", good, opp)
+
+    return "HALLAZGOS\n• Datos disponibles para análisis.\nOPORTUNIDADES\n• Revisar el archivo cargado."
+
+
+def make_escogido_summary(section, hitting, baserunning):
+    return make_team_summary(section, hitting, baserunning, "Leones del Escogido")
+
+
+def make_team_pitching_summary(pitching, selected_team="Leones del Escogido"):
+    team_name = normalize_team_name(selected_team)
+    profile = team_report_personality(team_name)
+    if pitching is None or pitching.empty:
+        return f"HALLAZGOS\n• Carga el archivo de pitcheo para generar lectura.\nOPORTUNIDADES\n• Validar SP/RP antes de exportar."
+    items = [
+        _rank_item(pitching, "ERA", team_name, True),
+        _rank_item(pitching, "FIP", team_name, True),
+        _rank_item(pitching, "WHIP", team_name, True),
+        _rank_item(pitching, "K%", team_name, False),
+        _rank_item(pitching, "BB%", team_name, True),
+        _rank_item(pitching, "HR%", team_name, True),
+        _rank_item(pitching, "BAA", team_name, True),
+    ]
+    best, worst = _best_and_worst(items, 4, 4)
+    good = [f"Perfil del staff: {profile['label']}."] + [_metric_sentence(i, True) for i in best[:4]]
+    opp = [_metric_sentence(i, False) for i in worst[:3]] + [f"Enfoque: {profile['pitching_focus']}."]
+    return _line_join("pitching", good, opp)
+
+
+def make_escogido_pitching_summary(pitching):
+    return make_team_pitching_summary(pitching, "Leones del Escogido")
+
+
+def make_team_defense_summary(defense, selected_team="Leones del Escogido"):
+    team_name = normalize_team_name(selected_team)
+    profile = team_report_personality(team_name)
+    if defense is None or defense.empty:
+        return "HALLAZGOS\n• Carga archivos de defensa para generar lectura.\nOPORTUNIDADES\n• Validar catching, infield y outfield."
+    items = [
+        _rank_item(defense, "CS%", team_name, False),
+        _rank_item(defense, "IFErr", team_name, True),
+        _rank_item(defense, "IFFld%", team_name, False),
+        _rank_item(defense, "OFErr", team_name, True),
+        _rank_item(defense, "OFFld%", team_name, False),
+    ]
+    best, worst = _best_and_worst(items, 4, 4)
+    good = [f"Base defensiva: {profile['label']}."] + [_metric_sentence(i, True) for i in best[:4]]
+    opp = [_metric_sentence(i, False) for i in worst[:3]] + [f"Enfoque: {profile['defense_focus']}."]
+    return _line_join("defense", good, opp)
+
+
+def make_escogido_defense_summary(defense):
+    return make_team_defense_summary(defense, "Leones del Escogido")
+
+
+def draw_summary_box(c, title, body, x, y, w, h, logo_paths, selected_team="Leones del Escogido", border_color=None, title_color=None):
+    theme = get_team_theme(selected_team)
+    border_color = border_color or theme["primary"]
+    title_color = title_color or theme["highlight_text"]
+    c.setStrokeColor(colors.HexColor(border_color))
+    c.setLineWidth(0.9)
+    c.setFillColor(colors.white)
+    c.roundRect(x, y, w, h, 7, fill=1, stroke=1)
+
+    logo_path = team_logo_path_for(logo_paths, selected_team) or logo_paths.get("escogido")
+    logo_w = 28 if w < 230 else 32
+    logo_h = 18
+    logo_x = x + 10
+    logo_y = y + h - 29
+    safe_draw_image(c, logo_path, logo_x, logo_y, logo_w, logo_h)
+
+    c.setFillColor(colors.HexColor(title_color))
+    title_font = 6.9 if w < 230 else 7.8
+    c.setFont("Helvetica-Bold", title_font)
+    c.drawString(x + 52, y + h - 18, title.upper())
+
+    # Bullet summaries need more lines but smaller type.
+    text_size = 5.25 if w < 240 else 5.75
+    leading = 6.15 if w < 240 else 6.7
+    max_lines = max(8, int((h - 38) / leading))
+    body_y = y + h - 40
+    draw_wrapped_text(c, body, x + 12, body_y, w - 24, size=text_size, leading=leading, max_lines=max_lines)
+
 # =====================================================
 # UI
 # =====================================================
