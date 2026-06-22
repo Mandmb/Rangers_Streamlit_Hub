@@ -1015,6 +1015,10 @@ def calculate_run_environment_from_raw(team_frames):
         "RunsScored", "Runs On Play", "runsscored",
     ]
     score_candidates = [
+        # Common final/current team run columns from the uploaded baseball CSVs.
+        # Prefer totalRuns/currentRuns because those are team-side values and allow
+        # a real R/G instead of leaving the header blank.
+        "totalRuns", "currentRuns", "teamRuns", "TeamRuns",
         "teamScore", "battingTeamScore", "postBattingTeamScore", "offenseScore",
         "batting_team_score", "TeamScore", "Runs", "runs", "R",
     ]
@@ -1400,7 +1404,8 @@ def draw_stat_table(c, df, stat, x, y, w, h, logo_paths, theme="#002D72", ascend
     c.roundRect(x, y, w, h, 6, fill=1, stroke=1)
 
     header_h = 32
-    avg_text = f"League Average: {format_league_average(stat, league_average_value(df, stat))}"
+    # Shorter label so it fits cleanly in tight table headers.
+    avg_text = f"{title} League Avg: {format_league_average(stat, league_average_value(df, stat))}"
     c.setFillColor(colors.HexColor(theme))
     c.roundRect(x, y + h - header_h, w, header_h, 6, fill=1, stroke=0)
     c.rect(x, y + h - header_h, w, header_h - 5, fill=1, stroke=0)
