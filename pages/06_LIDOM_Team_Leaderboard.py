@@ -931,12 +931,24 @@ def draw_summary_box(c, title, body, x, y, w, h, logo_paths, selected_team="Leon
     c.setLineWidth(0.9)
     c.setFillColor(colors.white)
     c.roundRect(x, y, w, h, 7, fill=1, stroke=1)
-    safe_draw_image(c, team_logo_path_for(logo_paths, selected_team) or logo_paths.get("escogido"), x + 7, y + h - 32, 42, 25)
+
+    # Summary logo/title spacing fix:
+    # Keep the team logo in a fixed-width zone so wide logos never collide with the title.
+    logo_path = team_logo_path_for(logo_paths, selected_team) or logo_paths.get("escogido")
+    logo_w = 34
+    logo_h = 20
+    logo_x = x + 9
+    logo_y = y + h - 31
+    safe_draw_image(c, logo_path, logo_x, logo_y, logo_w, logo_h)
+
     c.setFillColor(colors.HexColor(title_color))
-    c.setFont("Helvetica-Bold", 8.0)
-    c.drawString(x + 45, y + h - 19, title.upper())
-    # Detailed but still compact: bold-style labels are written in all caps in the text itself.
-    draw_wrapped_text(c, body, x + 10, y + h - 39, w - 20, size=6.1, leading=7.4, max_lines=11)
+    title_font = 7.4 if w < 230 else 8.0
+    c.setFont("Helvetica-Bold", title_font)
+    title_x = x + 56
+    c.drawString(title_x, y + h - 19, title.upper())
+
+    # Detailed but still compact: body starts below both logo and title.
+    draw_wrapped_text(c, body, x + 12, y + h - 43, w - 24, size=6.1, leading=7.4, max_lines=11)
 
 
 def draw_stat_table(c, df, stat, x, y, w, h, logo_paths, theme="#002D72", ascending=False, icon=None, icon_image=None, selected_team="Leones del Escogido", highlight_bg=None, highlight_text=None, table_text="#FFFFFF"):
