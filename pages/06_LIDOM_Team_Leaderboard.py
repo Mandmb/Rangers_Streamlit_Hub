@@ -7,6 +7,8 @@ from datetime import datetime
 import tempfile
 import os
 import textwrap
+import zipfile
+import re
 import base64
 
 
@@ -827,8 +829,15 @@ def safe_fmt(stat, val):
 
 
 def make_team_summary(section, hitting, baserunning, selected_team="Leones del Escogido"):
+    """Create POV-aware summaries where each section has a different voice.
+
+    Hitting = offensive identity and run creation.
+    Baserunning = pressure, aggression, and decision quality.
+    Rolling = trend/trajectory read, not another ranking recap.
+    """
     team_name = normalize_team_name(selected_team)
     team_short = team_short_name(team_name)
+
     if section == "hitting":
         ops_r, ops_v = rank_position(hitting, "OPS", team=team_name, ascending=False)
         obp_r, obp_v = rank_position(hitting, "OBP", team=team_name, ascending=False)
@@ -839,35 +848,36 @@ def make_team_summary(section, hitting, baserunning, selected_team="Leones del E
         hits_r, hits_v = rank_position(hitting, "Hits", team=team_name, ascending=False)
         hr_r, hr_v = rank_position(hitting, "Homerun", team=team_name, ascending=False)
         return (
-            f"{team_short} mantiene una identidad ofensiva clara: el equipo está #{obp_r or '-'} en OBP "
-            f"({safe_fmt('OBP', obp_v)}) y #{bb_r or '-'} en BB% ({safe_fmt('BB%', bb_v)}), lo que muestra "
-            f"su capacidad para competir turnos, controlar la zona y crear tráfico en base. En producción general, el club aparece "
-            f"#{ops_r or '-'} en OPS ({safe_fmt('OPS', ops_v)}), #{slg_r or '-'} en SLG ({safe_fmt('SLG', slg_v)}) "
-            f"y #{ba_r or '-'} en BA ({safe_fmt('BA', ba_v)}), con volumen de hits #{hits_r or '-'} "
-            f"({safe_fmt('Hits', hits_v)}) y HR #{hr_r or '-'} ({safe_fmt('Homerun', hr_v)}). El próximo salto ofensivo debe venir de "
-            f"convertir más corredores en base en daño real, especialmente manteniendo la disciplina pero buscando mejores swings "
-            f"en conteos favorables. También será clave seguir controlando el K%, donde el equipo se ubica #{k_r or '-'} "
-            f"({safe_fmt('K%', k_v)})."
+            f"La ofensiva de {team_short} tiene una lectura clara cuando se separa proceso de resultado. "
+            f"El punto de partida es la capacidad de crear tráfico: OBP #{obp_r or '-'} ({safe_fmt('OBP', obp_v)}) "
+            f"y BB% #{bb_r or '-'} ({safe_fmt('BB%', bb_v)}) reflejan qué tanto el club obliga al rival a trabajar. "
+            f"La pregunta de rendimiento está en cuánto valor se convierte después de llegar a base. OPS #{ops_r or '-'} "
+            f"({safe_fmt('OPS', ops_v)}), SLG #{slg_r or '-'} ({safe_fmt('SLG', slg_v)}) y HR #{hr_r or '-'} "
+            f"({safe_fmt('Homerun', hr_v)}) muestran el techo actual de daño. Con BA #{ba_r or '-'} "
+            f"({safe_fmt('BA', ba_v)}), hits #{hits_r or '-'} ({safe_fmt('Hits', hits_v)}) y K% #{k_r or '-'} "
+            f"({safe_fmt('K%', k_v)}), la prioridad ofensiva es mantener la disciplina sin perder agresividad en conteos favorables."
         )
+
     if section == "baserunning":
         sb_r, sb_v = rank_position(baserunning, "SB", team=team_name, ascending=False)
         cs_r, cs_v = rank_position(baserunning, "CS", team=team_name, ascending=True)
         rate_r, rate_v = rank_position(baserunning, "SB%", team=team_name, ascending=False)
         sba_r, sba_v = rank_position(baserunning, "SBA", team=team_name, ascending=False)
         return (
-            f"En las bases, {team_short} se evalúa por agresividad, volumen y eficiencia. El equipo está #{sb_r or '-'} en bases robadas "
-            f"({safe_fmt('SB', sb_v)}) y #{sba_r or '-'} en intentos ({safe_fmt('SBA', sba_v)}), reflejando su intención de presionar "
-            f"al rival y crear oportunidades extras. La eficiencia aparece #{rate_r or '-'} en SB% ({safe_fmt('SB%', rate_v)}) y #{cs_r or '-'} en CS "
-            f"({safe_fmt('CS', cs_v)}). El enfoque debe ser mantener la agresividad, pero seleccionar mejor momentos, conteos, pitchers "
-            f"y situaciones para que cada intento genere más valor y menos outs evitables."
+            f"El corrido de bases de {team_short} debe leerse como una herramienta de presión, no solo como una tabla de robos. "
+            f"SBA #{sba_r or '-'} ({safe_fmt('SBA', sba_v)}) y SB #{sb_r or '-'} ({safe_fmt('SB', sb_v)}) "
+            f"describen el volumen de decisiones que el club fuerza sobre pitchers, catchers e infielders. "
+            f"El área que define el valor neto es la precisión de esas decisiones: SB% #{rate_r or '-'} "
+            f"({safe_fmt('SB%', rate_v)}) y CS #{cs_r or '-'} ({safe_fmt('CS', cs_v)}) indican si la agresividad está generando "
+            f"ventajas o outs evitables. La meta no es apagar la presión, sino elegir mejores momentos para que cada intento cambie el inning a favor."
         )
-    return (
-        f"Los gráficos de tendencia muestran cómo {team_short} ha sostenido su identidad durante el período: turnos competitivos, capacidad "
-        f"de llegar a base y presión en el juego de piernas. La lectura general combina disciplina ofensiva, volumen de oportunidades y "
-        f"ejecución en bases. Para cerrar más fuerte, el reto es convertir tráfico en más daño, proteger la base de OBP y mejorar la "
-        f"eficiencia en robos sin perder la agresividad que puede cambiar innings."
-    )
 
+    return (
+        f"La página de tendencias cambia el enfoque: en lugar de mirar solo el ranking final, muestra la forma en que {team_short} llegó a ese punto. "
+        f"Las curvas ofensivas ayudan a identificar estabilidad, caídas o separaciones frente a la liga; las de corrido de bases enseñan cuándo el volumen se convirtió "
+        f"en ventaja real. Si el equipo sostiene OBP y disciplina mientras mejora la conversión de tráfico en daño, el perfil se vuelve mucho más peligroso. "
+        f"La lectura para el próximo tramo es buscar continuidad en las fortalezas y reaccionar rápido cuando una tendencia empiece a moverse en contra."
+    )
 
 # Backward-compatible name in case older calls remain.
 def make_escogido_summary(section, hitting, baserunning):
@@ -886,15 +896,13 @@ def make_team_pitching_summary(pitching, selected_team="Leones del Escogido"):
     hr_r, hr_v = rank_position(pitching, "HR%", team=team_name, ascending=True)
     baa_r, baa_v = rank_position(pitching, "BAA", team=team_name, ascending=True)
     return (
-        f"El pitcheo de {team_short} se evalúa desde dos áreas principales: prevención de carreras y control del tráfico. El equipo "
-        f"aparece #{era_r or '-'} en ERA ({safe_fmt('ERA', era_v)}) y #{fip_r or '-'} en FIP ({safe_fmt('FIP', fip_v)}), "
-        f"mientras que WHIP #{whip_r or '-'} ({safe_fmt('WHIP', whip_v)}) y BAA #{baa_r or '-'} ({safe_fmt('BAA', baa_v)}) "
-        f"ayudan a medir qué tan difícil ha sido para los rivales llegar a base. En dominio y comando, el balance entre K% "
-        f"#{k_r or '-'} ({safe_fmt('K%', k_v)}) y BB% #{bb_r or '-'} ({safe_fmt('BB%', bb_v)}) será clave para sostener "
-        f"innings limpios. El enfoque debe ser atacar la zona con calidad, limitar HR% #{hr_r or '-'} "
-        f"({safe_fmt('HR%', hr_v)}) y convertir ventajas en outs rápidos."
+        f"El perfil de pitcheo de {team_short} se define por la relación entre prevención de carreras, tráfico permitido y capacidad de terminar turnos. "
+        f"ERA #{era_r or '-'} ({safe_fmt('ERA', era_v)}) muestra el resultado visible, mientras FIP #{fip_r or '-'} ({safe_fmt('FIP', fip_v)}) "
+        f"ayuda a separar ejecución de defensa y contexto. WHIP #{whip_r or '-'} ({safe_fmt('WHIP', whip_v)}) y BAA #{baa_r or '-'} "
+        f"({safe_fmt('BAA', baa_v)}) explican cuánto margen se le está dando al rival para construir innings. El verdadero punto de ajuste está en el balance "
+        f"entre K% #{k_r or '-'} ({safe_fmt('K%', k_v)}) y BB% #{bb_r or '-'} ({safe_fmt('BB%', bb_v)}): más dominio sin regalar bases. "
+        f"Limitar HR% #{hr_r or '-'} ({safe_fmt('HR%', hr_v)}) y ejecutar mejor en conteos de ventaja debe ser el camino para elevar el techo del staff."
     )
-
 
 def make_escogido_pitching_summary(pitching):
     return make_team_pitching_summary(pitching, "Leones del Escogido")
@@ -910,15 +918,12 @@ def make_team_defense_summary(defense, selected_team="Leones del Escogido"):
     ofe_r, ofe_v = rank_position(defense, "OFErr", team=team_name, ascending=True)
     off_r, off_v = rank_position(defense, "OFFld%", team=team_name, ascending=False)
     return (
-        f"Defensivamente, {team_short} debe evaluarse como una combinación de control del juego de correr, seguridad en el infield "
-        f"y confiabilidad en el outfield. El catching aparece #{cs_r or '-'} en CS% ({safe_fmt('CS%', cs_v)}), una métrica "
-        f"importante para medir cuánto apoyo recibe el pitcheo contra equipos agresivos. En el cuadro, IFErr #{ife_r or '-'} "
-        f"({safe_fmt('IFErr', ife_v)}) e IFFld% #{iff_r or '-'} ({safe_fmt('IFFld%', iff_v)}) muestran la capacidad de convertir "
-        f"outs rutinarios. En los jardines, OFErr #{ofe_r or '-'} ({safe_fmt('OFErr', ofe_v)}) y OFFld% #{off_r or '-'} "
-        f"({safe_fmt('OFFld%', off_v)}) resumen la seguridad en el espacio. El enfoque debe ser limitar errores gratis, comunicar "
-        f"mejor y sostener la ejecución defensiva inning a inning."
+        f"La defensa de {team_short} debe evaluarse como una red de apoyo al pitcheo: controla el juego de correr, asegura outs rutinarios y evita bases gratis. "
+        f"El catching aparece con CS% #{cs_r or '-'} ({safe_fmt('CS%', cs_v)}), una señal directa de cuánto se frena la agresividad rival. "
+        f"En el infield, IFErr #{ife_r or '-'} ({safe_fmt('IFErr', ife_v)}) e IFFld% #{iff_r or '-'} ({safe_fmt('IFFld%', iff_v)}) hablan de estabilidad en la zona donde más contacto se convierte en out. "
+        f"En el outfield, OFErr #{ofe_r or '-'} ({safe_fmt('OFErr', ofe_v)}) y OFFld% #{off_r or '-'} ({safe_fmt('OFFld%', off_v)}) resumen alcance, seguridad y comunicación. "
+        f"El objetivo defensivo no es solo evitar errores: es quitarle al rival innings extendidos y sostener la ejecución cuando el juego se aprieta."
     )
-
 
 def make_escogido_defense_summary(defense):
     return make_team_defense_summary(defense, "Leones del Escogido")
@@ -1361,6 +1366,35 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
     c.save()
     output.seek(0)
     return output
+
+
+def safe_filename(name: str) -> str:
+    """Safe PDF filename for each report POV."""
+    cleaned = re.sub(r"[^A-Za-z0-9_-]+", "_", str(name).strip())
+    cleaned = re.sub(r"_+", "_", cleaned).strip("_")
+    return cleaned or "Team"
+
+
+def build_all_team_pdfs_zip(hitting, baserunning, rolling_hitting, rolling_baserunning, pitching, defense, logo_uploads, team_list) -> BytesIO:
+    """Create a ZIP containing one PDF per selected/reportable LIDOM team."""
+    zip_buffer = BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for team in team_list:
+            pdf_buffer = to_pdf(
+                hitting,
+                baserunning,
+                rolling_hitting,
+                rolling_baserunning,
+                pitching,
+                defense,
+                logo_uploads,
+                team,
+            )
+            pdf_buffer.seek(0)
+            zf.writestr(f"LIDOM_Report_{safe_filename(team_short_name(team))}.pdf", pdf_buffer.getvalue())
+    zip_buffer.seek(0)
+    return zip_buffer
+
 # =====================================================
 # UI
 # =====================================================
@@ -1629,7 +1663,7 @@ with tab3:
 with tab4:
     st.subheader("Export Report")
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
 
     with col1:
         st.download_button(
@@ -1642,12 +1676,23 @@ with tab4:
     with col2:
         if REPORTLAB_AVAILABLE:
             st.download_button(
-                "📄 Download Beautiful PDF",
+                "📄 Download Selected Team PDF",
                 data=to_pdf(hitting, baserunning, rolling_hitting, rolling_baserunning, pitching, defense, logo_uploads, selected_report_team),
-                file_name="lidom_team_leaderboard_report.pdf",
+                file_name=f"lidom_report_{safe_filename(team_short_name(selected_report_team))}.pdf",
                 mime="application/pdf",
             )
         else:
             st.warning("To export PDF, install ReportLab first: `pip install reportlab`")
 
-    st.caption("Excel includes final leaderboards and rolling cumulative data. PDF includes page 1 hitting, page 2 baserunning, page 3 rolling charts, page 4 pitching, and page 5 defense leaderboards.")
+    with col3:
+        if REPORTLAB_AVAILABLE:
+            st.download_button(
+                "🗂️ Download All Team PDFs",
+                data=build_all_team_pdfs_zip(hitting, baserunning, rolling_hitting, rolling_baserunning, pitching, defense, logo_uploads, report_team_options),
+                file_name="lidom_all_team_reports.zip",
+                mime="application/zip",
+            )
+        else:
+            st.warning("PDF ZIP requires ReportLab.")
+
+    st.caption("Excel includes final leaderboards and rolling cumulative data. PDF includes page 1 hitting, page 2 baserunning, page 3 rolling charts, page 4 pitching, and page 5 defense leaderboards. The ZIP export creates one PDF per POV team.")
