@@ -966,9 +966,10 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
         y = top - (row + 1) * table_h - row * gap_y
         draw_stat_table(c, hitting, stat, x, y, table_w, table_h, logo_paths, theme="#001F4E", ascending=(stat == "K%"))
 
-    # Summary occupies the last open slot in the 3-column grid
+    # Summary occupies the last open slot, but is taller so paragraph text fits cleanly.
     sx = left + 2 * (table_w + gap_x)
-    sy = top - 4 * table_h - 3 * gap_y
+    sy = 44
+    summary_h = 125
     draw_summary_box(
         c,
         "Escogido Hitting Summary",
@@ -976,7 +977,7 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
         sx,
         sy,
         table_w,
-        table_h,
+        summary_h,
         logo_paths,
     )
     draw_footer(c, 1, logo_paths, "#001F4E")
