@@ -828,15 +828,37 @@ def safe_fmt(stat, val):
     return format_value(stat, val) if val is not None and not pd.isna(val) else "—"
 
 
-def make_team_summary(section, hitting, baserunning, selected_team="Leones del Escogido"):
-    """Create POV-aware summaries where each section has a different voice.
+def team_voice_key(team: str) -> str:
+    team = normalize_team_name(team)
+    mapping = {
+        "Leones del Escogido": "escogido",
+        "Aguilas Cibaenas": "aguilas",
+        "Águilas Cibaeñas": "aguilas",
+        "Tigres del Licey": "licey",
+        "Estrellas Orientales": "estrellas",
+        "Gigantes del Cibao": "gigantes",
+        "Toros del Este": "toros",
+    }
+    return mapping.get(team, "generic")
 
-    Hitting = offensive identity and run creation.
-    Baserunning = pressure, aggression, and decision quality.
-    Rolling = trend/trajectory read, not another ranking recap.
+
+def ordinal_text(rank):
+    return f"#{rank}" if rank is not None else "sin ranking"
+
+
+def metric_phrase(stat, rank, value):
+    return f"{ordinal_text(rank)} ({safe_fmt(stat, value)})"
+
+
+def make_team_summary(section, hitting, baserunning, selected_team="Leones del Escogido"):
+    """POV-aware summaries with team-specific wording.
+
+    The goal is for each club report to sound different, not like the same
+    paragraph with a team name swapped in.
     """
     team_name = normalize_team_name(selected_team)
     team_short = team_short_name(team_name)
+    voice = team_voice_key(team_name)
 
     if section == "hitting":
         ops_r, ops_v = rank_position(hitting, "OPS", team=team_name, ascending=False)
@@ -847,15 +869,55 @@ def make_team_summary(section, hitting, baserunning, selected_team="Leones del E
         k_r, k_v = rank_position(hitting, "K%", team=team_name, ascending=True)
         hits_r, hits_v = rank_position(hitting, "Hits", team=team_name, ascending=False)
         hr_r, hr_v = rank_position(hitting, "Homerun", team=team_name, ascending=False)
+
+        if voice == "escogido":
+            return (
+                f"La ofensiva de {team_short} se entiende mejor desde la disciplina y la creación de tráfico. OBP {metric_phrase('OBP', obp_r, obp_v)} "
+                f"y BB% {metric_phrase('BB%', bb_r, bb_v)} muestran un club que alarga turnos y obliga al pitcheo rival a trabajar. "
+                f"El área de crecimiento está en convertir ese tráfico en daño: OPS {metric_phrase('OPS', ops_r, ops_v)}, SLG {metric_phrase('SLG', slg_r, slg_v)} "
+                f"y HR {metric_phrase('Homerun', hr_r, hr_v)} dejan claro dónde puede venir el próximo salto. Con BA {metric_phrase('BA', ba_r, ba_v)} "
+                f"y K% {metric_phrase('K%', k_r, k_v)}, la prioridad es mantener la zona sin dejar pasar swings de impacto en conteos favorables."
+            )
+        if voice == "aguilas":
+            return (
+                f"Aguilas presenta el perfil ofensivo más completo del grupo: combina contacto, embasamiento y daño sin depender de una sola vía. "
+                f"El equipo lidera o se mantiene arriba en OPS {metric_phrase('OPS', ops_r, ops_v)}, OBP {metric_phrase('OBP', obp_r, obp_v)}, "
+                f"SLG {metric_phrase('SLG', slg_r, slg_v)} y BA {metric_phrase('BA', ba_r, ba_v)}, lo que habla de una ofensiva estable tanto en proceso como en resultado. "
+                f"El volumen de hits {metric_phrase('Hits', hits_r, hits_v)} y HR {metric_phrase('Homerun', hr_r, hr_v)} confirma que el ataque no solo llega a base, también empuja la pelota. "
+                f"El reto será sostener ese estándar cuando los rivales ajusten el plan de pitcheo."
+            )
+        if voice == "licey":
+            return (
+                f"La lectura ofensiva de Licey apunta más a reconstrucción de ritmo que a dominio acumulado. OPS {metric_phrase('OPS', ops_r, ops_v)}, "
+                f"SLG {metric_phrase('SLG', slg_r, slg_v)} y BA {metric_phrase('BA', ba_r, ba_v)} sugieren que el club necesita encadenar mejores contactos para cambiar innings. "
+                f"Hay señales de competencia en la zona con BB% {metric_phrase('BB%', bb_r, bb_v)}, pero OBP {metric_phrase('OBP', obp_r, obp_v)} indica que todavía falta convertir turnos largos en tráfico constante. "
+                f"El enfoque ofensivo debe ser simplificar el plan: más contacto temprano con intención, mejores decisiones con hombres en base y menos turnos vacíos."
+            )
+        if voice == "estrellas":
+            return (
+                f"Estrellas muestra una ofensiva de volumen, con una base importante en hits {metric_phrase('Hits', hits_r, hits_v)} y producción sostenida por contacto. "
+                f"OPS {metric_phrase('OPS', ops_r, ops_v)}, OBP {metric_phrase('OBP', obp_r, obp_v)} y BA {metric_phrase('BA', ba_r, ba_v)} reflejan un equipo capaz de fabricar rallies sin depender exclusivamente del cuadrangular. "
+                f"El punto que puede separar al club es aumentar la calidad del contacto: SLG {metric_phrase('SLG', slg_r, slg_v)} y HR {metric_phrase('Homerun', hr_r, hr_v)} marcan cuánto daño acompaña al volumen. "
+                f"Si el contacto se transforma en más extrabases, el lineup gana otra dimensión."
+            )
+        if voice == "gigantes":
+            return (
+                f"Gigantes tiene una ofensiva que necesita reducir el margen de error. OPS {metric_phrase('OPS', ops_r, ops_v)}, OBP {metric_phrase('OBP', obp_r, obp_v)} "
+                f"y SLG {metric_phrase('SLG', slg_r, slg_v)} describen un ataque que todavía busca continuidad entre turnos de calidad y producción real. "
+                f"El total de hits {metric_phrase('Hits', hits_r, hits_v)} y HR {metric_phrase('Homerun', hr_r, hr_v)} muestra momentos de daño, pero la clave será sostener presión por más innings. "
+                f"Para subir en la liga, el plan debe concentrarse en llegar a base con más frecuencia y proteger mejor los turnos de alto valor."
+            )
+        if voice == "toros":
+            return (
+                f"Toros tiene un perfil ofensivo con fuerza clara en el daño. HR {metric_phrase('Homerun', hr_r, hr_v)} y SLG {metric_phrase('SLG', slg_r, slg_v)} "
+                f"apuntan a un equipo que puede cambiar el juego con swings grandes. La pregunta es si ese poder puede ir acompañado de más tráfico: OBP {metric_phrase('OBP', obp_r, obp_v)} "
+                f"y BB% {metric_phrase('BB%', bb_r, bb_v)} ayudan a medir cuántas oportunidades extra se crean antes del contacto fuerte. "
+                f"Si el club combina disciplina con su capacidad de impacto, el techo ofensivo sube bastante."
+            )
+
         return (
-            f"La ofensiva de {team_short} tiene una lectura clara cuando se separa proceso de resultado. "
-            f"El punto de partida es la capacidad de crear tráfico: OBP #{obp_r or '-'} ({safe_fmt('OBP', obp_v)}) "
-            f"y BB% #{bb_r or '-'} ({safe_fmt('BB%', bb_v)}) reflejan qué tanto el club obliga al rival a trabajar. "
-            f"La pregunta de rendimiento está en cuánto valor se convierte después de llegar a base. OPS #{ops_r or '-'} "
-            f"({safe_fmt('OPS', ops_v)}), SLG #{slg_r or '-'} ({safe_fmt('SLG', slg_v)}) y HR #{hr_r or '-'} "
-            f"({safe_fmt('Homerun', hr_v)}) muestran el techo actual de daño. Con BA #{ba_r or '-'} "
-            f"({safe_fmt('BA', ba_v)}), hits #{hits_r or '-'} ({safe_fmt('Hits', hits_v)}) y K% #{k_r or '-'} "
-            f"({safe_fmt('K%', k_v)}), la prioridad ofensiva es mantener la disciplina sin perder agresividad en conteos favorables."
+            f"La ofensiva de {team_short} combina OPS {metric_phrase('OPS', ops_r, ops_v)}, OBP {metric_phrase('OBP', obp_r, obp_v)} y SLG {metric_phrase('SLG', slg_r, slg_v)}. "
+            f"El enfoque debe ser crear más tráfico, proteger el K% {metric_phrase('K%', k_r, k_v)} y convertir mejores swings en daño sostenible."
         )
 
     if section == "baserunning":
@@ -863,29 +925,95 @@ def make_team_summary(section, hitting, baserunning, selected_team="Leones del E
         cs_r, cs_v = rank_position(baserunning, "CS", team=team_name, ascending=True)
         rate_r, rate_v = rank_position(baserunning, "SB%", team=team_name, ascending=False)
         sba_r, sba_v = rank_position(baserunning, "SBA", team=team_name, ascending=False)
+
+        if voice == "escogido":
+            return (
+                f"El corrido de bases de Escogido funciona como presión constante. SBA {metric_phrase('SBA', sba_r, sba_v)} y SB {metric_phrase('SB', sb_r, sb_v)} "
+                f"muestran un equipo dispuesto a forzar decisiones al rival. El ajuste está en el valor neto: SB% {metric_phrase('SB%', rate_r, rate_v)} y CS {metric_phrase('CS', cs_r, cs_v)} "
+                f"dicen si esa presión está produciendo ventajas o entregando outs. No se trata de correr menos, sino de escoger mejores ventanas para correr."
+            )
+        if voice == "aguilas":
+            return (
+                f"Aguilas corre con eficiencia más que con volumen descontrolado. SB% {metric_phrase('SB%', rate_r, rate_v)} y CS {metric_phrase('CS', cs_r, cs_v)} "
+                f"sugieren una toma de decisiones limpia, con intentos que suelen justificar el riesgo. SB {metric_phrase('SB', sb_r, sb_v)} y SBA {metric_phrase('SBA', sba_r, sba_v)} "
+                f"dejan espacio para ser más agresivos sin romper la identidad. La pregunta es cuándo añadir volumen sin sacrificar precisión."
+            )
+        if voice == "licey":
+            return (
+                f"Para Licey, el juego de piernas debe convertirse en una manera de compensar momentos de baja producción ofensiva. SB {metric_phrase('SB', sb_r, sb_v)} y SBA {metric_phrase('SBA', sba_r, sba_v)} "
+                f"muestran actividad, pero SB% {metric_phrase('SB%', rate_r, rate_v)} y CS {metric_phrase('CS', cs_r, cs_v)} obligan a revisar selección de lanzadores, conteos y game state. "
+                f"El objetivo es que cada intento ayude a fabricar carreras, no que simplemente aumente el volumen de movimiento."
+            )
+        if voice == "estrellas":
+            return (
+                f"Estrellas necesita que el corrido de bases complemente su ofensiva de contacto. SB {metric_phrase('SB', sb_r, sb_v)} y SBA {metric_phrase('SBA', sba_r, sba_v)} "
+                f"indican cuánta presión se agrega después de llegar a base. La eficiencia SB% {metric_phrase('SB%', rate_r, rate_v)} y el control de CS {metric_phrase('CS', cs_r, cs_v)} "
+                f"serán claves para que los rallies no se apaguen. La prioridad es elegir intentos que alarguen innings y mantengan tráfico."
+            )
+        if voice == "gigantes":
+            return (
+                f"Gigantes tiene un componente físico en bases que puede cambiar el ritmo del juego. SB {metric_phrase('SB', sb_r, sb_v)} y SBA {metric_phrase('SBA', sba_r, sba_v)} "
+                f"reflejan disposición para atacar. El punto fino es convertir esa agresividad en eficiencia: SB% {metric_phrase('SB%', rate_r, rate_v)} frente a CS {metric_phrase('CS', cs_r, cs_v)}. "
+                f"Si el club limpia sus lecturas, el corrido puede pasar de recurso ocasional a ventaja competitiva."
+            )
+        if voice == "toros":
+            return (
+                f"Toros usa las bases como extensión de su ofensiva de impacto. SB {metric_phrase('SB', sb_r, sb_v)} y SBA {metric_phrase('SBA', sba_r, sba_v)} "
+                f"muestran una mentalidad de atacar al rival incluso sin batazo grande. La eficiencia SB% {metric_phrase('SB%', rate_r, rate_v)} y CS {metric_phrase('CS', cs_r, cs_v)} "
+                f"determinan si esa agresividad crea innings grandes o corta oportunidades. El balance ideal es poder más presión, sin regalar outs."
+            )
+
         return (
-            f"El corrido de bases de {team_short} debe leerse como una herramienta de presión, no solo como una tabla de robos. "
-            f"SBA #{sba_r or '-'} ({safe_fmt('SBA', sba_v)}) y SB #{sb_r or '-'} ({safe_fmt('SB', sb_v)}) "
-            f"describen el volumen de decisiones que el club fuerza sobre pitchers, catchers e infielders. "
-            f"El área que define el valor neto es la precisión de esas decisiones: SB% #{rate_r or '-'} "
-            f"({safe_fmt('SB%', rate_v)}) y CS #{cs_r or '-'} ({safe_fmt('CS', cs_v)}) indican si la agresividad está generando "
-            f"ventajas o outs evitables. La meta no es apagar la presión, sino elegir mejores momentos para que cada intento cambie el inning a favor."
+            f"El corrido de bases de {team_short} muestra SB {metric_phrase('SB', sb_r, sb_v)}, SBA {metric_phrase('SBA', sba_r, sba_v)} y SB% {metric_phrase('SB%', rate_r, rate_v)}. "
+            f"La prioridad es maximizar valor sin aumentar outs evitables."
+        )
+
+    # Rolling summaries: different tone by club.
+    if voice == "escogido":
+        return (
+            f"La tendencia de Escogido debe leerse como una búsqueda de estabilidad: sostener disciplina, crear tráfico y decidir mejor cuándo presionar en bases. "
+            f"Las curvas permiten separar un buen tramo de una mejora real. Si el OBP se mantiene y el equipo convierte más corredores en daño, el perfil gana peligro sin cambiar su identidad."
+        )
+    if voice == "aguilas":
+        return (
+            f"En Aguilas, las tendencias sirven para vigilar si el dominio acumulado se mantiene o empieza a normalizarse. El valor está en sostener la separación en métricas de calidad, no solo en liderar el cierre del reporte. "
+            f"Mientras el contacto, el OBP y la eficiencia en bases sigan viajando juntos, el equipo conserva una ventaja estructural."
+        )
+    if voice == "licey":
+        return (
+            f"Para Licey, la página de tendencias es una herramienta de alerta temprana. Más que celebrar el acumulado, ayuda a detectar dónde empieza una recuperación: OBP, contacto, daño o eficiencia en bases. "
+            f"El objetivo del próximo tramo es cambiar la pendiente de las curvas antes de que el ranking final cierre el margen de reacción."
+        )
+    if voice == "estrellas":
+        return (
+            f"Las tendencias de Estrellas deben enfocarse en continuidad. Cuando el volumen de hits se sostiene, el siguiente indicador importante es si ese tráfico se transforma en slugging y carreras. "
+            f"La lectura semanal debe buscar señales de impacto: más extrabases, mejor eficiencia en bases y menos innings donde el contacto no produce avance real."
+        )
+    if voice == "gigantes":
+        return (
+            f"En Gigantes, la página de rolling funciona como mapa de consistencia. El ranking final puede esconder tramos buenos y malos; las curvas enseñan cuándo el equipo compitió al nivel de la liga y cuándo perdió terreno. "
+            f"El reto es reducir caídas largas y construir rachas donde ofensiva, pitcheo y defensa se alineen al mismo tiempo."
+        )
+    if voice == "toros":
+        return (
+            f"Para Toros, las curvas ayudan a medir si el daño ofensivo llega en picos aislados o en una tendencia sostenible. El poder cambia juegos, pero la estabilidad aparece cuando OBP, SLG y presión en bases crecen juntos. "
+            f"La clave es evitar que el perfil dependa solo del extrabase y añadir más tráfico antes de los swings grandes."
         )
 
     return (
-        f"La página de tendencias cambia el enfoque: en lugar de mirar solo el ranking final, muestra la forma en que {team_short} llegó a ese punto. "
-        f"Las curvas ofensivas ayudan a identificar estabilidad, caídas o separaciones frente a la liga; las de corrido de bases enseñan cuándo el volumen se convirtió "
-        f"en ventaja real. Si el equipo sostiene OBP y disciplina mientras mejora la conversión de tráfico en daño, el perfil se vuelve mucho más peligroso. "
-        f"La lectura para el próximo tramo es buscar continuidad en las fortalezas y reaccionar rápido cuando una tendencia empiece a moverse en contra."
+        f"La página de tendencias muestra cómo {team_short} llegó a su posición actual. El objetivo es sostener fortalezas, corregir caídas temprano y convertir mejores tramos en ventaja acumulada."
     )
+
 
 # Backward-compatible name in case older calls remain.
 def make_escogido_summary(section, hitting, baserunning):
     return make_team_summary(section, hitting, baserunning, "Leones del Escogido")
 
+
 def make_team_pitching_summary(pitching, selected_team="Leones del Escogido"):
     team_name = normalize_team_name(selected_team)
     team_short = team_short_name(team_name)
+    voice = team_voice_key(team_name)
     if pitching is None or pitching.empty:
         return f"Carga el archivo LIDOM Draft para generar el resumen de pitcheo de {team_short}."
     era_r, era_v = rank_position(pitching, "ERA", team=team_name, ascending=True)
@@ -895,21 +1023,58 @@ def make_team_pitching_summary(pitching, selected_team="Leones del Escogido"):
     bb_r, bb_v = rank_position(pitching, "BB%", team=team_name, ascending=True)
     hr_r, hr_v = rank_position(pitching, "HR%", team=team_name, ascending=True)
     baa_r, baa_v = rank_position(pitching, "BAA", team=team_name, ascending=True)
+
+    if voice == "aguilas":
+        return (
+            f"El staff de Aguilas tiene una base de dominio real: K% {metric_phrase('K%', k_r, k_v)} y ERA {metric_phrase('ERA', era_r, era_v)} le dan al club capacidad para controlar innings. "
+            f"El área que puede elevar el techo está en comando fino: BB% {metric_phrase('BB%', bb_r, bb_v)} y HR% {metric_phrase('HR%', hr_r, hr_v)} marcan cuánto daño gratis se concede. "
+            f"Si el ponche se mantiene y los boletos bajan, FIP {metric_phrase('FIP', fip_r, fip_v)} debería acercarse al resultado del ERA."
+        )
+    if voice == "licey":
+        return (
+            f"El pitcheo de Licey se sostiene por prevención de carreras y control de tráfico. ERA {metric_phrase('ERA', era_r, era_v)} y WHIP {metric_phrase('WHIP', whip_r, whip_v)} "
+            f"describen un staff que limita rallies aun cuando el contacto aparece. FIP {metric_phrase('FIP', fip_r, fip_v)} ayuda a medir si ese rendimiento es sostenible. "
+            f"La tarea es mantener BB% {metric_phrase('BB%', bb_r, bb_v)} bajo control y encontrar más finalización de turnos con K% {metric_phrase('K%', k_r, k_v)}."
+        )
+    if voice == "toros":
+        return (
+            f"El pitcheo de Toros debe evaluarse por daño permitido y ejecución con hombres en base. ERA {metric_phrase('ERA', era_r, era_v)} y FIP {metric_phrase('FIP', fip_r, fip_v)} "
+            f"dan una idea del rendimiento real y esperado. WHIP {metric_phrase('WHIP', whip_r, whip_v)} muestra cuánto tráfico se permite, mientras HR% {metric_phrase('HR%', hr_r, hr_v)} "
+            f"define si los errores se convierten en daño grande. El foco es atacar temprano y cerrar turnos sin extender innings."
+        )
+    if voice == "estrellas":
+        return (
+            f"El staff de Estrellas tiene una lectura interesante desde FIP {metric_phrase('FIP', fip_r, fip_v)} y HR% {metric_phrase('HR%', hr_r, hr_v)}: los indicadores de proceso apuntan a capacidad de limitar daño fuerte. "
+            f"La distancia con ERA {metric_phrase('ERA', era_r, era_v)} y WHIP {metric_phrase('WHIP', whip_r, whip_v)} señala dónde el tráfico todavía pesa. "
+            f"El próximo paso es transformar buen proceso en innings más limpios y menos situaciones de estrés."
+        )
+    if voice == "gigantes":
+        return (
+            f"Gigantes tiene que mirar el pitcheo desde control de contacto y reducción de daño. BAA {metric_phrase('BAA', baa_r, baa_v)} y WHIP {metric_phrase('WHIP', whip_r, whip_v)} "
+            f"muestran cuánto trabajo enfrenta la defensa. K% {metric_phrase('K%', k_r, k_v)} da una vía para salir de problemas, pero BB% {metric_phrase('BB%', bb_r, bb_v)} y HR% {metric_phrase('HR%', hr_r, hr_v)} "
+            f"determinan si esos problemas se convierten en carreras. La prioridad es recortar tráfico gratis."
+        )
+    if voice == "escogido":
+        return (
+            f"El pitcheo de Escogido vive entre comando y margen. BB% {metric_phrase('BB%', bb_r, bb_v)} muestra capacidad para evitar regalos, pero ERA {metric_phrase('ERA', era_r, era_v)}, "
+            f"WHIP {metric_phrase('WHIP', whip_r, whip_v)} y BAA {metric_phrase('BAA', baa_r, baa_v)} indican que todavía hay demasiado tráfico útil para el rival. "
+            f"El salto vendrá de subir K% {metric_phrase('K%', k_r, k_v)} y limitar HR% {metric_phrase('HR%', hr_r, hr_v)} sin perder la ventaja de control."
+        )
+
     return (
-        f"El perfil de pitcheo de {team_short} se define por la relación entre prevención de carreras, tráfico permitido y capacidad de terminar turnos. "
-        f"ERA #{era_r or '-'} ({safe_fmt('ERA', era_v)}) muestra el resultado visible, mientras FIP #{fip_r or '-'} ({safe_fmt('FIP', fip_v)}) "
-        f"ayuda a separar ejecución de defensa y contexto. WHIP #{whip_r or '-'} ({safe_fmt('WHIP', whip_v)}) y BAA #{baa_r or '-'} "
-        f"({safe_fmt('BAA', baa_v)}) explican cuánto margen se le está dando al rival para construir innings. El verdadero punto de ajuste está en el balance "
-        f"entre K% #{k_r or '-'} ({safe_fmt('K%', k_v)}) y BB% #{bb_r or '-'} ({safe_fmt('BB%', bb_v)}): más dominio sin regalar bases. "
-        f"Limitar HR% #{hr_r or '-'} ({safe_fmt('HR%', hr_v)}) y ejecutar mejor en conteos de ventaja debe ser el camino para elevar el techo del staff."
+        f"El perfil de pitcheo de {team_short} combina ERA {metric_phrase('ERA', era_r, era_v)}, FIP {metric_phrase('FIP', fip_r, fip_v)} y WHIP {metric_phrase('WHIP', whip_r, whip_v)}. "
+        f"El foco debe ser controlar tráfico, generar más outs de calidad y limitar daño largo."
     )
+
 
 def make_escogido_pitching_summary(pitching):
     return make_team_pitching_summary(pitching, "Leones del Escogido")
 
+
 def make_team_defense_summary(defense, selected_team="Leones del Escogido"):
     team_name = normalize_team_name(selected_team)
     team_short = team_short_name(team_name)
+    voice = team_voice_key(team_name)
     if defense is None or defense.empty:
         return f"Carga los archivos de defensa para generar el resumen defensivo de {team_short}."
     cs_r, cs_v = rank_position(defense, "CS%", team=team_name, ascending=False)
@@ -917,13 +1082,49 @@ def make_team_defense_summary(defense, selected_team="Leones del Escogido"):
     iff_r, iff_v = rank_position(defense, "IFFld%", team=team_name, ascending=False)
     ofe_r, ofe_v = rank_position(defense, "OFErr", team=team_name, ascending=True)
     off_r, off_v = rank_position(defense, "OFFld%", team=team_name, ascending=False)
+
+    if voice == "aguilas":
+        return (
+            f"La defensa de Aguilas tiene una división clara: el outfield aporta seguridad de alto nivel con OFErr {metric_phrase('OFErr', ofe_r, ofe_v)} y OFFld% {metric_phrase('OFFld%', off_r, off_v)}, "
+            f"mientras el infield necesita mayor estabilidad con IFErr {metric_phrase('IFErr', ife_r, ife_v)} e IFFld% {metric_phrase('IFFld%', iff_r, iff_v)}. "
+            f"El catching, CS% {metric_phrase('CS%', cs_r, cs_v)}, será importante para equilibrar el juego de correr rival. La meta es que la defensa completa acompañe el nivel del outfield."
+        )
+    if voice == "licey":
+        return (
+            f"Licey defiende con una base sólida en los jardines: OFErr {metric_phrase('OFErr', ofe_r, ofe_v)} y OFFld% {metric_phrase('OFFld%', off_r, off_v)} ayudan a cortar daño extra. "
+            f"El catching, CS% {metric_phrase('CS%', cs_r, cs_v)}, suma control al running game. En el infield, IFErr {metric_phrase('IFErr', ife_r, ife_v)} e IFFld% {metric_phrase('IFFld%', iff_r, iff_v)} "
+            f"marcan el área donde la consistencia puede mejorar la prevención de carreras."
+        )
+    if voice == "estrellas":
+        return (
+            f"La defensa de Estrellas se apoya en convertir outs rutinarios y no regalar entradas extendidas. IFErr {metric_phrase('IFErr', ife_r, ife_v)} e IFFld% {metric_phrase('IFFld%', iff_r, iff_v)} "
+            f"muestran la estabilidad del cuadro, mientras OFErr {metric_phrase('OFErr', ofe_r, ofe_v)} y OFFld% {metric_phrase('OFFld%', off_r, off_v)} miden cuánto se protege el espacio grande. "
+            f"CS% {metric_phrase('CS%', cs_r, cs_v)} completa la lectura del apoyo al pitcheo."
+        )
+    if voice == "gigantes":
+        return (
+            f"Gigantes destaca primero por el control del juego de correr: CS% {metric_phrase('CS%', cs_r, cs_v)} puede cambiar la manera en que los rivales toman riesgos. "
+            f"La siguiente capa está en asegurar la pelota en el infield y outfield: IFErr {metric_phrase('IFErr', ife_r, ife_v)}, IFFld% {metric_phrase('IFFld%', iff_r, iff_v)}, "
+            f"OFErr {metric_phrase('OFErr', ofe_r, ofe_v)} y OFFld% {metric_phrase('OFFld%', off_r, off_v)}. El objetivo es convertir esa fortaleza de batería en defensa completa."
+        )
+    if voice == "toros":
+        return (
+            f"La defensa de Toros debe verse desde ejecución y limpieza. IFErr {metric_phrase('IFErr', ife_r, ife_v)} e IFFld% {metric_phrase('IFFld%', iff_r, iff_v)} dicen cuánto se asegura el contacto terrestre; "
+            f"OFErr {metric_phrase('OFErr', ofe_r, ofe_v)} y OFFld% {metric_phrase('OFFld%', off_r, off_v)} evalúan el control del espacio. "
+            f"Con CS% {metric_phrase('CS%', cs_r, cs_v)}, el staff puede saber si la defensa está ayudando a controlar innings o solo evitando errores visibles."
+        )
+    if voice == "escogido":
+        return (
+            f"La defensa de Escogido se sostiene desde el infield. IFErr {metric_phrase('IFErr', ife_r, ife_v)} e IFFld% {metric_phrase('IFFld%', iff_r, iff_v)} hablan de una base confiable para convertir contacto en outs. "
+            f"El catching, CS% {metric_phrase('CS%', cs_r, cs_v)}, ofrece una lectura del control del running game. El punto de mejora aparece en el outfield con OFErr {metric_phrase('OFErr', ofe_r, ofe_v)} "
+            f"y OFFld% {metric_phrase('OFFld%', off_r, off_v)}. El objetivo es que la seguridad del cuadro se extienda a todo el campo."
+        )
+
     return (
-        f"La defensa de {team_short} debe evaluarse como una red de apoyo al pitcheo: controla el juego de correr, asegura outs rutinarios y evita bases gratis. "
-        f"El catching aparece con CS% #{cs_r or '-'} ({safe_fmt('CS%', cs_v)}), una señal directa de cuánto se frena la agresividad rival. "
-        f"En el infield, IFErr #{ife_r or '-'} ({safe_fmt('IFErr', ife_v)}) e IFFld% #{iff_r or '-'} ({safe_fmt('IFFld%', iff_v)}) hablan de estabilidad en la zona donde más contacto se convierte en out. "
-        f"En el outfield, OFErr #{ofe_r or '-'} ({safe_fmt('OFErr', ofe_v)}) y OFFld% #{off_r or '-'} ({safe_fmt('OFFld%', off_v)}) resumen alcance, seguridad y comunicación. "
-        f"El objetivo defensivo no es solo evitar errores: es quitarle al rival innings extendidos y sostener la ejecución cuando el juego se aprieta."
+        f"La defensa de {team_short} combina CS% {metric_phrase('CS%', cs_r, cs_v)}, IFErr {metric_phrase('IFErr', ife_r, ife_v)} e OFFld% {metric_phrase('OFFld%', off_r, off_v)}. "
+        f"El enfoque debe ser sostener outs rutinarios y evitar innings extendidos."
     )
+
 
 def make_escogido_defense_summary(defense):
     return make_team_defense_summary(defense, "Leones del Escogido")
@@ -1375,7 +1576,7 @@ def safe_filename(name: str) -> str:
     return cleaned or "Team"
 
 
-def build_all_team_pdfs_zip(hitting, baserunning, rolling_hitting, rolling_baserunning, pitching, defense, logo_uploads, team_list) -> BytesIO:
+def build_all_team_pdfs_zip(hitting, baserunning, rolling_hitting, rolling_baserunning, pitching, defense, logo_uploads, team_list) -> bytes:
     """Create a ZIP containing one PDF per selected/reportable LIDOM team."""
     zip_buffer = BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -1393,7 +1594,7 @@ def build_all_team_pdfs_zip(hitting, baserunning, rolling_hitting, rolling_baser
             pdf_buffer.seek(0)
             zf.writestr(f"LIDOM_Report_{safe_filename(team_short_name(team))}.pdf", pdf_buffer.getvalue())
     zip_buffer.seek(0)
-    return zip_buffer
+    return zip_buffer.getvalue()
 
 # =====================================================
 # UI
@@ -1677,20 +1878,32 @@ with tab4:
         if REPORTLAB_AVAILABLE:
             st.download_button(
                 "📄 Download Selected Team PDF",
-                data=to_pdf(hitting, baserunning, rolling_hitting, rolling_baserunning, pitching, defense, logo_uploads, selected_report_team),
+                data=to_pdf(hitting, baserunning, rolling_hitting, rolling_baserunning, pitching, defense, logo_uploads, selected_report_team).getvalue(),
                 file_name=f"lidom_report_{safe_filename(team_short_name(selected_report_team))}.pdf",
                 mime="application/pdf",
+                key="download_selected_team_pdf",
             )
         else:
             st.warning("To export PDF, install ReportLab first: `pip install reportlab`")
 
     with col3:
         if REPORTLAB_AVAILABLE:
+            all_pdf_zip = build_all_team_pdfs_zip(
+                hitting,
+                baserunning,
+                rolling_hitting,
+                rolling_baserunning,
+                pitching,
+                defense,
+                logo_uploads,
+                report_team_options,
+            )
             st.download_button(
-                "🗂️ Download All Team PDFs",
-                data=build_all_team_pdfs_zip(hitting, baserunning, rolling_hitting, rolling_baserunning, pitching, defense, logo_uploads, report_team_options),
+                "🗂️ Download ZIP: All Team PDFs",
+                data=all_pdf_zip,
                 file_name="lidom_all_team_reports.zip",
                 mime="application/zip",
+                key="download_all_team_pdfs_zip",
             )
         else:
             st.warning("PDF ZIP requires ReportLab.")
