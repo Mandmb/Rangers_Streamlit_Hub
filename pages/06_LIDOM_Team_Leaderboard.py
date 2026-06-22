@@ -889,7 +889,7 @@ def draw_wrapped_text(c, text, x, y, width, font="Helvetica", size=8, color="#11
     return y
 
 
-def draw_header(c, title, subtitle, bg, logo_paths, page_type="blue", accent=None, text_color="#FFFFFF"):
+def draw_header(c, title, subtitle, bg, logo_paths, page_type="blue", accent=None, text_color="#FFFFFF", run_env_text=None):
     W, H = landscape(letter)
     c.setFillColor(colors.HexColor(bg))
     c.rect(0, H - 84, W, 84, fill=1, stroke=0)
@@ -904,6 +904,17 @@ def draw_header(c, title, subtitle, bg, logo_paths, page_type="blue", accent=Non
     c.drawString(108, H - 42, title)
     c.setFont("Helvetica", 9)
     c.drawString(110, H - 63, subtitle)
+    if run_env_text:
+        # Small context badge: gives the reader the league scoring environment.
+        badge_w = 92
+        badge_h = 20
+        bx = W - badge_w - 28
+        by = H - 61
+        c.setStrokeColor(colors.HexColor(text_color))
+        c.setLineWidth(0.8)
+        c.roundRect(bx, by, badge_w, badge_h, 8, fill=0, stroke=1)
+        c.setFont("Helvetica-Bold", 8.5)
+        c.drawCentredString(bx + badge_w / 2, by + 6, run_env_text)
 
 
 def draw_footer(c, page_num, logo_paths, bg="#001F4E", selected_team="Leones del Escogido"):
@@ -937,6 +948,118 @@ def rank_position(df, stat, team="Leones del Escogido", ascending=False):
 
 def safe_fmt(stat, val):
     return format_value(stat, val) if val is not None and not pd.isna(val) else "—"
+
+
+def league_average_value(df: pd.DataFrame, stat: str):
+    """Return a league-average value for the stat shown in a PDF table.
+
+    Counts are shown as average per team. Rate stats are weighted when the
+    component columns exist; otherwise they fall back to the mean of team rates.
+    """
+    if df is None or df.empty or stat not in df.columns:
+        return None
+    data = df.copy()
+
+    def _safe_div(num, den):
+        try:
+            den = float(den)
+            return float(num) / den if den else None
+        except Exception:
+            return None
+
+    # True/weighted league rates when the raw components are available.
+    if stat == "BA" and {"Hits", "AB"}.issubset(data.columns):
+        return _safe_div(data["Hits"].sum(), data["AB"].sum())
+    if stat == "OBP" and {"ReachedBase", "PA"}.issubset(data.columns):
+        return _safe_div(data["ReachedBase"].sum(), data["PA"].sum())
+    if stat == "SLG" and {"TB", "PA"}.issubset(data.columns):
+        return _safe_div(data["TB"].sum(), data["PA"].sum())
+    if stat == "OPS":
+        obp = league_average_value(data, "OBP")
+        slg = league_average_value(data, "SLG")
+        if obp is not None and slg is not None:
+            return obp + slg
+    if stat == "BB%" and {"BB", "PA"}.issubset(data.columns):
+        return _safe_div(data["BB"].sum(), data["PA"].sum())
+    if stat == "K%" and {"K", "PA"}.issubset(data.columns):
+        return _safe_div(data["K"].sum(), data["PA"].sum())
+    if stat == "SB%" and {"SB", "SBA"}.issubset(data.columns):
+        return _safe_div(data["SB"].sum(), data["SBA"].sum())
+
+    vals = pd.to_numeric(data[stat], errors="coerce").dropna()
+    if vals.empty:
+        return None
+    return float(vals.mean())
+
+
+def format_league_average(stat: str, val):
+    if val is None or pd.isna(val):
+        return "—"
+    if stat in RATE_STATS or stat in {"ERA", "FIP", "WHIP"}:
+        return format_value(stat, val)
+    return f"{float(val):.1f}"
+
+
+def calculate_run_environment_from_raw(team_frames):
+    """Estimate league R/G if uploaded CSVs include run or score columns.
+
+    The app supports both play-level run columns (summed by team-game) and
+    cumulative team-score columns (max by team-game). If no recognizable column
+    exists, the PDF header will show R/G: — instead of guessing.
+    """
+    if not team_frames:
+        return None
+
+    play_run_candidates = [
+        "runsScored", "runs_scored", "runsOnPlay", "runs_on_play", "runs_play",
+        "RunsScored", "Runs On Play", "runsscored",
+    ]
+    score_candidates = [
+        "teamScore", "battingTeamScore", "postBattingTeamScore", "offenseScore",
+        "batting_team_score", "TeamScore", "Runs", "runs", "R",
+    ]
+
+    team_game_runs = []
+    for file_name, df in team_frames:
+        if df is None or df.empty or "fullName" not in df.columns:
+            continue
+        tmp = df.copy()
+        tmp["fullName"] = tmp["fullName"].apply(normalize_team_name)
+        game_col = "gameId" if "gameId" in tmp.columns else "game_date" if "game_date" in tmp.columns else None
+        if game_col is None:
+            date_col = "date" if "date" in tmp.columns else "gameDate" if "gameDate" in tmp.columns else None
+            if date_col:
+                tmp["_game_key"] = pd.to_datetime(tmp[date_col], errors="coerce").dt.date.astype(str)
+                game_col = "_game_key"
+            else:
+                tmp["_game_key"] = file_name
+                game_col = "_game_key"
+
+        play_col = next((c for c in play_run_candidates if c in tmp.columns), None)
+        if play_col:
+            tmp[play_col] = pd.to_numeric(tmp[play_col], errors="coerce").fillna(0)
+            g = tmp.groupby(["fullName", game_col])[play_col].sum().reset_index(name="runs")
+            team_game_runs.extend(g["runs"].dropna().tolist())
+            continue
+
+        score_col = next((c for c in score_candidates if c in tmp.columns), None)
+        if score_col:
+            tmp[score_col] = pd.to_numeric(tmp[score_col], errors="coerce")
+            g = tmp.groupby(["fullName", game_col])[score_col].max().reset_index(name="runs")
+            team_game_runs.extend(g["runs"].dropna().tolist())
+
+    vals = [float(v) for v in team_game_runs if pd.notna(v)]
+    if not vals:
+        return None
+    # Guardrail: avoid obvious bad cumulative season totals being treated as game scores.
+    vals = [v for v in vals if 0 <= v <= 40]
+    if not vals:
+        return None
+    return float(np.mean(vals))
+
+
+def format_run_environment(run_env):
+    return f"R/G: {run_env:.2f}" if run_env is not None and not pd.isna(run_env) else "R/G: —"
 
 
 def team_voice_key(team: str) -> str:
@@ -1276,7 +1399,8 @@ def draw_stat_table(c, df, stat, x, y, w, h, logo_paths, theme="#002D72", ascend
     c.setLineWidth(0.55)
     c.roundRect(x, y, w, h, 6, fill=1, stroke=1)
 
-    header_h = 26
+    header_h = 32
+    avg_text = f"League Average: {format_league_average(stat, league_average_value(df, stat))}"
     c.setFillColor(colors.HexColor(theme))
     c.roundRect(x, y + h - header_h, w, header_h, 6, fill=1, stroke=0)
     c.rect(x, y + h - header_h, w, header_h - 5, fill=1, stroke=0)
@@ -1288,10 +1412,12 @@ def draw_stat_table(c, df, stat, x, y, w, h, logo_paths, theme="#002D72", ascend
         safe_draw_image(c, icon_image, x + 8, y + h - 27, 22, 22)
         title_x = x + 40
         c.setFillColor(colors.HexColor(table_text))
-        c.setFont("Helvetica-Bold", 11)
-        c.drawString(title_x, y + h - 14, title)
-        c.setFont("Helvetica", 6.3)
-        c.drawString(title_x, y + h - 25, subtitle)
+        c.setFont("Helvetica-Bold", 10.5)
+        c.drawString(title_x, y + h - 11, title)
+        c.setFont("Helvetica", 5.8)
+        c.drawString(title_x, y + h - 21, subtitle)
+        c.setFont("Helvetica-Bold", 5.8)
+        c.drawString(title_x, y + h - 29, avg_text)
     elif icon:
         c.setFillColor(colors.HexColor(table_text))
         c.circle(x + 19, y + h - 16, 11, fill=0, stroke=1)
@@ -1299,16 +1425,20 @@ def draw_stat_table(c, df, stat, x, y, w, h, logo_paths, theme="#002D72", ascend
         c.drawCentredString(x + 19, y + h - 20, icon)
         title_x = x + 38
         c.setFillColor(colors.HexColor(table_text))
-        c.setFont("Helvetica-Bold", 11)
-        c.drawString(title_x, y + h - 14, title)
-        c.setFont("Helvetica", 6.3)
-        c.drawString(title_x, y + h - 25, subtitle)
+        c.setFont("Helvetica-Bold", 10.5)
+        c.drawString(title_x, y + h - 11, title)
+        c.setFont("Helvetica", 5.8)
+        c.drawString(title_x, y + h - 21, subtitle)
+        c.setFont("Helvetica-Bold", 5.8)
+        c.drawString(title_x, y + h - 29, avg_text)
     else:
         c.setFillColor(colors.HexColor(table_text))
-        c.setFont("Helvetica-Bold", 11)
-        c.drawCentredString(x + w / 2, y + h - 14, title)
-        c.setFont("Helvetica", 6.2)
-        c.drawCentredString(x + w / 2, y + h - 25, subtitle)
+        c.setFont("Helvetica-Bold", 10.5)
+        c.drawCentredString(x + w / 2, y + h - 11, title)
+        c.setFont("Helvetica", 5.8)
+        c.drawCentredString(x + w / 2, y + h - 21, subtitle)
+        c.setFont("Helvetica-Bold", 5.8)
+        c.drawCentredString(x + w / 2, y + h - 29, avg_text)
 
     # Column header
     ch_h = 15
@@ -1345,7 +1475,7 @@ def draw_stat_table(c, df, stat, x, y, w, h, logo_paths, theme="#002D72", ascend
             color = (highlight_text or team_highlight_color(selected_team)) if is_esc else "#111111"
             font = "Helvetica-Bold" if is_esc else "Helvetica"
             c.setFillColor(colors.HexColor(color))
-            c.setFont(font, 8.0)
+            c.setFont(font, 7.4)
             c.drawCentredString(x + 17, ry + row_h / 2 - 2.2, str(r["Rank"]))
             draw_team_logo(c, logo_paths, team, x + 39, ry + row_h / 2 - 6.5, 13, 13)
             c.drawString(x + 58, ry + row_h / 2 - 2.2, team[:30])
@@ -1443,7 +1573,7 @@ def draw_chart_grid(c, rolling_hitting, rolling_baserunning, x, y, w, h, logo_pa
         c.drawString(lx + 19, legend_y - 2.2, label[:18])
         lx += 112
 
-def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd.DataFrame, rolling_baserunning: pd.DataFrame, pitching_sp: pd.DataFrame | None = None, pitching_rp: pd.DataFrame | None = None, defense: pd.DataFrame | None = None, logo_uploads: dict | None = None, selected_team: str = "Leones del Escogido", selected_league: str = "LIDOM") -> BytesIO:
+def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd.DataFrame, rolling_baserunning: pd.DataFrame, pitching_sp: pd.DataFrame | None = None, pitching_rp: pd.DataFrame | None = None, defense: pd.DataFrame | None = None, logo_uploads: dict | None = None, selected_team: str = "Leones del Escogido", selected_league: str = "LIDOM", run_env_text: str | None = None) -> BytesIO:
     if not REPORTLAB_AVAILABLE:
         raise ImportError("ReportLab is not installed. Run: pip install reportlab")
 
@@ -1470,7 +1600,7 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
     footer_bg = report_theme.get("footer_bg", primary)
 
     # Page 1 - Hitting category leaderboards, cleaner 3-column layout
-    draw_header(c, f"{league_display} TEAM HITTING LEADERBOARDS", date_txt, primary, logo_paths, "blue", accent=accent, text_color=header_text)
+    draw_header(c, f"{league_display} TEAM HITTING LEADERBOARDS", date_txt, primary, logo_paths, "blue", accent=accent, text_color=header_text, run_env_text=run_env_text)
     draw_section_title(c, "HITTING LEADERBOARDS BY CATEGORY   ★   ★", 24, H - 119, section_color)
 
     left = 24
@@ -1506,7 +1636,7 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
     c.showPage()
 
     # Page 2 - Baserunning category leaderboards, bigger feature cards
-    draw_header(c, f"{league_display} TEAM BASERUNNING LEADERBOARDS", date_txt, primary, logo_paths, "red", accent=accent, text_color=header_text)
+    draw_header(c, f"{league_display} TEAM BASERUNNING LEADERBOARDS", date_txt, primary, logo_paths, "red", accent=accent, text_color=header_text, run_env_text=run_env_text)
     # Baserunning section icon: always prefer baserunning.png from the app folder/sidebar, with embedded fallback.
     safe_draw_image(c, logo_paths.get("baserunning"), 34, H - 132, 18, 18)
     draw_section_title(c, "BASERUNNING LEADERBOARDS BY CATEGORY   ★", 58, H - 119, section_color)
@@ -1566,7 +1696,7 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
     c.showPage()
 
     # Page 3 - Rolling performance, larger key charts only
-    draw_header(c, f"{league_display} TEAM ROLLING PERFORMANCE", f"Rolling Cumulative Charts - {date_txt}", primary, logo_paths, "blue", accent=accent, text_color=header_text)
+    draw_header(c, f"{league_display} TEAM ROLLING PERFORMANCE", f"Rolling Cumulative Charts - {date_txt}", primary, logo_paths, "blue", accent=accent, text_color=header_text, run_env_text=run_env_text)
     draw_section_title(c, "HITTING METRICS (Rolling Cumulative)   ★", 30, H - 120, section_color)
     safe_draw_image(c, logo_paths.get("baserunning"), 30, 213, 16, 16)
     draw_section_title(c, "BASERUNNING METRICS (Rolling Cumulative)   ★", 52, 226, accent)
@@ -1586,7 +1716,7 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
     c.showPage()
 
     def draw_pitching_leaderboard_page(page_num, page_title, pitching_df, empty_message, summary_title):
-        draw_header(c, page_title, date_txt, primary, logo_paths, "blue", accent=accent, text_color=header_text)
+        draw_header(c, page_title, date_txt, primary, logo_paths, "blue", accent=accent, text_color=header_text, run_env_text=run_env_text)
         draw_section_title(c, "PITCHING LEADERBOARDS BY CATEGORY   ★", 24, H - 119, section_color)
 
         if pitching_df is None or pitching_df.empty:
@@ -1654,7 +1784,7 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
     )
 
     # Page 6 - Defense category leaderboards from catcher, infield, and outfield snapshots
-    draw_header(c, f"{league_display} TEAM DEFENSE LEADERBOARDS", date_txt, primary, logo_paths, "red", accent=accent, text_color=header_text)
+    draw_header(c, f"{league_display} TEAM DEFENSE LEADERBOARDS", date_txt, primary, logo_paths, "red", accent=accent, text_color=header_text, run_env_text=run_env_text)
     draw_section_title(c, "DEFENSE LEADERBOARDS BY CATEGORY   ★", 24, H - 119, section_color)
 
     if defense is None or defense.empty:
@@ -1714,7 +1844,7 @@ def safe_filename(name: str) -> str:
     return cleaned or "Team"
 
 
-def build_all_team_pdfs_zip(hitting, baserunning, rolling_hitting, rolling_baserunning, pitching_sp, pitching_rp, defense, logo_uploads, team_list, selected_league="LIDOM") -> bytes:
+def build_all_team_pdfs_zip(hitting, baserunning, rolling_hitting, rolling_baserunning, pitching_sp, pitching_rp, defense, logo_uploads, team_list, selected_league="LIDOM", run_env_text=None) -> bytes:
     """Create a ZIP containing one PDF per selected/reportable team in the selected league."""
     zip_buffer = BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -1730,6 +1860,7 @@ def build_all_team_pdfs_zip(hitting, baserunning, rolling_hitting, rolling_baser
                 logo_uploads,
                 team,
                 selected_league,
+                run_env_text,
             )
             pdf_buffer.seek(0)
             prefix = LEAGUE_CONFIG.get(selected_league, LEAGUE_CONFIG["LIDOM"]).get("zip_prefix", "Team_Report")
@@ -2312,6 +2443,10 @@ if not team_frames:
     st.warning("No team Pregame CSVs were detected. Make sure those files include fullName, pitchResult, BaseStealAtt, and outs.")
     st.stop()
 
+run_environment = calculate_run_environment_from_raw(team_frames)
+run_env_text = format_run_environment(run_environment)
+st.caption(f"League run environment: {run_env_text}")
+
 all_pa = []
 all_br = []
 for file_name, df in team_frames:
@@ -2495,7 +2630,7 @@ with tab4:
         if REPORTLAB_AVAILABLE:
             st.download_button(
                 "📄 Download Selected Team PDF",
-                data=to_pdf(hitting, baserunning, rolling_hitting, rolling_baserunning, pitching_sp, pitching_rp, defense, logo_uploads, selected_report_team, selected_league).getvalue(),
+                data=to_pdf(hitting, baserunning, rolling_hitting, rolling_baserunning, pitching_sp, pitching_rp, defense, logo_uploads, selected_report_team, selected_league, run_env_text).getvalue(),
                 file_name=f"{league_cfg['excel_prefix']}_report_{safe_filename(team_short_name(selected_report_team))}.pdf",
                 mime="application/pdf",
                 key="download_selected_team_pdf",
@@ -2516,6 +2651,7 @@ with tab4:
                 logo_uploads,
                 report_team_options,
                 selected_league,
+                run_env_text,
             )
             st.download_button(
                 "🗂️ Download ZIP: All Team PDFs",
