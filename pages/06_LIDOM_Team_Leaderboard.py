@@ -913,7 +913,7 @@ def make_escogido_defense_summary(defense):
 
 def draw_summary_box(c, title, body, x, y, w, h, logo_paths, selected_team="Leones del Escogido", border_color=None, title_color=None):
     theme = get_team_theme(selected_team)
-    border_color = border_color or theme["accent"]
+    border_color = border_color or theme["primary"]
     title_color = title_color or theme["highlight_text"]
     c.setStrokeColor(colors.HexColor(border_color))
     c.setLineWidth(0.9)
@@ -941,9 +941,10 @@ def draw_stat_table(c, df, stat, x, y, w, h, logo_paths, theme="#002D72", ascend
     c.rect(x, y + h - header_h, w, header_h - 5, fill=1, stroke=0)
 
     if icon_image:
-        c.setFillColor(colors.HexColor(table_text))
-        c.circle(x + 19, y + h - 16, 12, fill=0, stroke=1)
-        safe_draw_image(c, icon_image, x + 9, y + h - 26, 20, 20)
+        # White badge keeps the runner visible on every team-color header.
+        c.setFillColor(colors.white)
+        c.circle(x + 19, y + h - 16, 12, fill=1, stroke=0)
+        safe_draw_image(c, icon_image, x + 8, y + h - 27, 22, 22)
         title_x = x + 40
         c.setFillColor(colors.HexColor(table_text))
         c.setFont("Helvetica-Bold", 11)
@@ -1157,7 +1158,9 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
 
     # Page 2 - Baserunning category leaderboards, bigger feature cards
     draw_header(c, "LIDOM TEAM BASERUNNING LEADERBOARDS", date_txt, primary, logo_paths, "red", accent=accent, text_color=header_text)
-    draw_section_title(c, "BASERUNNING LEADERBOARDS BY CATEGORY   ★", 34, H - 119, section_color)
+    # Baserunning section icon: always prefer baserunning.png from the app folder/sidebar, with embedded fallback.
+    safe_draw_image(c, logo_paths.get("baserunning"), 34, H - 132, 18, 18)
+    draw_section_title(c, "BASERUNNING LEADERBOARDS BY CATEGORY   ★", 58, H - 119, section_color)
 
     br_left = 44
     br_top = H - 148
@@ -1216,7 +1219,8 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
     # Page 3 - Rolling performance, larger key charts only
     draw_header(c, "LIDOM TEAM ROLLING PERFORMANCE", f"Rolling Cumulative Charts - {date_txt}", primary, logo_paths, "blue", accent=accent, text_color=header_text)
     draw_section_title(c, "HITTING METRICS (Rolling Cumulative)   ★", 30, H - 120, section_color)
-    draw_section_title(c, "BASERUNNING METRICS (Rolling Cumulative)   ★", 30, 226, accent)
+    safe_draw_image(c, logo_paths.get("baserunning"), 30, 213, 16, 16)
+    draw_section_title(c, "BASERUNNING METRICS (Rolling Cumulative)   ★", 52, 226, accent)
     draw_chart_grid(c, rolling_hitting, rolling_baserunning, 38, 82, W - 76, 390, logo_paths, selected_team)
     draw_summary_box(
         c,
