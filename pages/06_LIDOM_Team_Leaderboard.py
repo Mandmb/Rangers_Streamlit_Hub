@@ -1822,33 +1822,136 @@ def make_escogido_defense_summary(defense):
     return make_team_defense_summary(defense, "Leones del Escogido")
 
 
+def _split_summary_sections(body: str):
+    """Return Hallazgos and Oportunidades bullet lists from the generated summary text."""
+    lines = [str(x).strip() for x in str(body).splitlines() if str(x).strip()]
+    hallazgos, oportunidades = [], []
+    current = None
+    for line in lines:
+        upper = line.upper().replace(":", "")
+        if upper.startswith("HALLAZGOS"):
+            current = "hallazgos"
+            continue
+        if upper.startswith("OPORTUNIDADES"):
+            current = "oportunidades"
+            continue
+        clean = line.lstrip("•-✓⚠ ").strip()
+        if not clean:
+            continue
+        if current == "hallazgos":
+            hallazgos.append(clean)
+        elif current == "oportunidades":
+            oportunidades.append(clean)
+    if not hallazgos and not oportunidades:
+        hallazgos = [str(body).strip()]
+    return hallazgos, oportunidades
+
+
+def _draw_underlined_heading(c, text, x, y, color, font_size=5.7):
+    c.setFillColor(colors.HexColor(color))
+    c.setStrokeColor(colors.HexColor(color))
+    c.setFont("Helvetica-Bold", font_size)
+    c.drawString(x, y, text.upper())
+    text_w = c.stringWidth(text.upper(), "Helvetica-Bold", font_size)
+    c.setLineWidth(0.45)
+    c.line(x, y - 1.4, x + text_w, y - 1.4)
+
+
+def _draw_summary_column(c, heading, bullets, x, y, w, h, color, positive=True):
+    """Draw one small internal box inside the summary area."""
+    fill = "#FBFCFE" if positive else "#FFFFFF"
+    c.setFillColor(colors.HexColor(fill))
+    c.setStrokeColor(colors.HexColor(color))
+    c.setLineWidth(0.45)
+    c.roundRect(x, y, w, h, 4, fill=1, stroke=1)
+
+    pad = 5.5 if w < 120 else 7
+    heading_size = 4.9 if w < 120 else 5.8
+    bullet_size = 4.25 if w < 120 else 5.15
+    leading = 4.9 if w < 120 else 5.95
+    bullet_symbol = "✓" if positive else "•"
+
+    _draw_underlined_heading(c, heading, x + pad, y + h - 10, color, heading_size)
+    ty = y + h - 18
+    max_lines = max(3, int((h - 22) / leading))
+    lines_used = 0
+    c.setFillColor(colors.HexColor("#111111"))
+    c.setFont("Helvetica", bullet_size)
+    avg_char = max(bullet_size * 0.48, 2.2)
+    max_chars = max(15, int((w - 2 * pad - 5) / avg_char))
+
+    for bullet in bullets[:5]:
+        wrapped = textwrap.wrap(str(bullet), max_chars) or [str(bullet)]
+        for j, line in enumerate(wrapped[:2]):
+            if lines_used >= max_lines:
+                return
+            prefix = bullet_symbol + " " if j == 0 else "  "
+            c.drawString(x + pad, ty, prefix + line)
+            ty -= leading
+            lines_used += 1
+
+
 def draw_summary_box(c, title, body, x, y, w, h, logo_paths, selected_team="Leones del Escogido", border_color=None, title_color=None):
     theme = get_team_theme(selected_team)
     border_color = border_color or theme["primary"]
     title_color = title_color or theme["highlight_text"]
+
+    # Outer summary container
     c.setStrokeColor(colors.HexColor(border_color))
     c.setLineWidth(0.9)
     c.setFillColor(colors.white)
     c.roundRect(x, y, w, h, 7, fill=1, stroke=1)
 
+    # Header row: keep logo away from the title no matter the team/logo aspect ratio.
     logo_path = team_logo_path_for(logo_paths, selected_team) or logo_paths.get("escogido")
-    logo_w = 28 if w < 230 else 32
-    logo_h = 18
-    logo_x = x + 10
-    logo_y = y + h - 29
+    logo_w = 22 if w < 240 else 27
+    logo_h = 16 if w < 240 else 18
+    logo_x = x + 9
+    logo_y = y + h - 27
     safe_draw_image(c, logo_path, logo_x, logo_y, logo_w, logo_h)
 
+    title_x = logo_x + logo_w + 13
     c.setFillColor(colors.HexColor(title_color))
-    title_font = 6.9 if w < 230 else 7.8
+    title_font = 6.4 if w < 240 else 7.6
     c.setFont("Helvetica-Bold", title_font)
-    c.drawString(x + 52, y + h - 18, title.upper())
+    c.drawString(title_x, y + h - 17, title.upper())
 
-    # Bullet summaries need more lines but smaller type.
-    text_size = 5.25 if w < 240 else 5.75
-    leading = 6.15 if w < 240 else 6.7
-    max_lines = max(8, int((h - 38) / leading))
-    body_y = y + h - 40
-    draw_wrapped_text(c, body, x + 12, body_y, w - 24, size=text_size, leading=leading, max_lines=max_lines)
+    # Two internal side-by-side summary boxes.
+    hallazgos, oportunidades = _split_summary_sections(body)
+    inner_pad = 7 if w < 260 else 10
+    gap = 6 if w < 260 else 10
+    inner_y = y + 9
+    inner_h = h - 43
+    col_w = (w - 2 * inner_pad - gap) / 2
+
+    if inner_h < 36:
+        # Very small boxes: fallback to compact plain text, but keep section headings bold/underlined.
+        _draw_underlined_heading(c, "Hallazgos", x + inner_pad, y + h - 37, border_color, 5.0)
+        _draw_underlined_heading(c, "Oportunidades", x + inner_pad + col_w + gap, y + h - 37, border_color, 5.0)
+        return
+
+    _draw_summary_column(
+        c,
+        "Hallazgos",
+        hallazgos,
+        x + inner_pad,
+        inner_y,
+        col_w,
+        inner_h,
+        border_color,
+        positive=True,
+    )
+    _draw_summary_column(
+        c,
+        "Oportunidades",
+        oportunidades,
+        x + inner_pad + col_w + gap,
+        inner_y,
+        col_w,
+        inner_h,
+        border_color,
+        positive=False,
+    )
 
 # =====================================================
 # UI
