@@ -758,6 +758,7 @@ def pdf_team_name(team: str, max_chars: int = 24) -> str:
 LEAGUE_CONFIG = {
     "LIDOM": {
         "display": "LIDOM",
+        "label": "LIDOM",
         "logo_key": "lidom",
         "teams": [
             "Leones del Escogido",
@@ -772,6 +773,7 @@ LEAGUE_CONFIG = {
     },
     "LBPRC": {
         "display": "LBPRC",
+        "label": "Puerto Rico / LBPRC",
         "logo_key": "lbprc",
         "teams": [
             "Gigantes de Carolina",
@@ -786,6 +788,7 @@ LEAGUE_CONFIG = {
     },
     "LMP": {
         "display": "LMP",
+        "label": "Liga Mexicana del Pacífico / LMP",
         "logo_key": "lmp",
         "teams": [
             "Aguilas de Mexicali",
@@ -2431,7 +2434,7 @@ selected_league = st.sidebar.selectbox(
     "🏟️ League",
     list(LEAGUE_CONFIG.keys()),
     index=0,
-    format_func=lambda k: "LIDOM" if k == "LIDOM" else "Puerto Rico / LBPRC",
+    format_func=lambda k: LEAGUE_CONFIG.get(k, {}).get("label", LEAGUE_CONFIG.get(k, {}).get("display", k)),
     help="Choose which league's teams, logos, colors, PDF titles, and POV options should be used.",
 )
 league_cfg = LEAGUE_CONFIG[selected_league]
@@ -2445,7 +2448,7 @@ all_csv_files = st.file_uploader(
 )
 
 with st.sidebar.expander("🖼️ PDF Logos", expanded=False):
-    st.caption("Optional: upload logos here, or keep the PNG files in the same folder as the app. For PR/LBPRC use LBPRC.png, carolina.png, indios.png, cangrejeros.png, criollos.png, ponce.png, and senadores.png.")
+    st.caption("Optional: upload logos here, or keep the PNG files in the same folder as the app. LIDOM, LBPRC, and LMP logos are supported.")
     logo_uploads = {
         "lidom": st.file_uploader("LIDOM logo", type=["png", "jpg", "jpeg"], key="logo_lidom"),
         "lbprc": st.file_uploader("LBPRC / Puerto Rico logo", type=["png", "jpg", "jpeg"], key="logo_lbprc"),
