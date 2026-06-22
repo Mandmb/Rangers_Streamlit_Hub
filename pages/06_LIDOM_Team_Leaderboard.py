@@ -680,10 +680,15 @@ def make_escogido_summary(section, hitting, baserunning):
         hits_r, hits_v = rank_position(hitting, "Hits", ascending=False)
         hr_r, hr_v = rank_position(hitting, "Homerun", ascending=False)
         return (
-            f"FORTALEZA: Escogido crea tráfico: OBP #{obp_r or '-'} ({safe_fmt('OBP', obp_v)}) y BB% #{bb_r or '-'} ({safe_fmt('BB%', bb_v)}).\n"
-            f"PRODUCCIÓN: OPS #{ops_r or '-'} ({safe_fmt('OPS', ops_v)}), SLG #{slg_r or '-'} ({safe_fmt('SLG', slg_v)}) y BA #{ba_r or '-'} ({safe_fmt('BA', ba_v)}).\n"
-            f"VOLUMEN/DAÑO: Hits #{hits_r or '-'} ({safe_fmt('Hits', hits_v)}) y HR #{hr_r or '-'} ({safe_fmt('Homerun', hr_v)}).\n"
-            f"ENFOQUE: mantener la disciplina de zona, bajar K% #{k_r or '-'} ({safe_fmt('K%', k_v)}) y convertir más corredores en daño."
+            f"Escogido mantiene una identidad ofensiva clara: el equipo está #{obp_r or '-'} en OBP "
+            f"({safe_fmt('OBP', obp_v)}) y #{bb_r or '-'} en BB% ({safe_fmt('BB%', bb_v)}), lo que demuestra "
+            f"capacidad para competir turnos, controlar la zona y crear tráfico en base. En producción general, el club aparece "
+            f"#{ops_r or '-'} en OPS ({safe_fmt('OPS', ops_v)}), #{slg_r or '-'} en SLG ({safe_fmt('SLG', slg_v)}) "
+            f"y #{ba_r or '-'} en BA ({safe_fmt('BA', ba_v)}), con volumen de hits #{hits_r or '-'} "
+            f"({safe_fmt('Hits', hits_v)}) y HR #{hr_r or '-'} ({safe_fmt('Homerun', hr_v)}). El próximo salto ofensivo debe venir de "
+            f"convertir más corredores en base en daño real, especialmente manteniendo la disciplina pero buscando mejores swings "
+            f"en conteos favorables. También será clave seguir reduciendo el K%, donde el equipo se ubica #{k_r or '-'} "
+            f"({safe_fmt('K%', k_v)})."
         )
     if section == "baserunning":
         sb_r, sb_v = rank_position(baserunning, "SB", ascending=False)
@@ -691,17 +696,21 @@ def make_escogido_summary(section, hitting, baserunning):
         rate_r, rate_v = rank_position(baserunning, "SB%", ascending=False)
         sba_r, sba_v = rank_position(baserunning, "SBA", ascending=False)
         return (
-            f"AGRESIVIDAD: Escogido está #{sb_r or '-'} en SB ({safe_fmt('SB', sb_v)}) y #{sba_r or '-'} en intentos ({safe_fmt('SBA', sba_v)}).\n"
-            f"EFICIENCIA: SB% #{rate_r or '-'} ({safe_fmt('SB%', rate_v)}) muestra espacio para ganar más valor por intento.\n"
-            f"RIESGO: CS #{cs_r or '-'} ({safe_fmt('CS', cs_v)}) exige mejores selecciones de conteo, pitcher y situación.\n"
-            f"ENFOQUE: mantener presión en bases, pero priorizar robos de alta probabilidad."
+            f"En las bases, Escogido juega con agresividad y volumen. El equipo está #{sb_r or '-'} en bases robadas "
+            f"({safe_fmt('SB', sb_v)}) y #{sba_r or '-'} en intentos ({safe_fmt('SBA', sba_v)}), reflejando una intención constante "
+            f"de presionar al rival y crear oportunidades extras. La eficiencia, sin embargo, todavía deja espacio de mejora: "
+            f"Escogido aparece #{rate_r or '-'} en SB% ({safe_fmt('SB%', rate_v)}) y #{cs_r or '-'} en CS "
+            f"({safe_fmt('CS', cs_v)}). El enfoque debe ser mantener la agresividad que caracteriza al equipo, pero seleccionar "
+            f"mejor los momentos, conteos, pitchers y situaciones para que cada intento genere más valor y menos outs evitables."
         )
     return (
-        "IDENTIDAD: la tendencia de Escogido se apoya en llegar a base, competir turnos y presionar con velocidad.\n"
-        "SEÑAL POSITIVA: OBP/BB% sostienen tráfico ofensivo y SB mantiene volumen dentro de la liga.\n"
-        "ÁREA CLAVE: transformar ese tráfico en slugging/OPS y reducir outs evitables en bases.\n"
-        "CIERRE: proteger OBP, buscar más contacto de impacto y mejorar eficiencia sin perder agresividad."
+        "Los gráficos de tendencia muestran que Escogido ha sostenido una identidad competitiva durante el período: turnos largos, "
+        "capacidad de llegar a base y presión constante en el juego de piernas. La lectura general es positiva porque el equipo "
+        "se mantiene presente en métricas que reflejan disciplina y volumen, especialmente OBP, BB% y bases robadas. Para cerrar "
+        "más fuerte, el reto es convertir ese tráfico en más daño, proteger la base de OBP y mejorar la eficiencia en robos sin "
+        "perder la agresividad que puede cambiar innings."
     )
+
 
 def make_escogido_pitching_summary(pitching):
     if pitching is None or pitching.empty:
@@ -714,12 +723,14 @@ def make_escogido_pitching_summary(pitching):
     hr_r, hr_v = rank_position(pitching, "HR%", ascending=True)
     baa_r, baa_v = rank_position(pitching, "BAA", ascending=True)
     return (
-        f"CONTROL DE DAÑO: ERA #{era_r or '-'} ({safe_fmt('ERA', era_v)}) y FIP #{fip_r or '-'} ({safe_fmt('FIP', fip_v)}) resumen prevención de carreras.\n"
-        f"TRÁFICO: WHIP #{whip_r or '-'} ({safe_fmt('WHIP', whip_v)}) y BAA #{baa_r or '-'} ({safe_fmt('BAA', baa_v)}) muestran qué tan difícil es llegar a base.\n"
-        f"DOMINIO/COMANDO: K% #{k_r or '-'} ({safe_fmt('K%', k_v)}) vs BB% #{bb_r or '-'} ({safe_fmt('BB%', bb_v)}) marca el balance principal.\n"
-        f"ENFOQUE: limitar HR% #{hr_r or '-'} ({safe_fmt('HR%', hr_v)}), atacar la zona y convertir ventajas en outs rápidos."
+        f"El pitcheo de Escogido se evalúa desde dos áreas principales: prevención de carreras y control del tráfico. El equipo "
+        f"aparece #{era_r or '-'} en ERA ({safe_fmt('ERA', era_v)}) y #{fip_r or '-'} en FIP ({safe_fmt('FIP', fip_v)}), "
+        f"mientras que WHIP #{whip_r or '-'} ({safe_fmt('WHIP', whip_v)}) y BAA #{baa_r or '-'} ({safe_fmt('BAA', baa_v)}) "
+        f"ayudan a medir qué tan difícil ha sido para los rivales llegar a base. En dominio y comando, el balance entre K% "
+        f"#{k_r or '-'} ({safe_fmt('K%', k_v)}) y BB% #{bb_r or '-'} ({safe_fmt('BB%', bb_v)}) será clave para sostener "
+        f"innings limpios. El enfoque debe ser atacar la zona con calidad, limitar HR% #{hr_r or '-'} "
+        f"({safe_fmt('HR%', hr_v)}) y convertir ventajas en outs rápidos."
     )
-
 
 
 def make_escogido_defense_summary(defense):
@@ -731,10 +742,13 @@ def make_escogido_defense_summary(defense):
     ofe_r, ofe_v = rank_position(defense, "OFErr", ascending=True)
     off_r, off_v = rank_position(defense, "OFFld%", ascending=False)
     return (
-        f"CATCHING: CS% #{cs_r or '-'} ({safe_fmt('CS%', cs_v)}) mide control del juego de correr y apoyo al pitcheo.\n"
-        f"INFIELD: IFErr #{ife_r or '-'} ({safe_fmt('IFErr', ife_v)}) y IFFld% #{iff_r or '-'} ({safe_fmt('IFFld%', iff_v)}) muestran seguridad en outs rutinarios.\n"
-        f"OUTFIELD: OFErr #{ofe_r or '-'} ({safe_fmt('OFErr', ofe_v)}) y OFFld% #{off_r or '-'} ({safe_fmt('OFFld%', off_v)}) resumen confiabilidad en el espacio.\n"
-        f"ENFOQUE: convertir bolas en juego en outs, limitar errores gratis y sostener comunicación defensiva."
+        f"Defensivamente, Escogido debe evaluarse como una combinación de control del juego de correr, seguridad en el infield "
+        f"y confiabilidad en el outfield. El catching aparece #{cs_r or '-'} en CS% ({safe_fmt('CS%', cs_v)}), una métrica "
+        f"importante para medir cuánto apoyo recibe el pitcheo contra equipos agresivos. En el cuadro, IFErr #{ife_r or '-'} "
+        f"({safe_fmt('IFErr', ife_v)}) e IFFld% #{iff_r or '-'} ({safe_fmt('IFFld%', iff_v)}) muestran la capacidad de convertir "
+        f"outs rutinarios. En los jardines, OFErr #{ofe_r or '-'} ({safe_fmt('OFErr', ofe_v)}) y OFFld% #{off_r or '-'} "
+        f"({safe_fmt('OFFld%', off_v)}) resumen la seguridad en el espacio. El enfoque debe ser limitar errores gratis, comunicar "
+        f"mejor y sostener la ejecución defensiva inning a inning."
     )
 
 
