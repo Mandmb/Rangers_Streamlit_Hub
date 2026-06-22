@@ -29,7 +29,7 @@ except Exception:
 # PAGE CONFIG
 # =====================================================
 st.set_page_config(
-    page_title="LIDOM Team Hitting & Baserunning Leaderboard",
+    page_title="Winter League Team Leaderboard",
     page_icon="⚾",
     layout="wide",
 )
@@ -541,6 +541,22 @@ TEAM_LOGO_KEYS = {
     "Leones de Ponce": "ponce",
     "Senadores de San Juan": "senadores",
     "Senadores de Sanjuan": "senadores",
+    # LMP / Liga Mexicana del Pacifico
+    "Aguilas de Mexicali": "mexicali",
+    "Águilas de Mexicali": "mexicali",
+    "Charros de Jalisco": "charros",
+    "Caneros de los Mochis": "caneros",
+    "Cañeros de los Mochis": "caneros",
+    "Naranjeros de Hermosillo": "naranjeros",
+    "Tomateros de Culiacan": "tomateros",
+    "Tomateros de Culiacán": "tomateros",
+    "Venados de Mazatlan": "venados",
+    "Venados de Mazatlán": "venados",
+    "Yaquis de Obregon": "yaquis",
+    "Yaquis de Obregón": "yaquis",
+    "Algodoneros de Guasave": "algodoneros",
+    "Tucson Baseball Team": "tucson",
+    "Jaguares de Nayarit": "jaguares",
 }
 
 LOGO_FILENAMES = {
@@ -558,6 +574,17 @@ LOGO_FILENAMES = {
     "criollos": "criollos.png",
     "ponce": "ponce.png",
     "senadores": "senadores.png",
+    "lmp": "LMP.png",
+    "mexicali": "Mexicali.png",
+    "charros": "charros.png",
+    "caneros": "caneros.png",
+    "naranjeros": "naranjeros.png",
+    "tomateros": "tomateros.png",
+    "venados": "venados.png",
+    "yaquis": "yaquis.png",
+    "algodoneros": "algodoneros.png",
+    "tucson": "tucson.png",
+    "jaguares": "jaguares.png",
     "baserunning": "baserunning.png",
 }
 
@@ -757,6 +784,24 @@ LEAGUE_CONFIG = {
         "zip_prefix": "LBPRC_Report",
         "excel_prefix": "lbprc",
     },
+    "LMP": {
+        "display": "LMP",
+        "logo_key": "lmp",
+        "teams": [
+            "Aguilas de Mexicali",
+            "Charros de Jalisco",
+            "Caneros de los Mochis",
+            "Naranjeros de Hermosillo",
+            "Tomateros de Culiacan",
+            "Venados de Mazatlan",
+            "Yaquis de Obregon",
+            "Algodoneros de Guasave",
+            "Tucson Baseball Team",
+            "Jaguares de Nayarit",
+        ],
+        "zip_prefix": "LMP_Report",
+        "excel_prefix": "lmp",
+    },
 }
 
 REPORT_TEAM_OPTIONS = LEAGUE_CONFIG["LIDOM"]["teams"]
@@ -779,6 +824,22 @@ TEAM_SHORT_NAMES = {
     "Leones de Ponce": "Ponce",
     "Senadores de San Juan": "SanJuan",
     "Senadores de Sanjuan": "SanJuan",
+    # LMP
+    "Aguilas de Mexicali": "Mexicali",
+    "Águilas de Mexicali": "Mexicali",
+    "Charros de Jalisco": "Jalisco",
+    "Caneros de los Mochis": "Mochis",
+    "Cañeros de los Mochis": "Mochis",
+    "Naranjeros de Hermosillo": "Hermosillo",
+    "Tomateros de Culiacan": "Culiacan",
+    "Tomateros de Culiacán": "Culiacan",
+    "Venados de Mazatlan": "Mazatlan",
+    "Venados de Mazatlán": "Mazatlan",
+    "Yaquis de Obregon": "Obregon",
+    "Yaquis de Obregón": "Obregon",
+    "Algodoneros de Guasave": "Guasave",
+    "Tucson Baseball Team": "Tucson",
+    "Jaguares de Nayarit": "Nayarit",
 }
 
 
