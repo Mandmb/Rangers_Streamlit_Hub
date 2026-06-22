@@ -56,6 +56,22 @@ TEAM_COLORS = {
     "Leones de Ponce": "#D71920",
     "Senadores de San Juan": "#C8102E",
     "Senadores de Sanjuan": "#C8102E",
+    # LMP / Liga Mexicana del Pacífico
+    "Aguilas de Mexicali": "#C8102E",
+    "Águilas de Mexicali": "#C8102E",
+    "Charros de Jalisco": "#005EB8",
+    "Caneros de los Mochis": "#F58220",
+    "Cañeros de los Mochis": "#F58220",
+    "Naranjeros de Hermosillo": "#F58220",
+    "Tomateros de Culiacan": "#7A1F2B",
+    "Tomateros de Culiacán": "#7A1F2B",
+    "Venados de Mazatlan": "#D71920",
+    "Venados de Mazatlán": "#D71920",
+    "Yaquis de Obregon": "#002D62",
+    "Yaquis de Obregón": "#002D62",
+    "Algodoneros de Guasave": "#6B8CC7",
+    "Tucson Baseball Team": "#0A2A66",
+    "Jaguares de Nayarit": "#FF6A00",
 }
 
 HITTING_STATS = [
@@ -541,11 +557,28 @@ TEAM_LOGO_KEYS = {
     "Leones de Ponce": "ponce",
     "Senadores de San Juan": "senadores",
     "Senadores de Sanjuan": "senadores",
+    # LMP / Liga Mexicana del Pacífico
+    "Aguilas de Mexicali": "mexicali",
+    "Águilas de Mexicali": "mexicali",
+    "Charros de Jalisco": "charros",
+    "Caneros de los Mochis": "caneros",
+    "Cañeros de los Mochis": "caneros",
+    "Naranjeros de Hermosillo": "naranjeros",
+    "Tomateros de Culiacan": "tomateros",
+    "Tomateros de Culiacán": "tomateros",
+    "Venados de Mazatlan": "venados",
+    "Venados de Mazatlán": "venados",
+    "Yaquis de Obregon": "yaquis",
+    "Yaquis de Obregón": "yaquis",
+    "Algodoneros de Guasave": "algodoneros",
+    "Tucson Baseball Team": "tucson",
+    "Jaguares de Nayarit": "jaguares",
 }
 
 LOGO_FILENAMES = {
     "lidom": "LIDOM.png",
     "lbprc": "LBPRC.png",
+    "lmp": "LMP.png",
     "aguilas": "aguilas.png",
     "escogido": "escogido.png",
     "estrellas": "estrellas.png",
@@ -558,6 +591,16 @@ LOGO_FILENAMES = {
     "criollos": "criollos.png",
     "ponce": "ponce.png",
     "senadores": "senadores.png",
+    "mexicali": "Mexicali.png",
+    "charros": "charros.png",
+    "caneros": "caneros.png",
+    "naranjeros": "naranjeros.png",
+    "tomateros": "tomateros.png",
+    "venados": "venados.png",
+    "yaquis": "yaquis.png",
+    "algodoneros": "algodoneros.png",
+    "tucson": "tucson.png",
+    "jaguares": "jaguares.png",
     "baserunning": "baserunning.png",
 }
 
@@ -705,6 +748,24 @@ LEAGUE_CONFIG = {
         "zip_prefix": "LBPRC_Report",
         "excel_prefix": "lbprc",
     },
+    "LMP": {
+        "display": "LMP",
+        "logo_key": "lmp",
+        "teams": [
+            "Aguilas de Mexicali",
+            "Charros de Jalisco",
+            "Caneros de los Mochis",
+            "Naranjeros de Hermosillo",
+            "Tomateros de Culiacan",
+            "Venados de Mazatlan",
+            "Yaquis de Obregon",
+            "Algodoneros de Guasave",
+            "Tucson Baseball Team",
+            "Jaguares de Nayarit",
+        ],
+        "zip_prefix": "LMP_Report",
+        "excel_prefix": "lmp",
+    },
 }
 
 REPORT_TEAM_OPTIONS = LEAGUE_CONFIG["LIDOM"]["teams"]
@@ -727,6 +788,22 @@ TEAM_SHORT_NAMES = {
     "Leones de Ponce": "Ponce",
     "Senadores de San Juan": "SanJuan",
     "Senadores de Sanjuan": "SanJuan",
+    # LMP
+    "Aguilas de Mexicali": "Mexicali",
+    "Águilas de Mexicali": "Mexicali",
+    "Charros de Jalisco": "Charros",
+    "Caneros de los Mochis": "Mochis",
+    "Cañeros de los Mochis": "Mochis",
+    "Naranjeros de Hermosillo": "Hermosillo",
+    "Tomateros de Culiacan": "Culiacan",
+    "Tomateros de Culiacán": "Culiacan",
+    "Venados de Mazatlan": "Mazatlan",
+    "Venados de Mazatlán": "Mazatlan",
+    "Yaquis de Obregon": "Obregon",
+    "Yaquis de Obregón": "Obregon",
+    "Algodoneros de Guasave": "Guasave",
+    "Tucson Baseball Team": "Tucson",
+    "Jaguares de Nayarit": "Nayarit",
 }
 
 
@@ -2297,7 +2374,7 @@ selected_league = st.sidebar.selectbox(
     "🏟️ League",
     list(LEAGUE_CONFIG.keys()),
     index=0,
-    format_func=lambda k: "LIDOM" if k == "LIDOM" else "Puerto Rico / LBPRC",
+    format_func=lambda k: {"LIDOM": "LIDOM", "LBPRC": "Puerto Rico / LBPRC", "LMP": "Liga Mexicana del Pacífico / LMP"}.get(k, k),
     help="Choose which league's teams, logos, colors, PDF titles, and POV options should be used.",
 )
 league_cfg = LEAGUE_CONFIG[selected_league]
@@ -2311,10 +2388,11 @@ all_csv_files = st.file_uploader(
 )
 
 with st.sidebar.expander("🖼️ PDF Logos", expanded=False):
-    st.caption("Optional: upload logos here, or keep the PNG files in the same folder as the app. For PR/LBPRC use LBPRC.png, carolina.png, indios.png, cangrejeros.png, criollos.png, ponce.png, and senadores.png.")
+    st.caption("Optional: upload logos here, or keep the PNG files in the same folder as the app. For PR/LBPRC use LBPRC.png plus PR team logos. For LMP use LMP.png, Mexicali.png, charros.png, caneros.png, naranjeros.png, tomateros.png, venados.png, yaquis.png, algodoneros.png, tucson.png, and jaguares.png.")
     logo_uploads = {
         "lidom": st.file_uploader("LIDOM logo", type=["png", "jpg", "jpeg"], key="logo_lidom"),
         "lbprc": st.file_uploader("LBPRC / Puerto Rico logo", type=["png", "jpg", "jpeg"], key="logo_lbprc"),
+        "lmp": st.file_uploader("LMP / Liga Mexicana del Pacífico logo", type=["png", "jpg", "jpeg"], key="logo_lmp"),
         "aguilas": st.file_uploader("Aguilas logo", type=["png", "jpg", "jpeg"], key="logo_aguilas"),
         "escogido": st.file_uploader("Escogido logo", type=["png", "jpg", "jpeg"], key="logo_escogido"),
         "estrellas": st.file_uploader("Estrellas logo", type=["png", "jpg", "jpeg"], key="logo_estrellas"),
@@ -2327,6 +2405,16 @@ with st.sidebar.expander("🖼️ PDF Logos", expanded=False):
         "criollos": st.file_uploader("Criollos de Caguas logo", type=["png", "jpg", "jpeg"], key="logo_criollos"),
         "ponce": st.file_uploader("Leones de Ponce logo", type=["png", "jpg", "jpeg"], key="logo_ponce"),
         "senadores": st.file_uploader("Senadores de San Juan logo", type=["png", "jpg", "jpeg"], key="logo_senadores"),
+        "mexicali": st.file_uploader("Aguilas de Mexicali logo", type=["png", "jpg", "jpeg"], key="logo_mexicali"),
+        "charros": st.file_uploader("Charros de Jalisco logo", type=["png", "jpg", "jpeg"], key="logo_charros"),
+        "caneros": st.file_uploader("Caneros de los Mochis logo", type=["png", "jpg", "jpeg"], key="logo_caneros"),
+        "naranjeros": st.file_uploader("Naranjeros de Hermosillo logo", type=["png", "jpg", "jpeg"], key="logo_naranjeros"),
+        "tomateros": st.file_uploader("Tomateros de Culiacan logo", type=["png", "jpg", "jpeg"], key="logo_tomateros"),
+        "venados": st.file_uploader("Venados de Mazatlan logo", type=["png", "jpg", "jpeg"], key="logo_venados"),
+        "yaquis": st.file_uploader("Yaquis de Obregon logo", type=["png", "jpg", "jpeg"], key="logo_yaquis"),
+        "algodoneros": st.file_uploader("Algodoneros de Guasave logo", type=["png", "jpg", "jpeg"], key="logo_algodoneros"),
+        "tucson": st.file_uploader("Tucson Baseball Team logo", type=["png", "jpg", "jpeg"], key="logo_tucson"),
+        "jaguares": st.file_uploader("Jaguares de Nayarit logo", type=["png", "jpg", "jpeg"], key="logo_jaguares"),
         "baserunning": st.file_uploader("Baserunning icon", type=["png", "jpg", "jpeg"], key="logo_baserunning"),
     }
 
