@@ -650,9 +650,71 @@ def team_logo_path_for(logo_paths: dict, team: str) -> str | None:
     return logo_paths.get(team_logo_key(team) or "")
 
 
+# Team-specific visual identity for the PDF report.
+# primary = main header/table color, accent = ribbon/border color,
+# highlight_bg/text = selected POV row emphasis.
+TEAM_THEMES = {
+    "Leones del Escogido": {
+        "primary": "#111111",
+        "accent": "#D71920",
+        "section": "#D71920",
+        "highlight_bg": "#FFF1F3",
+        "highlight_text": "#BA0C2F",
+        "header_text": "#FFFFFF",
+    },
+    "Aguilas Cibaenas": {
+        "primary": "#111111",
+        "accent": "#FFD200",
+        "section": "#111111",
+        "highlight_bg": "#FFF8D6",
+        "highlight_text": "#111111",
+        "header_text": "#FFFFFF",
+    },
+    "Tigres del Licey": {
+        "primary": "#0057B8",
+        "accent": "#A7A9AC",
+        "section": "#0057B8",
+        "highlight_bg": "#EEF4FF",
+        "highlight_text": "#0057B8",
+        "header_text": "#FFFFFF",
+    },
+    "Estrellas Orientales": {
+        "primary": "#00843D",
+        "accent": "#006B31",
+        "section": "#00843D",
+        "highlight_bg": "#ECFFF4",
+        "highlight_text": "#00843D",
+        "header_text": "#FFFFFF",
+    },
+    "Gigantes del Cibao": {
+        "primary": "#6E1E2F",
+        "accent": "#7A3E1D",
+        "section": "#6E1E2F",
+        "highlight_bg": "#FFF0F3",
+        "highlight_text": "#6E1E2F",
+        "header_text": "#FFFFFF",
+    },
+    "Toros del Este": {
+        "primary": "#F58220",
+        "accent": "#111111",
+        "section": "#F58220",
+        "highlight_bg": "#FFF3E8",
+        "highlight_text": "#D65F00",
+        "header_text": "#FFFFFF",
+    },
+}
+
+
+def get_team_theme(team: str) -> dict:
+    return TEAM_THEMES.get(normalize_team_name(team), TEAM_THEMES["Leones del Escogido"])
+
+
 def team_highlight_color(team: str) -> str:
-    # Use a strong readable red for text highlight regardless of team color.
-    return "#BA0C2F"
+    return get_team_theme(team)["highlight_text"]
+
+
+def team_highlight_bg(team: str) -> str:
+    return get_team_theme(team)["highlight_bg"]
 
 
 def safe_draw_image(c, path, x, y, w, h):
@@ -679,16 +741,16 @@ def draw_wrapped_text(c, text, x, y, width, font="Helvetica", size=8, color="#11
     return y
 
 
-def draw_header(c, title, subtitle, bg, logo_paths, page_type="blue"):
+def draw_header(c, title, subtitle, bg, logo_paths, page_type="blue", accent=None, text_color="#FFFFFF"):
     W, H = landscape(letter)
     c.setFillColor(colors.HexColor(bg))
     c.rect(0, H - 84, W, 84, fill=1, stroke=0)
     # small accent ribbon
-    accent = "#BA0C2F" if page_type == "blue" else "#002D72"
+    accent = accent or ("#BA0C2F" if page_type == "blue" else "#002D72")
     c.setFillColor(colors.HexColor(accent))
     c.rect(0, H - 92, W, 8, fill=1, stroke=0)
     safe_draw_image(c, logo_paths.get("lidom"), 28, H - 76, 56, 56)
-    c.setFillColor(colors.white)
+    c.setFillColor(colors.HexColor(text_color))
     c.setFont("Helvetica-Bold", 22)
     c.drawString(96, H - 42, title)
     c.setFont("Helvetica", 9)
@@ -825,20 +887,23 @@ def make_team_defense_summary(defense, selected_team="Leones del Escogido"):
 def make_escogido_defense_summary(defense):
     return make_team_defense_summary(defense, "Leones del Escogido")
 
-def draw_summary_box(c, title, body, x, y, w, h, logo_paths, selected_team="Leones del Escogido"):
-    c.setStrokeColor(colors.HexColor("#BA0C2F"))
+def draw_summary_box(c, title, body, x, y, w, h, logo_paths, selected_team="Leones del Escogido", border_color=None, title_color=None):
+    theme = get_team_theme(selected_team)
+    border_color = border_color or theme["accent"]
+    title_color = title_color or theme["highlight_text"]
+    c.setStrokeColor(colors.HexColor(border_color))
     c.setLineWidth(0.9)
     c.setFillColor(colors.white)
     c.roundRect(x, y, w, h, 7, fill=1, stroke=1)
     safe_draw_image(c, team_logo_path_for(logo_paths, selected_team) or logo_paths.get("escogido"), x + 8, y + h - 28, 32, 18)
-    c.setFillColor(colors.HexColor("#BA0C2F"))
+    c.setFillColor(colors.HexColor(title_color))
     c.setFont("Helvetica-Bold", 8.0)
     c.drawString(x + 45, y + h - 19, title.upper())
     # Detailed but still compact: bold-style labels are written in all caps in the text itself.
     draw_wrapped_text(c, body, x + 10, y + h - 39, w - 20, size=6.1, leading=7.4, max_lines=11)
 
 
-def draw_stat_table(c, df, stat, x, y, w, h, logo_paths, theme="#002D72", ascending=False, icon=None, icon_image=None, selected_team="Leones del Escogido"):
+def draw_stat_table(c, df, stat, x, y, w, h, logo_paths, theme="#002D72", ascending=False, icon=None, icon_image=None, selected_team="Leones del Escogido", highlight_bg=None, highlight_text=None):
     title, subtitle = STAT_LABELS.get(stat, (stat, stat))
     # Clean card with a little breathing room
     c.setFillColor(colors.white)
@@ -902,7 +967,7 @@ def draw_stat_table(c, df, stat, x, y, w, h, logo_paths, theme="#002D72", ascend
         else:
             is_esc = False
         if is_esc:
-            c.setFillColor(colors.HexColor("#FFF1F3"))
+            c.setFillColor(colors.HexColor(highlight_bg or team_highlight_bg(selected_team)))
         else:
             c.setFillColor(colors.HexColor("#F6F8FB") if i % 2 else colors.white)
         c.rect(x, ry, w, row_h, fill=1, stroke=0)
@@ -911,7 +976,7 @@ def draw_stat_table(c, df, stat, x, y, w, h, logo_paths, theme="#002D72", ascend
             team = str(r["Team"])
             val = str(r[stat])
             is_esc = normalize_team_name(team) == normalize_team_name(selected_team)
-            color = "#BA0C2F" if is_esc else "#111111"
+            color = (highlight_text or team_highlight_color(selected_team)) if is_esc else "#111111"
             font = "Helvetica-Bold" if is_esc else "Helvetica"
             c.setFillColor(colors.HexColor(color))
             c.setFont(font, 8.0)
@@ -1020,10 +1085,17 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
     c = canvas.Canvas(output, pagesize=landscape(letter))
     W, H = landscape(letter)
     date_txt = f"Generated {datetime.now().strftime('%b %d, %Y')}"
+    report_theme = get_team_theme(selected_team)
+    primary = report_theme["primary"]
+    accent = report_theme["accent"]
+    section_color = report_theme["section"]
+    header_text = report_theme.get("header_text", "#FFFFFF")
+    highlight_bg = report_theme["highlight_bg"]
+    highlight_text = report_theme["highlight_text"]
 
     # Page 1 - Hitting category leaderboards, cleaner 3-column layout
-    draw_header(c, "LIDOM TEAM HITTING LEADERBOARDS", date_txt, "#001F4E", logo_paths, "blue")
-    draw_section_title(c, "HITTING LEADERBOARDS BY CATEGORY   ★   ★", 24, H - 119, "#001F4E")
+    draw_header(c, "LIDOM TEAM HITTING LEADERBOARDS", date_txt, primary, logo_paths, "blue", accent=accent, text_color=header_text)
+    draw_section_title(c, "HITTING LEADERBOARDS BY CATEGORY   ★   ★", 24, H - 119, section_color)
 
     left = 24
     top = H - 140
@@ -1037,7 +1109,7 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
         col = idx % 3
         x = left + col * (table_w + gap_x)
         y = top - (row + 1) * table_h - row * gap_y
-        draw_stat_table(c, hitting, stat, x, y, table_w, table_h, logo_paths, theme="#001F4E", ascending=(stat == "K%"), selected_team=selected_team)
+        draw_stat_table(c, hitting, stat, x, y, table_w, table_h, logo_paths, theme=primary, ascending=(stat == "K%"), selected_team=selected_team, highlight_bg=highlight_bg, highlight_text=highlight_text)
 
     # Summary occupies the last open slot, but is taller so paragraph text fits cleanly.
     sx = left + 2 * (table_w + gap_x)
@@ -1054,12 +1126,12 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
         logo_paths,
         selected_team,
     )
-    draw_footer(c, 1, logo_paths, "#001F4E", selected_team)
+    draw_footer(c, 1, logo_paths, primary, selected_team)
     c.showPage()
 
     # Page 2 - Baserunning category leaderboards, bigger feature cards
-    draw_header(c, "LIDOM TEAM BASERUNNING LEADERBOARDS", date_txt, "#A00012", logo_paths, "red")
-    draw_section_title(c, "BASERUNNING LEADERBOARDS BY CATEGORY   ★", 34, H - 119, "#A00012")
+    draw_header(c, "LIDOM TEAM BASERUNNING LEADERBOARDS", date_txt, primary, logo_paths, "red", accent=accent, text_color=header_text)
+    draw_section_title(c, "BASERUNNING LEADERBOARDS BY CATEGORY   ★", 34, H - 119, section_color)
 
     br_left = 44
     br_top = H - 148
@@ -1077,22 +1149,24 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
             br_w,
             br_h,
             logo_paths,
-            theme="#A00012",
+            theme=primary,
             ascending=(stat == "CS"),
             icon=None if stat in ["SB", "CS"] else ICON_SYMBOLS.get(stat),
             icon_image=logo_paths.get("baserunning") if stat in ["SB", "CS"] else None,
             selected_team=selected_team,
+            highlight_bg=highlight_bg,
+            highlight_text=highlight_text,
         )
 
     # Rank callout strip for selected report team
     sb_r, sb_v = rank_position(baserunning, "SB", team=selected_team, ascending=False)
     cs_r, cs_v = rank_position(baserunning, "CS", team=selected_team, ascending=True)
     sbp_r, sbp_v = rank_position(baserunning, "SB%", team=selected_team, ascending=False)
-    c.setFillColor(colors.HexColor("#FFF2F4"))
-    c.setStrokeColor(colors.HexColor("#BA0C2F"))
+    c.setFillColor(colors.HexColor(highlight_bg))
+    c.setStrokeColor(colors.HexColor(accent))
     c.roundRect(54, 198, W - 108, 46, 8, fill=1, stroke=1)
     safe_draw_image(c, team_logo_path_for(logo_paths, selected_team) or logo_paths.get("escogido"), 66, 208, 54, 25)
-    c.setFillColor(colors.HexColor("#A00012"))
+    c.setFillColor(colors.HexColor(highlight_text))
     c.setFont("Helvetica-Bold", 10)
     c.drawString(132, 226, f"{team_short_name(selected_team).upper()} BASERUNNING SNAPSHOT")
     c.setFont("Helvetica-Bold", 9)
@@ -1109,13 +1183,13 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
         logo_paths,
         selected_team,
     )
-    draw_footer(c, 2, logo_paths, "#A00012", selected_team)
+    draw_footer(c, 2, logo_paths, primary, selected_team)
     c.showPage()
 
     # Page 3 - Rolling performance, larger key charts only
-    draw_header(c, "LIDOM TEAM ROLLING PERFORMANCE", f"Rolling Cumulative Charts - {date_txt}", "#001F4E", logo_paths, "blue")
-    draw_section_title(c, "HITTING METRICS (Rolling Cumulative)   ★", 30, H - 120, "#001F4E")
-    draw_section_title(c, "BASERUNNING METRICS (Rolling Cumulative)   ★", 30, 226, "#BA0C2F")
+    draw_header(c, "LIDOM TEAM ROLLING PERFORMANCE", f"Rolling Cumulative Charts - {date_txt}", primary, logo_paths, "blue", accent=accent, text_color=header_text)
+    draw_section_title(c, "HITTING METRICS (Rolling Cumulative)   ★", 30, H - 120, section_color)
+    draw_section_title(c, "BASERUNNING METRICS (Rolling Cumulative)   ★", 30, 226, accent)
     draw_chart_grid(c, rolling_hitting, rolling_baserunning, 38, 82, W - 76, 390, logo_paths, selected_team)
     draw_summary_box(
         c,
@@ -1128,12 +1202,12 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
         logo_paths,
         selected_team,
     )
-    draw_footer(c, 3, logo_paths, "#001F4E", selected_team)
+    draw_footer(c, 3, logo_paths, primary, selected_team)
     c.showPage()
 
     # Page 4 - Pitching category leaderboards from LIDOM Draft snapshot
-    draw_header(c, "LIDOM TEAM PITCHING LEADERBOARDS", date_txt, "#001F4E", logo_paths, "blue")
-    draw_section_title(c, "PITCHING LEADERBOARDS BY CATEGORY   ★", 24, H - 119, "#001F4E")
+    draw_header(c, "LIDOM TEAM PITCHING LEADERBOARDS", date_txt, primary, logo_paths, "blue", accent=accent, text_color=header_text)
+    draw_section_title(c, "PITCHING LEADERBOARDS BY CATEGORY   ★", 24, H - 119, section_color)
 
     if pitching is None or pitching.empty:
         c.setFillColor(colors.HexColor("#444444"))
@@ -1160,9 +1234,11 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
                 p_table_w,
                 p_table_h,
                 logo_paths,
-                theme="#001F4E",
+                theme=primary,
                 ascending=pitching_lower_is_better(stat),
                 selected_team=selected_team,
+                highlight_bg=highlight_bg,
+                highlight_text=highlight_text,
             )
         draw_summary_box(
             c,
@@ -1175,12 +1251,12 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
             logo_paths,
         selected_team,
         )
-    draw_footer(c, 4, logo_paths, "#001F4E", selected_team)
+    draw_footer(c, 4, logo_paths, primary, selected_team)
     c.showPage()
 
     # Page 5 - Defense category leaderboards from catcher, infield, and outfield snapshots
-    draw_header(c, "LIDOM TEAM DEFENSE LEADERBOARDS", date_txt, "#A00012", logo_paths, "red")
-    draw_section_title(c, "DEFENSE LEADERBOARDS BY CATEGORY   ★", 24, H - 119, "#A00012")
+    draw_header(c, "LIDOM TEAM DEFENSE LEADERBOARDS", date_txt, primary, logo_paths, "red", accent=accent, text_color=header_text)
+    draw_section_title(c, "DEFENSE LEADERBOARDS BY CATEGORY   ★", 24, H - 119, section_color)
 
     if defense is None or defense.empty:
         c.setFillColor(colors.HexColor("#444444"))
@@ -1208,9 +1284,11 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
                 d_table_w,
                 d_table_h,
                 logo_paths,
-                theme="#A00012",
+                theme=primary,
                 ascending=defense_lower_is_better(stat),
                 selected_team=selected_team,
+                highlight_bg=highlight_bg,
+                highlight_text=highlight_text,
             )
         draw_summary_box(
             c,
@@ -1223,7 +1301,7 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
             logo_paths,
         selected_team,
         )
-    draw_footer(c, 5, logo_paths, "#A00012", selected_team)
+    draw_footer(c, 5, logo_paths, primary, selected_team)
     c.save()
     output.seek(0)
     return output
