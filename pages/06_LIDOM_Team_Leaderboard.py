@@ -1935,33 +1935,56 @@ def _draw_underlined_heading(c, text, x, y, color, font_size=5.7):
 
 
 def _draw_summary_column(c, heading, bullets, x, y, w, h, color, positive=True):
-    """Draw one small internal box inside the summary area."""
+    """Draw one internal summary box without cutting sentences mid-thought.
+
+    The previous version limited every bullet to two wrapped lines. That made
+    the PDF look cleaner, but it could stop a sentence before it finished.
+    This version only draws bullets that fit completely. If space runs out, it
+    skips the next bullet instead of printing a half sentence.
+    """
     fill = "#FBFCFE" if positive else "#FFFFFF"
     c.setFillColor(colors.HexColor(fill))
     c.setStrokeColor(colors.HexColor(color))
     c.setLineWidth(0.45)
     c.roundRect(x, y, w, h, 4, fill=1, stroke=1)
 
-    pad = 5.5 if w < 120 else 7
-    heading_size = 4.9 if w < 120 else 5.8
-    bullet_size = 4.25 if w < 120 else 5.15
-    leading = 4.9 if w < 120 else 5.95
+    pad = 5.0 if w < 120 else 7
+    heading_size = 4.7 if w < 120 else 5.8
+    bullet_size = 3.85 if w < 120 else 4.85
+    leading = 4.45 if w < 120 else 5.6
     bullet_symbol = "✓" if positive else "•"
 
     _draw_underlined_heading(c, heading, x + pad, y + h - 10, color, heading_size)
     ty = y + h - 18
     max_lines = max(3, int((h - 22) / leading))
     lines_used = 0
+
     c.setFillColor(colors.HexColor("#111111"))
     c.setFont("Helvetica", bullet_size)
-    avg_char = max(bullet_size * 0.48, 2.2)
-    max_chars = max(15, int((w - 2 * pad - 5) / avg_char))
+    avg_char = max(bullet_size * 0.47, 2.0)
+    max_chars = max(18, int((w - 2 * pad - 7) / avg_char))
 
-    for bullet in bullets[:5]:
-        wrapped = textwrap.wrap(str(bullet), max_chars) or [str(bullet)]
-        for j, line in enumerate(wrapped[:2]):
-            if lines_used >= max_lines:
-                return
+    # Keep the section readable: use the strongest 2-3 complete bullets.
+    for bullet in bullets[:3]:
+        clean_bullet = " ".join(str(bullet).replace("\n", " ").split())
+        wrapped = textwrap.wrap(
+            clean_bullet,
+            max_chars,
+            break_long_words=False,
+            break_on_hyphens=False,
+        ) or [clean_bullet]
+
+        # Add a small blank line between bullets. If the full bullet cannot fit,
+        # do not draw it; this prevents unfinished sentences in the PDF.
+        needed = len(wrapped) + (1 if lines_used > 0 else 0)
+        if lines_used + needed > max_lines:
+            continue
+
+        if lines_used > 0:
+            ty -= leading * 0.35
+            lines_used += 1
+
+        for j, line in enumerate(wrapped):
             prefix = bullet_symbol + " " if j == 0 else "  "
             c.drawString(x + pad, ty, prefix + line)
             ty -= leading
