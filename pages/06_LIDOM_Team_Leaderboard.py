@@ -751,6 +751,17 @@ def safe_draw_image(c, path, x, y, w, h):
         return False
 
 
+def draw_team_logo(c, logo_paths, team, x, y, w=13, h=13):
+    """Draw team logos with a small size boost for Estrellas, whose mark reads small in tables."""
+    key = team_logo_key(team)
+    path = logo_paths.get(key)
+    if not path:
+        return False
+    if key == "estrellas":
+        return safe_draw_image(c, path, x - 1.5, y - 1.5, w + 5, h + 5)
+    return safe_draw_image(c, path, x, y, w, h)
+
+
 def draw_wrapped_text(c, text, x, y, width, font="Helvetica", size=8, color="#111111", leading=10, max_lines=6):
     c.setFillColor(colors.HexColor(color))
     c.setFont(font, size)
@@ -773,19 +784,20 @@ def draw_header(c, title, subtitle, bg, logo_paths, page_type="blue", accent=Non
     accent = accent or ("#BA0C2F" if page_type == "blue" else "#002D72")
     c.setFillColor(colors.HexColor(accent))
     c.rect(0, H - 92, W, 8, fill=1, stroke=0)
-    safe_draw_image(c, logo_paths.get("lidom"), 28, H - 76, 56, 56)
+    # Larger LIDOM logo for stronger page branding.
+    safe_draw_image(c, logo_paths.get("lidom"), 22, H - 82, 72, 72)
     c.setFillColor(colors.HexColor(text_color))
     c.setFont("Helvetica-Bold", 22)
-    c.drawString(96, H - 42, title)
+    c.drawString(108, H - 42, title)
     c.setFont("Helvetica", 9)
-    c.drawString(98, H - 63, subtitle)
+    c.drawString(110, H - 63, subtitle)
 
 
 def draw_footer(c, page_num, logo_paths, bg="#001F4E", selected_team="Leones del Escogido"):
     W, H = landscape(letter)
     c.setFillColor(colors.HexColor(bg))
     c.rect(0, 0, W, 28, fill=1, stroke=0)
-    safe_draw_image(c, team_logo_path_for(logo_paths, selected_team) or logo_paths.get("escogido"), 24, 5, 52, 18)
+    safe_draw_image(c, team_logo_path_for(logo_paths, selected_team) or logo_paths.get("escogido"), 20, 2, 66, 24)
     c.setFillColor(colors.white)
     c.setFont("Helvetica-Bold", 7.5)
     c.drawCentredString(W / 2, 10, "PASIÓN   ★   TRADICIÓN   ★   GLORIA")
@@ -919,7 +931,7 @@ def draw_summary_box(c, title, body, x, y, w, h, logo_paths, selected_team="Leon
     c.setLineWidth(0.9)
     c.setFillColor(colors.white)
     c.roundRect(x, y, w, h, 7, fill=1, stroke=1)
-    safe_draw_image(c, team_logo_path_for(logo_paths, selected_team) or logo_paths.get("escogido"), x + 8, y + h - 28, 32, 18)
+    safe_draw_image(c, team_logo_path_for(logo_paths, selected_team) or logo_paths.get("escogido"), x + 7, y + h - 32, 42, 25)
     c.setFillColor(colors.HexColor(title_color))
     c.setFont("Helvetica-Bold", 8.0)
     c.drawString(x + 45, y + h - 19, title.upper())
@@ -1006,9 +1018,8 @@ def draw_stat_table(c, df, stat, x, y, w, h, logo_paths, theme="#002D72", ascend
             c.setFillColor(colors.HexColor(color))
             c.setFont(font, 8.0)
             c.drawCentredString(x + 17, ry + row_h / 2 - 2.2, str(r["Rank"]))
-            key = team_logo_key(team)
-            safe_draw_image(c, logo_paths.get(key), x + 40, ry + 2.0, 12, row_h - 4.0)
-            c.drawString(x + 56, ry + row_h / 2 - 2.2, team[:30])
+            draw_team_logo(c, logo_paths, team, x + 39, ry + row_h / 2 - 6.5, 13, 13)
+            c.drawString(x + 58, ry + row_h / 2 - 2.2, team[:30])
             c.drawRightString(x + w - 10, ry + row_h / 2 - 2.2, val)
         c.setStrokeColor(colors.HexColor("#E3E8F0"))
         c.setLineWidth(0.25)
@@ -1195,7 +1206,7 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
     c.setFillColor(colors.HexColor(highlight_bg))
     c.setStrokeColor(colors.HexColor(accent))
     c.roundRect(54, 198, W - 108, 46, 8, fill=1, stroke=1)
-    safe_draw_image(c, team_logo_path_for(logo_paths, selected_team) or logo_paths.get("escogido"), 66, 208, 54, 25)
+    safe_draw_image(c, team_logo_path_for(logo_paths, selected_team) or logo_paths.get("escogido"), 62, 204, 66, 32)
     c.setFillColor(colors.HexColor(highlight_text))
     c.setFont("Helvetica-Bold", 10)
     c.drawString(132, 226, f"{team_short_name(selected_team).upper()} BASERUNNING SNAPSHOT")
