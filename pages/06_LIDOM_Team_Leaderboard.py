@@ -1834,7 +1834,7 @@ def draw_best_concern_boxes(c, best_text, concern_text, x, y, w=110, h=25, accen
     box("Best", best_text or "—", x, "#EEF8EF")
     box("Concern", concern_text or "—", x + w + gap, "#FFF4E8")
 
-def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd.DataFrame, rolling_baserunning: pd.DataFrame, pitching_sp: pd.DataFrame | None = None, pitching_rp: pd.DataFrame | None = None, defense: pd.DataFrame | None = None, logo_uploads: dict | None = None, selected_team: str = "Leones del Escogido", selected_league: str = "LIDOM", run_env_text: str | None = None) -> BytesIO:
+def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd.DataFrame, rolling_baserunning: pd.DataFrame, pitching_sp: pd.DataFrame | None = None, pitching_rp: pd.DataFrame | None = None, defense: pd.DataFrame | None = None, logo_uploads: dict | None = None, selected_team: str = "Leones del Escogido", selected_league: str = "LIDOM", run_env_text: str | None = None, include_summaries: bool = True) -> BytesIO:
     if not REPORTLAB_AVAILABLE:
         raise ImportError("ReportLab is not installed. Run: pip install reportlab")
 
@@ -1885,17 +1885,18 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
     sy = 38
     summary_h = 112
     summary_w = (table_w * 2) + gap_x
-    draw_summary_box(
-        c,
-        f"{team_short_name(selected_team)} Hitting Summary",
-        make_team_summary("hitting", hitting, baserunning, selected_team),
-        sx,
-        sy,
-        summary_w,
-        summary_h,
-        logo_paths,
-        selected_team,
-    )
+    if include_summaries:
+        draw_summary_box(
+            c,
+            f"{team_short_name(selected_team)} Hitting Summary",
+            make_team_summary("hitting", hitting, baserunning, selected_team),
+            sx,
+            sy,
+            summary_w,
+            summary_h,
+            logo_paths,
+            selected_team,
+        )
     draw_footer(c, 1, logo_paths, footer_bg, selected_team)
     c.showPage()
 
@@ -1947,17 +1948,18 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
     c.setFont("Helvetica-Bold", 9)
     c.drawString(132, 209, f"SB: #{sb_r or '-'} ({format_value('SB', sb_v) if sb_v is not None else '-'})   |   CS: #{cs_r or '-'} ({format_value('CS', cs_v) if cs_v is not None else '-'})   |   SB%: #{sbp_r or '-'} ({format_value('SB%', sbp_v) if sbp_v is not None else '-'})")
 
-    draw_summary_box(
-        c,
-        f"{team_short_name(selected_team)} Baserunning Summary",
-        make_team_summary("baserunning", hitting, baserunning, selected_team),
-        96,
-        82,
-        W - 192,
-        88,
-        logo_paths,
-        selected_team,
-    )
+    if include_summaries:
+        draw_summary_box(
+            c,
+            f"{team_short_name(selected_team)} Baserunning Summary",
+            make_team_summary("baserunning", hitting, baserunning, selected_team),
+            96,
+            82,
+            W - 192,
+            88,
+            logo_paths,
+            selected_team,
+        )
     draw_footer(c, 2, logo_paths, footer_bg, selected_team)
     c.showPage()
 
@@ -1968,17 +1970,18 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
     draw_section_title(c, "BASERUNNING METRICS (Rolling Cumulative)   ★", 30, 288, accent)
     # No BEST / CONCERN boxes on rolling page; use the space for charts and a wider summary.
     draw_chart_grid(c, rolling_hitting, rolling_baserunning, 38, 82, W - 76, 390, logo_paths, selected_team)
-    draw_summary_box(
-        c,
-        f"{team_short_name(selected_team)} Team Rolling Summary",
-        make_team_summary("rolling", hitting, baserunning, selected_team),
-        70,
-        58,
-        W - 140,
-        92,
-        logo_paths,
-        selected_team,
-    )
+    if include_summaries:
+        draw_summary_box(
+            c,
+            f"{team_short_name(selected_team)} Team Rolling Summary",
+            make_team_summary("rolling", hitting, baserunning, selected_team),
+            70,
+            58,
+            W - 140,
+            92,
+            logo_paths,
+            selected_team,
+        )
     draw_footer(c, 3, logo_paths, footer_bg, selected_team)
     c.showPage()
 
@@ -2021,17 +2024,18 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
                     highlight_text=highlight_text,
                     table_text=table_text,
                 )
-            draw_summary_box(
-                c,
-                f"{team_short_name(selected_team)} {summary_title}",
-                make_team_pitching_summary(pitching_df, selected_team, summary_title),
-                p_left + (p_table_w + p_gap_x),
-                62,
-                (p_table_w * 2) + p_gap_x,
-                94,
-                logo_paths,
-                selected_team,
-            )
+            if include_summaries:
+                draw_summary_box(
+                    c,
+                    f"{team_short_name(selected_team)} {summary_title}",
+                    make_team_pitching_summary(pitching_df, selected_team, summary_title),
+                    p_left + (p_table_w + p_gap_x),
+                    62,
+                    (p_table_w * 2) + p_gap_x,
+                    94,
+                    logo_paths,
+                    selected_team,
+                )
         draw_footer(c, page_num, logo_paths, footer_bg, selected_team)
         c.showPage()
 
@@ -2093,17 +2097,18 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
                 highlight_text=highlight_text,
                 table_text=table_text,
             )
-        draw_summary_box(
-            c,
-            f"{team_short_name(selected_team)} Defense Summary",
-            make_team_defense_summary(defense, selected_team),
-            d_left,
-            62,
-            W - 2 * d_left,
-            98,
-            logo_paths,
-            selected_team,
-        )
+        if include_summaries:
+            draw_summary_box(
+                c,
+                f"{team_short_name(selected_team)} Defense Summary",
+                make_team_defense_summary(defense, selected_team),
+                d_left,
+                62,
+                W - 2 * d_left,
+                98,
+                logo_paths,
+                selected_team,
+            )
     draw_footer(c, 6, logo_paths, footer_bg, selected_team)
     c.save()
     output.seek(0)
@@ -2117,7 +2122,7 @@ def safe_filename(name: str) -> str:
     return cleaned or "Team"
 
 
-def build_all_team_pdfs_zip(hitting, baserunning, rolling_hitting, rolling_baserunning, pitching_sp, pitching_rp, defense, logo_uploads, team_list, selected_league="LIDOM", run_env_text=None) -> bytes:
+def build_all_team_pdfs_zip(hitting, baserunning, rolling_hitting, rolling_baserunning, pitching_sp, pitching_rp, defense, logo_uploads, team_list, selected_league="LIDOM", run_env_text=None, include_summaries: bool = True) -> bytes:
     """Create a ZIP containing one PDF per selected/reportable team in the selected league."""
     zip_buffer = BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -2134,6 +2139,7 @@ def build_all_team_pdfs_zip(hitting, baserunning, rolling_hitting, rolling_baser
                 team,
                 selected_league,
                 run_env_text,
+                include_summaries,
             )
             pdf_buffer.seek(0)
             prefix = LEAGUE_CONFIG.get(selected_league, LEAGUE_CONFIG["LIDOM"]).get("zip_prefix", "Team_Report")
@@ -3016,6 +3022,12 @@ with tab3:
 with tab4:
     st.subheader("Export Report")
 
+    include_pdf_summaries = st.checkbox(
+        "Include summary sections in PDF",
+        value=True,
+        help="Turn this off to export the report with leaderboards/charts only and no written summary boxes.",
+    )
+
     col1, col2, col3 = st.columns(3)
 
     with col1:
@@ -3030,7 +3042,7 @@ with tab4:
         if REPORTLAB_AVAILABLE:
             st.download_button(
                 "📄 Download Selected Team PDF",
-                data=to_pdf(hitting, baserunning, rolling_hitting, rolling_baserunning, pitching_sp, pitching_rp, defense, logo_uploads, selected_report_team, selected_league, run_env_text).getvalue(),
+                data=to_pdf(hitting, baserunning, rolling_hitting, rolling_baserunning, pitching_sp, pitching_rp, defense, logo_uploads, selected_report_team, selected_league, run_env_text, include_pdf_summaries).getvalue(),
                 file_name=f"{league_cfg['excel_prefix']}_report_{safe_filename(team_short_name(selected_report_team))}.pdf",
                 mime="application/pdf",
                 key="download_selected_team_pdf",
@@ -3052,6 +3064,7 @@ with tab4:
                 report_team_options,
                 selected_league,
                 run_env_text,
+                include_pdf_summaries,
             )
             st.download_button(
                 "🗂️ Download ZIP: All Team PDFs",
@@ -3063,4 +3076,4 @@ with tab4:
         else:
             st.warning("PDF ZIP requires ReportLab.")
 
-    st.caption("Excel includes final leaderboards and rolling cumulative data. PDF includes page 1 hitting, page 2 baserunning, page 3 rolling charts, page 4 starting pitching, page 5 relief pitching, and page 6 defense leaderboards. The ZIP export creates one PDF per POV team.")
+    st.caption("Excel includes final leaderboards and rolling cumulative data. PDF includes page 1 hitting, page 2 baserunning, page 3 rolling charts, page 4 starting pitching, page 5 relief pitching, and page 6 defense leaderboards. Use the summary checkbox to include or remove written summaries. The ZIP export creates one PDF per POV team.")
