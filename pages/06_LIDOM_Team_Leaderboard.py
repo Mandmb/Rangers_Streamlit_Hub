@@ -1961,8 +1961,7 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
     draw_section_title(c, "HITTING METRICS (Rolling Cumulative)   ★", 30, H - 120, section_color)
     safe_draw_image(c, logo_paths.get("baserunning"), 30, 213, 16, 16)
     draw_section_title(c, "BASERUNNING METRICS (Rolling Cumulative)   ★", 52, 226, accent)
-    best_txt, concern_txt = _best_and_concern_for_section("rolling", hitting, baserunning, selected_team=selected_team)
-    draw_best_concern_boxes(c, best_txt, concern_txt, W - 244, H - 133, accent=accent)
+    # No BEST / CONCERN boxes on the Team Rolling page.
     draw_chart_grid(c, rolling_hitting, rolling_baserunning, 38, 82, W - 76, 390, logo_paths, selected_team)
     draw_summary_box(
         c,
