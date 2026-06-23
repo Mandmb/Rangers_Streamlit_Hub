@@ -1697,8 +1697,8 @@ def draw_chart_grid(c, rolling_hitting, rolling_baserunning, x, y, w, h, logo_pa
         cy = gy + gh - (row + 1) * ch - row * gap_y
         chart(rolling_hitting, stat, stat, cx, cy, cw, ch, width=2.55, height=1.05)
 
-    # Baserunning metrics: move higher so the summary can live below the charts.
-    bx, by, bw, bh = x, 178, w, 72
+    # Baserunning metrics: moved higher to create cleaner separation above the full-width summary.
+    bx, by, bw, bh = x, 204, w, 70
     gap_x = 18
     cw = (bw - gap_x * 2) / 3
     for idx, stat in enumerate(["SB", "CS", "SB%"]):
@@ -1706,7 +1706,7 @@ def draw_chart_grid(c, rolling_hitting, rolling_baserunning, x, y, w, h, logo_pa
         chart(rolling_baserunning, stat, stat, cx, by, cw, bh, width=2.45, height=0.95)
 
     # Clean legend, one row when possible
-    legend_y = 158
+    legend_y = 182
     lx = x + 4
     c.setFont("Helvetica", 6.0)
     legend_teams = list(pd.concat([rolling_hitting[["fullName"]], rolling_baserunning[["fullName"]]], ignore_index=True)["fullName"].dropna().drop_duplicates())[:6]
@@ -1964,8 +1964,8 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
     # Page 3 - Rolling performance, larger key charts only
     draw_header(c, f"{league_display} TEAM ROLLING PERFORMANCE", f"Rolling Cumulative Charts - {date_txt}", primary, logo_paths, "blue", accent=accent, text_color=header_text, run_env_text=run_env_text)
     draw_section_title(c, "HITTING METRICS (Rolling Cumulative)   ★", 30, H - 120, section_color)
-    safe_draw_image(c, logo_paths.get("baserunning"), 30, 278, 16, 16)
-    draw_section_title(c, "BASERUNNING METRICS (Rolling Cumulative)   ★", 52, 291, accent)
+    # Keep baserunning header aligned with the hitting header; no icon on rolling page.
+    draw_section_title(c, "BASERUNNING METRICS (Rolling Cumulative)   ★", 30, 288, accent)
     # No BEST / CONCERN boxes on rolling page; use the space for charts and a wider summary.
     draw_chart_grid(c, rolling_hitting, rolling_baserunning, 38, 82, W - 76, 390, logo_paths, selected_team)
     draw_summary_box(
