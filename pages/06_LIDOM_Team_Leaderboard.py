@@ -64,7 +64,7 @@ HITTING_STATS = [
 ]
 BASERUNNING_STATS = ["SB", "CS", "SB%"]
 PITCHING_STATS = ["ERA", "FIP", "WHIP", "K%", "BB%", "HR%", "BAA"]
-DEFENSE_STATS = ["CS%", "IFErr", "IFFld%", "OFErr", "OFFld%"]
+DEFENSE_STATS = ["CS%", "IFErr", "IFFld%", "OFErr", "OFFld%", "TotalErr"]
 RATE_STATS = {"BA", "OBP", "SLG", "OPS", "BB%", "K%", "SB%", "HR%", "BAA", "CS%", "IFFld%", "OFFld%"}
 
 # =====================================================
@@ -408,7 +408,7 @@ def build_pitching_from_csv(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def defense_lower_is_better(stat: str) -> bool:
-    return stat in {"IFErr", "OFErr"}
+    return stat in {"IFErr", "OFErr", "TotalErr"}
 
 
 def _clean_team_snapshot_df(df: pd.DataFrame, required_team_col: str = "teamFullName") -> pd.DataFrame:
@@ -479,6 +479,9 @@ def build_defense_from_csvs(catcher_df=None, infield_df=None, outfield_df=None) 
     defense = frames[0]
     for frame in frames[1:]:
         defense = defense.merge(frame, on="fullName", how="outer")
+    # Total team errors combines infield and outfield errors.
+    if "IFErr" in defense.columns or "OFErr" in defense.columns:
+        defense["TotalErr"] = pd.to_numeric(defense.get("IFErr", 0), errors="coerce").fillna(0) + pd.to_numeric(defense.get("OFErr", 0), errors="coerce").fillna(0)
     for col in DEFENSE_STATS:
         if col not in defense.columns:
             defense[col] = np.nan
@@ -649,6 +652,7 @@ STAT_LABELS = {
     "IFFld%": ("IF FIELD%", "Infield fielding percentage"),
     "OFErr": ("OF ERRORS", "Outfield errors"),
     "OFFld%": ("OF FIELD%", "Outfield fielding percentage"),
+    "TotalErr": ("TOTAL ERRORS", "IF + OF errors"),
 }
 
 ICON_SYMBOLS = {
@@ -1679,10 +1683,10 @@ def draw_chart_grid(c, rolling_hitting, rolling_baserunning, x, y, w, h, logo_pa
             c.roundRect(cx - 3, cy - 3, cw + 6, ch + 6, 5, fill=1, stroke=1)
             safe_draw_image(c, path, cx, cy, cw, ch)
 
-    # Hitting key metrics: 3 columns x 2 rows, bigger and easier to read
+    # Hitting key metrics: 3 columns x 2 rows, slightly smaller to create room for full-width summary.
     hit_stats = ["OPS", "OBP", "SLG", "BA", "BB%", "K%"]
-    gx, gy, gw, gh = x, 292, w, 184
-    gap_x, gap_y = 22, 18
+    gx, gy, gw, gh = x, 318, w, 158
+    gap_x, gap_y = 22, 14
     cols = 3
     cw = (gw - gap_x * (cols - 1)) / cols
     ch = (gh - gap_y) / 2
@@ -1691,18 +1695,18 @@ def draw_chart_grid(c, rolling_hitting, rolling_baserunning, x, y, w, h, logo_pa
         col = idx % cols
         cx = gx + col * (cw + gap_x)
         cy = gy + gh - (row + 1) * ch - row * gap_y
-        chart(rolling_hitting, stat, stat, cx, cy, cw, ch, width=2.7, height=1.25)
+        chart(rolling_hitting, stat, stat, cx, cy, cw, ch, width=2.55, height=1.05)
 
-    # Baserunning metrics: 3 wide charts in one row
-    bx, by, bw, bh = x, 118, w * 0.68, 86
+    # Baserunning metrics: move higher so the summary can live below the charts.
+    bx, by, bw, bh = x, 178, w, 72
     gap_x = 18
     cw = (bw - gap_x * 2) / 3
     for idx, stat in enumerate(["SB", "CS", "SB%"]):
         cx = bx + idx * (cw + gap_x)
-        chart(rolling_baserunning, stat, stat, cx, by, cw, bh, width=2.35, height=1.15)
+        chart(rolling_baserunning, stat, stat, cx, by, cw, bh, width=2.45, height=0.95)
 
     # Clean legend, one row when possible
-    legend_y = 72
+    legend_y = 158
     lx = x + 4
     c.setFont("Helvetica", 6.0)
     legend_teams = list(pd.concat([rolling_hitting[["fullName"]], rolling_baserunning[["fullName"]]], ignore_index=True)["fullName"].dropna().drop_duplicates())[:6]
@@ -1868,7 +1872,7 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
     gap_y = 8
     table_w = (W - 2 * left - 2 * gap_x) / 3
     table_h = 100
-    hit_stats = ["OPS", "OBP", "SLG", "BA", "Hits", "Homerun", "Double", "Triple", "BB%", "K%", "Single"]
+    hit_stats = ["OPS", "OBP", "SLG", "BA", "Hits", "Homerun", "Double", "Triple", "BB%", "K%"]
     for idx, stat in enumerate(hit_stats):
         row = idx // 3
         col = idx % 3
@@ -1876,17 +1880,18 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
         y = top - (row + 1) * table_h - row * gap_y
         draw_stat_table(c, hitting, stat, x, y, table_w, table_h, logo_paths, theme=primary, ascending=(stat == "K%"), selected_team=selected_team, highlight_bg=highlight_bg, highlight_text=highlight_text, table_text=table_text)
 
-    # Summary occupies the last open slot, but is taller so paragraph text fits cleanly.
-    sx = left + 2 * (table_w + gap_x)
+    # Removed the Singles table and expanded the summary across the two open bottom slots.
+    sx = left + (table_w + gap_x)
     sy = 38
     summary_h = 112
+    summary_w = (table_w * 2) + gap_x
     draw_summary_box(
         c,
         f"{team_short_name(selected_team)} Hitting Summary",
         make_team_summary("hitting", hitting, baserunning, selected_team),
         sx,
         sy,
-        table_w,
+        summary_w,
         summary_h,
         logo_paths,
         selected_team,
@@ -1959,18 +1964,18 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
     # Page 3 - Rolling performance, larger key charts only
     draw_header(c, f"{league_display} TEAM ROLLING PERFORMANCE", f"Rolling Cumulative Charts - {date_txt}", primary, logo_paths, "blue", accent=accent, text_color=header_text, run_env_text=run_env_text)
     draw_section_title(c, "HITTING METRICS (Rolling Cumulative)   ★", 30, H - 120, section_color)
-    safe_draw_image(c, logo_paths.get("baserunning"), 30, 213, 16, 16)
-    draw_section_title(c, "BASERUNNING METRICS (Rolling Cumulative)   ★", 52, 226, accent)
-    # No BEST / CONCERN boxes on the Team Rolling page.
+    safe_draw_image(c, logo_paths.get("baserunning"), 30, 278, 16, 16)
+    draw_section_title(c, "BASERUNNING METRICS (Rolling Cumulative)   ★", 52, 291, accent)
+    # No BEST / CONCERN boxes on rolling page; use the space for charts and a wider summary.
     draw_chart_grid(c, rolling_hitting, rolling_baserunning, 38, 82, W - 76, 390, logo_paths, selected_team)
     draw_summary_box(
         c,
         f"{team_short_name(selected_team)} Team Rolling Summary",
         make_team_summary("rolling", hitting, baserunning, selected_team),
-        535,
-        100,
-        235,
-        125,
+        70,
+        58,
+        W - 140,
+        92,
         logo_paths,
         selected_team,
     )
@@ -2065,8 +2070,8 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
         d_gap_x = 18
         d_gap_y = 16
         d_table_w = (W - 2 * d_left - 2 * d_gap_x) / 3
-        d_table_h = 142
-        d_stats = ["CS%", "IFErr", "IFFld%", "OFErr", "OFFld%"]
+        d_table_h = 118
+        d_stats = ["CS%", "IFErr", "IFFld%", "OFErr", "OFFld%", "TotalErr"]
         for idx, stat in enumerate(d_stats):
             row = idx // 3
             col = idx % 3
@@ -2092,12 +2097,12 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
             c,
             f"{team_short_name(selected_team)} Defense Summary",
             make_team_defense_summary(defense, selected_team),
-            d_left + 2 * (d_table_w + d_gap_x),
-            d_top - 2 * d_table_h - d_gap_y,
-            d_table_w,
-            d_table_h,
+            d_left,
+            62,
+            W - 2 * d_left,
+            98,
             logo_paths,
-        selected_team,
+            selected_team,
         )
     draw_footer(c, 6, logo_paths, footer_bg, selected_team)
     c.save()
@@ -2396,19 +2401,21 @@ def make_team_defense_summary(defense, selected_team="Leones del Escogido"):
         _rank_item(defense, "IFFld%", team_name, False),
         _rank_item(defense, "OFErr", team_name, True),
         _rank_item(defense, "OFFld%", team_name, False),
+        _rank_item(defense, "TotalErr", team_name, True),
     ]
     cs = _rank_item(defense, "CS%", team_name, False)
     iferr = _rank_item(defense, "IFErr", team_name, True)
     iffld = _rank_item(defense, "IFFld%", team_name, False)
     oferr = _rank_item(defense, "OFErr", team_name, True)
     offld = _rank_item(defense, "OFFld%", team_name, False)
+    terr = _rank_item(defense, "TotalErr", team_name, True)
     good = [
         f"La defensa de {team_short} es parte directa de la prevención de carreras; cada out limpio protege al staff y acorta innings.",
         f"El infield marca el estándar: IFErr {ordinal_text(iferr['rank'])} ({safe_fmt('IFErr', iferr['value'])}) e IFFld% {ordinal_text(iffld['rank'])} ({safe_fmt('IFFld%', iffld['value'])}) muestran qué tan confiable es la conversión de contacto en outs.",
         f"CS% {ordinal_text(cs['rank'])} ({safe_fmt('CS%', cs['value'])}) cuenta cuánto ayuda el catching a controlar el juego de correr del rival.",
     ]
     opp = [
-        f"La lectura completa exige balancear infield y outfield. OFErr {ordinal_text(oferr['rank'])} ({safe_fmt('OFErr', oferr['value'])}) y OFFld% {ordinal_text(offld['rank'])} ({safe_fmt('OFFld%', offld['value'])}) señalan dónde se pueden perder outs caros.",
+        f"La lectura completa exige balancear infield y outfield. TotalErr {ordinal_text(terr['rank'])} ({safe_fmt('TotalErr', terr['value'])}) y OFErr {ordinal_text(oferr['rank'])} ({safe_fmt('OFErr', oferr['value'])}) señalan dónde se pueden perder outs caros.",
         "El objetivo defensivo no es verse limpio; es quitarle al rival oportunidades extra cuando el juego está apretado.",
         f"Enfoque ejecutivo: {profile['defense_focus']}; comunicación, rutas y ejecución rutinaria sin regalar innings.",
     ]
@@ -2478,7 +2485,8 @@ def _draw_summary_column(c, heading, bullets, x, y, w, h, color, positive=True):
 
     for bullet in bullets[:5]:
         wrapped = textwrap.wrap(str(bullet), max_chars) or [str(bullet)]
-        for j, line in enumerate(wrapped[:2]):
+        line_limit = 3 if h >= 60 and w >= 180 else 2
+        for j, line in enumerate(wrapped[:line_limit]):
             if lines_used >= max_lines:
                 return
             prefix = bullet_symbol + " " if j == 0 else "  "
