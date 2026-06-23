@@ -1613,8 +1613,18 @@ def draw_stat_table(c, df, stat, x, y, w, h, logo_paths, theme="#002D72", ascend
             team = str(r["Team"])
             val = str(r[stat])
             is_esc = normalize_team_name(team) == normalize_team_name(selected_team)
-            color = (highlight_text or team_highlight_color(selected_team)) if is_esc else "#111111"
-            font = "Helvetica-Bold" if is_esc else "Helvetica"
+            if is_esc:
+                color = (highlight_text or team_highlight_color(selected_team))
+                font = "Helvetica-Bold"
+            else:
+                # Scan-friendly ranks: top two green, bottom two red, middle neutral.
+                try:
+                    rk = int(r["Rank"])
+                    nrows = len(table)
+                    color = "#178A45" if rk <= 2 else ("#B42318" if rk >= max(1, nrows - 1) else "#111111")
+                except Exception:
+                    color = "#111111"
+                font = "Helvetica-Bold" if color != "#111111" else "Helvetica"
             c.setFillColor(colors.HexColor(color))
             c.setFont(font, row_font_size)
             baseline = ry + row_h / 2 - (1.6 if compact_rows else 2.2)
@@ -2473,6 +2483,16 @@ def _section_items(section, hitting, baserunning, pitching_sp, pitching_rp, defe
         return [_rank_metric(pitching_rp, s, team, pitching_lower_is_better(s)) for s in PITCHING_STATS] if pitching_rp is not None and not pitching_rp.empty else []
     if section == "defense":
         return [_rank_metric(defense, s, team, defense_lower_is_better(s)) for s in DEFENSE_STATS] if defense is not None and not defense.empty else []
+    if section == "rolling":
+        # Rolling page badges use the most important current indicators as a readable proxy
+        # for trend health: traffic, run creation, and baserunning efficiency.
+        return [
+            _rank_metric(hitting, "OBP", team, False),
+            _rank_metric(hitting, "OPS", team, False),
+            _rank_metric(hitting, "BB%", team, False),
+            _rank_metric(baserunning, "SB%", team, False),
+            _rank_metric(baserunning, "CS", team, True),
+        ]
     return []
 
 
@@ -2483,16 +2503,16 @@ def _summary_lines(section, hitting, baserunning, selected_team, pitching_sp=Non
         ops = _rank_metric(hitting, "OPS", team, False); obp = _rank_metric(hitting, "OBP", team, False); bb = _rank_metric(hitting, "BB%", team, False)
         slg = _rank_metric(hitting, "SLG", team, False); hr = _rank_metric(hitting, "Homerun", team, False); k = _rank_metric(hitting, "K%", team, True)
         hall = [
-            f"{short} sostiene su identidad ofensiva con {_metric_label(obp)} y {_metric_label(bb)}.",
-            f"La producción general se resume en {_metric_label(ops)} dentro del contexto de liga.",
-            f"El control de zona aparece en {_metric_label(k)} y ayuda a estabilizar turnos.",
+            f"{short} está generando oportunidades: {_metric_label(obp)} y {_metric_label(bb)} muestran una base real de tráfico.",
+            f"El perfil ofensivo se entiende mejor al unir {_metric_label(ops)} con el contexto de R/G de la liga.",
+            f"El control de zona con {_metric_label(k)} ayuda a que la ofensiva no dependa solo del batazo grande.",
         ]
         opp = [
-            f"El próximo salto es convertir tráfico en daño: {_metric_label(slg)}.",
-            f"El poder situacional todavía puede crecer: {_metric_label(hr)}.",
-            "Prioridad: atacar mejores pitcheos sin perder disciplina ni control de la zona.",
+            f"La brecha principal es convertir tráfico en daño: {_metric_label(slg)} marca el siguiente paso.",
+            f"El poder situacional puede cambiar innings: {_metric_label(hr)} merece atención diaria.",
+            "La prioridad es atacar conteos ganados sin sacrificar la disciplina que sostiene el OBP.",
         ]
-        rec = "La ofensiva debe proteger su base de OBP/BB% y buscar más extrabases en conteos favorables."
+        rec = "Proteger el OBP/BB% y convertir más conteos favorables en extrabases."
     elif section == "baserunning":
         sb = _rank_metric(baserunning, "SB", team, False); sbp = _rank_metric(baserunning, "SB%", team, False); cs = _rank_metric(baserunning, "CS", team, True)
         hall = [
@@ -2607,19 +2627,57 @@ def draw_full_width_summary(c, title, section, hitting, baserunning, selected_te
     c.drawString(x + pad + 104, y + 14, rec[:180])
 
 
+
+def _badge_explanation(item, is_best=True):
+    stat = (item or {}).get("stat", "")
+    if not item or item.get("rank") is None:
+        return "Need more data"
+    best_map = {
+        "OPS": "Run creation", "OBP": "Traffic engine", "SLG": "Damage profile",
+        "BA": "Contact output", "Hits": "Hit volume", "Homerun": "Power output",
+        "BB%": "Plate discipline", "K%": "Contact control",
+        "SB": "Pressure tool", "SB%": "Efficient pressure", "CS": "Controlled risk",
+        "ERA": "Run prevention", "FIP": "Process quality", "WHIP": "Traffic control",
+        "HR%": "Damage control", "BAA": "Contact allowed",
+        "CS%": "Controls running game", "IFErr": "Infield reliability", "IFFld%": "Turns contact into outs",
+        "OFErr": "Outfield reliability", "OFFld%": "Outfield conversion",
+    }
+    concern_map = {
+        "OPS": "Needs more offense", "OBP": "Needs more traffic", "SLG": "Needs more damage",
+        "BA": "Needs hit volume", "Hits": "Low hit volume", "Homerun": "Power gap",
+        "BB%": "Approach gap", "K%": "Contact pressure",
+        "SB": "Low pressure", "SB%": "Efficiency risk", "CS": "Outs on bases",
+        "ERA": "Runs allowed", "FIP": "Process concern", "WHIP": "Traffic risk",
+        "HR%": "Damage risk", "BAA": "Contact allowed",
+        "CS%": "Running game risk", "IFErr": "Infield miscues", "IFFld%": "Conversion gap",
+        "OFErr": "Outfield miscues", "OFFld%": "OF conversion gap",
+    }
+    return (best_map if is_best else concern_map).get(stat, "Key indicator")
+
 def draw_best_concern_badges(c, section, hitting, baserunning, pitching_sp, pitching_rp, defense, team, x, y, w, primary):
     items = _section_items(section, hitting, baserunning, pitching_sp, pitching_rp, defense, team)
-    best = _best_item(items); concern = _concern_item(items)
-    gap = 10; bw = (w - gap) / 2; bh = 25
-    for i, (label, item, fill) in enumerate([("BEST", best, "#EAF7EF"), ("CONCERN", concern, "#FFF4E8")]):
+    best = _best_item(items)
+    concern = _concern_item(items)
+    gap = 10
+    bw = (w - gap) / 2
+    bh = 31
+    for i, (label, item, fill, is_best) in enumerate([
+        ("BEST", best, "#EAF7EF", True),
+        ("CONCERN", concern, "#FFF4E8", False),
+    ]):
         bx = x + i * (bw + gap)
-        c.setFillColor(colors.HexColor(fill)); c.setStrokeColor(colors.HexColor(primary)); c.setLineWidth(0.45)
+        c.setFillColor(colors.HexColor(fill))
+        c.setStrokeColor(colors.HexColor(primary))
+        c.setLineWidth(0.55)
         c.roundRect(bx, y, bw, bh, 7, fill=1, stroke=1)
-        c.setFillColor(colors.HexColor(primary)); c.setFont("Helvetica-Bold", 6.2)
-        c.drawString(bx + 9, y + 15, label)
-        c.setFillColor(colors.HexColor("#111111")); c.setFont("Helvetica-Bold", 7.0)
-        c.drawString(bx + 9, y + 5, _metric_label(item))
-
+        c.setFillColor(colors.HexColor(primary))
+        c.setFont("Helvetica-Bold", 5.8)
+        c.drawString(bx + 9, y + 21, label)
+        c.setFillColor(colors.HexColor("#111111"))
+        c.setFont("Helvetica-Bold", 6.7)
+        c.drawString(bx + 9, y + 12, _metric_label(item)[:24])
+        c.setFont("Helvetica", 5.5)
+        c.drawString(bx + 9, y + 4, _badge_explanation(item, is_best=is_best)[:28])
 
 def draw_executive_snapshot_page(c, league_display, date_txt, primary, accent, header_text, logo_paths, selected_team, hitting, baserunning, pitching_sp, pitching_rp, defense, run_env_text, footer_bg):
     W, H = landscape(letter)
@@ -2695,9 +2753,8 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
     date_txt = f"Generated {datetime.now().strftime('%b %d, %Y')}"
     theme = get_team_theme(selected_team); primary = theme["primary"]; accent = theme["accent"]; section_color = theme["section"]
     header_text = theme.get("header_text", "#FFFFFF"); highlight_bg = theme["highlight_bg"]; highlight_text = theme["highlight_text"]; table_text = theme.get("table_text", "#FFFFFF"); footer_bg = theme.get("footer_bg", primary)
-    # Page 1 executive snapshot
-    draw_executive_snapshot_page(c, league_display, date_txt, primary, accent, header_text, logo_paths, selected_team, hitting, baserunning, pitching_sp, pitching_rp, defense, run_env_text, footer_bg)
-    c.showPage(); page = 2
+    # Page 1 starts directly with leaderboards. Executive snapshot removed to keep the cleaner previous flow.
+    page = 1
     # Hitting pages. LMP/10-team reports breathe better when split in two.
     hit_groups = [["OPS", "OBP", "SLG", "BA", "Hits"], ["Homerun", "Double", "Triple", "BB%", "K%", "Single"]] if _team_count(hitting) > 6 else [["OPS", "OBP", "SLG", "BA", "Hits", "Homerun", "Double", "Triple", "BB%", "K%", "Single"]]
     for gi, stats in enumerate(hit_groups):
@@ -2741,7 +2798,7 @@ def to_pdf(hitting: pd.DataFrame, baserunning: pd.DataFrame, rolling_hitting: pd
 # UI
 # =====================================================
 st.title("⚾ Winter League Team Leaderboard Report")
-st.caption("✅ PDF DESIGN VERSION: 6-PAGE BEAUTIFUL REPORT — league selector, team POV summaries, one upload box, category tables, logos, rolling charts")
+st.caption("✅ PDF DESIGN VERSION: BEAUTIFUL REPORT — best/concern badges, league selector, team POV summaries, one upload box, category tables, logos, rolling charts")
 st.caption("Upload all CSVs together: team Pregame files, Draft SP, Draft RP, catching, infield, and outfield defense files.")
 
 selected_league = st.sidebar.selectbox(
