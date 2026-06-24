@@ -14,8 +14,8 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
 
 # =====================================================
-# ADVANCED PREGAME REPORT - VISUAL PDF VERSION
-# No SimpleDocTemplate. PDF is drawn with reportlab canvas.
+# ADVANCED PREGAME REPORT - VISUAL PDF VERSION - PITCH USAGE UPDATE
+# PDF is drawn directly with reportlab canvas.
 # =====================================================
 
 st.set_page_config(page_title="Advanced Pregame Report", layout="wide")
@@ -121,7 +121,9 @@ def detect_files(files):
     out = {}
     for f in files or []:
         name = f.name.lower()
-        if "pregame hitting" in name:
+        if "pitch usage" in name:
+            out["league_pitch_usage"] = f
+        elif "pregame hitting" in name:
             out["league_hitting"] = f
         elif "rate" in name:
             out["league_pitching"] = f
@@ -532,80 +534,132 @@ def draw_table(c, x, y, w, h, title, rows, headers, font_size=6.4, max_rows=6):
 
 def draw_key_box(c, x, y, w, h, title, text, icon="◎"):
     round_rect(c, x, y, w, h, fill=LIGHT_BLUE, stroke=BORDER, radius=8)
-    c.setFillColor(NAVY); c.setFont("Helvetica-Bold", 23); c.drawCentredString(x + 36, y + h/2 - 8, icon)
-    c.setFillColor(NAVY); c.setFont("Helvetica-Bold", 9); c.drawString(x + 72, y + h - 25, title)
-    draw_wrapped(c, text, x + 72, y + h - 42, w - 84, font="Helvetica-Bold", size=8.2, leading=11, max_lines=4)
+    text_x = x + 72
+    text_w = w - 84
+    if icon:
+        c.setFillColor(NAVY)
+        c.setFont("Helvetica-Bold", 23)
+        c.drawCentredString(x + 36, y + h/2 - 8, icon)
+    else:
+        text_x = x + 18
+        text_w = w - 36
+    c.setFillColor(NAVY)
+    c.setFont("Helvetica-Bold", 9)
+    c.drawString(text_x, y + h - 24, title)
+    draw_wrapped(c, text, text_x, y + h - 41, text_w, font="Helvetica-Bold", size=8.2, leading=11, max_lines=4)
+
 
 def draw_pitch_usage_chart(c, x, y, w, h, usage_count):
     round_rect(c, x, y, w, h, fill=WHITE, stroke=BORDER, radius=7)
-    c.setFillColor(NAVY); c.setFont("Helvetica-Bold", 8); c.drawCentredString(x + w/2, y + h - 15, "PITCH USAGE BY COUNT")
+    c.setFillColor(NAVY)
+    c.setFont("Helvetica-Bold", 8)
+    c.drawCentredString(x + w/2, y + h - 15, "PITCH USAGE BY COUNT")
     if usage_count is None or usage_count.empty:
         return
+
     data = usage_count.set_index("Count")
     pitches = [p for p in PITCH_ORDER if p in data.columns]
     if not pitches:
         pitches = [p for p in data.columns if p != "Count"][:7]
+
     chart_x = x + 42
-    chart_y = y + 30
-    chart_w = w - 70
-    row_h = (h - 65) / len(COUNTS)
+    chart_y = y + 42
+    chart_w = w - 76
+    plot_h = h - 80
+    row_h = plot_h / len(COUNTS)
+
+    # x-axis ticks
+    c.setStrokeColor(HexColor("#CBD5E1"))
+    c.setLineWidth(0.5)
+    for t in [0, 0.25, 0.5, 0.75, 1.0]:
+        tx = chart_x + chart_w * t
+        c.line(tx, chart_y - 6, tx, chart_y + plot_h + 4)
+        c.setFillColor(DARK)
+        c.setFont("Helvetica", 5.8)
+        c.drawCentredString(tx, chart_y - 16, f"{int(t*100)}%")
+
     for idx, cnt in enumerate(COUNTS):
         yy = chart_y + (len(COUNTS)-1-idx) * row_h
-        c.setFillColor(DARK); c.setFont("Helvetica", 6.6); c.drawRightString(chart_x - 8, yy + 2, cnt)
-        c.setFillColor(HexColor("#EDF2F7")); c.rect(chart_x, yy, chart_w, 6, stroke=0, fill=1)
+        c.setFillColor(DARK)
+        c.setFont("Helvetica", 6.4)
+        c.drawRightString(chart_x - 8, yy + 2, cnt)
+        c.setFillColor(HexColor("#EDF2F7"))
+        c.rect(chart_x, yy, chart_w, 6, stroke=0, fill=1)
         if cnt in data.index:
-            start = chart_x
+            start_x = chart_x
             for p in pitches:
                 val = float(data.loc[cnt, p]) if p in data.columns and pd.notna(data.loc[cnt, p]) else 0
-                seg_w = chart_w * val
+                seg_w = max(0, chart_w * val)
                 if seg_w > 0.3:
                     c.setFillColor(PITCH_COLORS.get(p, PITCH_COLORS["OTHER"]))
-                    c.rect(start, yy, seg_w, 6, stroke=0, fill=1)
-                start += seg_w
-    # compact legend, no overflow
+                    c.rect(start_x, yy, seg_w, 6, stroke=0, fill=1)
+                start_x += seg_w
+
+    # compact legend, contained inside the card
     lx = chart_x
-    ly = y + 13
+    ly = y + 14
     for p in pitches[:8]:
-        c.setFillColor(PITCH_COLORS.get(p, PITCH_COLORS["OTHER"])); c.circle(lx, ly + 2, 3, fill=1, stroke=0)
-        c.setFillColor(DARK); c.setFont("Helvetica-Bold", 6.2); c.drawString(lx + 6, ly, p)
-        lx += 39
-        if lx > x + w - 34:
+        if lx > x + w - 42:
             break
+        c.setFillColor(PITCH_COLORS.get(p, PITCH_COLORS["OTHER"]))
+        c.circle(lx, ly + 2, 3, fill=1, stroke=0)
+        c.setFillColor(DARK)
+        c.setFont("Helvetica-Bold", 5.8)
+        c.drawString(lx + 6, ly, p)
+        lx += 35
+
 
 def draw_swing_grid(c, x, y, w, h, swing_by_count):
     round_rect(c, x, y, w, h, fill=WHITE, stroke=BORDER, radius=7)
-    c.setFillColor(NAVY); c.setFont("Helvetica-Bold", 8); c.drawCentredString(x + w/2, y + h - 15, "SWING RATE BY COUNT")
+    c.setFillColor(NAVY)
+    c.setFont("Helvetica-Bold", 8)
+    c.drawCentredString(x + w/2, y + h - 15, "SWING RATE BY COUNT")
     lookup = {}
     if swing_by_count is not None and not swing_by_count.empty:
         lookup = dict(zip(swing_by_count["Count"], swing_by_count["SwingPct"]))
+
     cols, rows = 4, 3
-    cell_w = (w - 24) / cols
-    cell_h = (h - 40) / rows
+    cell_w = (w - 28) / cols
+    cell_h = (h - 42) / rows
     for i, cnt in enumerate(COUNTS):
         col, row = i % cols, i // cols
-        cx = x + 12 + col * cell_w
-        cy = y + h - 34 - (row + 1) * cell_h
-        round_rect(c, cx, cy, cell_w - 6, cell_h - 5, fill=GRAY, stroke=HexColor("#E2E8F0"), radius=4)
-        c.setFillColor(NAVY); c.setFont("Helvetica-Bold", 7); c.drawCentredString(cx + (cell_w-6)/2, cy + cell_h - 18, cnt)
-        c.setFont("Helvetica-Bold", 10); c.drawCentredString(cx + (cell_w-6)/2, cy + 8, pct(lookup.get(cnt, 0)))
+        cx = x + 14 + col * cell_w
+        cy = y + h - 36 - (row + 1) * cell_h
+        round_rect(c, cx, cy, cell_w - 7, cell_h - 6, fill=GRAY, stroke=HexColor("#E2E8F0"), radius=4)
+        # count higher in each box
+        c.setFillColor(NAVY)
+        c.setFont("Helvetica-Bold", 7.2)
+        c.drawCentredString(cx + (cell_w-7)/2, cy + cell_h - 15, cnt)
+        c.setFont("Helvetica-Bold", 10.5)
+        c.drawCentredString(cx + (cell_w-7)/2, cy + 10, pct(lookup.get(cnt, 0)))
+
 
 def draw_sba_grid(c, x, y, w, h, team_counts):
     round_rect(c, x, y, w, h, fill=WHITE, stroke=BORDER, radius=7)
-    c.setFillColor(NAVY); c.setFont("Helvetica-Bold", 8); c.drawCentredString(x + w/2, y + h - 15, "SBA BY COUNT (ATTEMPTS)")
+    c.setFillColor(NAVY)
+    c.setFont("Helvetica-Bold", 8)
+    c.drawCentredString(x + w/2, y + h - 15, "SBA BY COUNT (ATTEMPTS)")
     lookup = {}
     if team_counts is not None and not team_counts.empty:
+        team_counts = team_counts.copy()
         team_counts["Count"] = team_counts["Count"].astype(str)
         lookup = dict(zip(team_counts["Count"], pd.to_numeric(team_counts["SBA"], errors="coerce").fillna(0)))
+
     cols, rows = 4, 3
-    cell_w = (w - 24) / cols
-    cell_h = (h - 40) / rows
+    cell_w = (w - 28) / cols
+    cell_h = (h - 42) / rows
     for i, cnt in enumerate(COUNTS):
         col, row = i % cols, i // cols
-        cx = x + 12 + col * cell_w
-        cy = y + h - 34 - (row + 1) * cell_h
-        round_rect(c, cx, cy, cell_w - 6, cell_h - 5, fill=GRAY, stroke=HexColor("#E2E8F0"), radius=4)
-        c.setFillColor(NAVY); c.setFont("Helvetica-Bold", 7); c.drawCentredString(cx + (cell_w-6)/2, cy + cell_h - 18, cnt)
-        c.setFont("Helvetica-Bold", 12); c.drawCentredString(cx + (cell_w-6)/2, cy + 8, str(int(lookup.get(cnt, 0))))
+        cx = x + 14 + col * cell_w
+        cy = y + h - 36 - (row + 1) * cell_h
+        round_rect(c, cx, cy, cell_w - 7, cell_h - 6, fill=GRAY, stroke=HexColor("#E2E8F0"), radius=4)
+        # count higher in each box
+        c.setFillColor(NAVY)
+        c.setFont("Helvetica-Bold", 7.2)
+        c.drawCentredString(cx + (cell_w-7)/2, cy + cell_h - 15, cnt)
+        c.setFont("Helvetica-Bold", 13)
+        c.drawCentredString(cx + (cell_w-7)/2, cy + 10, str(int(lookup.get(cnt, 0))))
+
 
 def concise(text, max_words=11):
     words = str(text).split()
@@ -634,7 +688,7 @@ def build_visual_pdf(context):
     opponent = context.get("opponent", "Opponent")
     logo_path = context.get("logo_path", "Rangers.png")
     hit_team = context["hit_team"]; pitch_team = context["pitch_team"]; catch_team = context["catch_team"]; run_team = context["run_team"]
-    lg_hit = context["lg_hit"]; lg_pitch = context["lg_pitch"]
+    lg_hit = context["lg_hit"]; lg_pitch = context["lg_pitch"]; lg_usage = context.get("lg_usage", {})
     usage_count = context["usage_count"]; usage_overall = context["usage_overall"]; pitcher_usage = context["pitcher_usage"]; pitch_leaders = context["pitch_leaders"]
     swing_by_count = context["swing_by_count"]; hitters = context["hitters"]
     catchers = context["catchers"]; run_counts = context["run_counts"]; runners = context["runners"]
@@ -657,11 +711,11 @@ def build_visual_pdf(context):
     round_rect(c, 22, tx_y, 345, box_h, fill=WHITE, stroke=BORDER, radius=8)
     round_rect(c, 22, tx_y + box_h - 28, 345, 28, fill=NAVY, stroke=NAVY, radius=8)
     c.setFillColor(WHITE); c.setFont("Helvetica-Bold", 13); c.drawCentredString(194, tx_y + box_h - 19, "KEY TAKEAWAYS")
-    c.setFillColor(NAVY); c.setFont("Helvetica-Bold", 28); c.drawString(45, tx_y + 124, "▣")
-    yy = tx_y + box_h - 65
+    yy = tx_y + box_h - 62
     for item in insights:
-        c.setFillColor(RED); c.circle(70, yy + 4, 2.2, fill=1, stroke=0)
-        yy = draw_wrapped(c, item, 86, yy + 8, 240, font="Helvetica-Bold", size=9, leading=13, max_lines=2) - 16
+        c.setFillColor(RED)
+        c.circle(48, yy + 4, 2.2, fill=1, stroke=0)
+        yy = draw_wrapped(c, item, 64, yy + 8, 270, font="Helvetica-Bold", size=9, leading=13, max_lines=2) - 16
 
     round_rect(c, 382, tx_y, PAGE_W - 404, box_h, fill=WHITE, stroke=BORDER, radius=8)
     round_rect(c, 382, tx_y + box_h - 28, PAGE_W - 404, 28, fill=NAVY, stroke=NAVY, radius=8)
@@ -683,32 +737,55 @@ def build_visual_pdf(context):
     # PAGE 2 Pitching
     draw_header(c, "ADVANCED PREGAME REPORT", opponent, 2, logo_path)
     section_bar(c, PAGE_H - 122, "PITCHING PLAN")
-    metric_card(c, 650, PAGE_H - 205, 130, 82, "TEAM BB%", pct(pitch_team.get("BB%",0)), "Walk Rate", pct(bb_lg) if bb_lg is not None else None, pitch_team.get("BB%",0) <= (bb_lg or 1), "BB%")
-    k_lg = lg_pitch.get("K%")
-    metric_card(c, 650, PAGE_H - 295, 130, 82, "TEAM K%", pct(pitch_team.get("K%",0)), "Strikeout Rate", pct(k_lg) if k_lg is not None else None, pitch_team.get("K%",0) >= (k_lg or 0), "K%")
-    draw_pitch_usage_chart(c, 22, PAGE_H - 355, 355, 220, usage_count)
+
+    # Top row: pitch usage chart, overall usage table, and two team cards aligned with the table top.
+    draw_pitch_usage_chart(c, 22, PAGE_H - 350, 360, 210, usage_count)
 
     rows = []
     if usage_overall is not None and not usage_overall.empty:
         for _, r in usage_overall.head(7).iterrows():
-            rows.append([r["Pitch"], pct(r["Usage"]), "-", "-"])
-    draw_table(c, 390, PAGE_H - 355, 245, 220, "PITCH USAGE (OVERALL)", rows, ["Pitch", "Usage", "LG", "Diff"], font_size=6.8, max_rows=7)
-    top_pitch = usage_overall.iloc[0] if usage_overall is not None and not usage_overall.empty else None
-    key = f"Highest pitch usage is {top_pitch['Pitch']} ({pct(top_pitch['Usage'])}). Prepare for it in leverage counts." if top_pitch is not None else "Identify primary pitch patterns by count."
-    draw_key_box(c, 650, PAGE_H - 430, 130, 120, "KEY INSIGHT", key, icon="◎")
+            pitch = r["Pitch"]
+            lg = lg_usage.get(pitch)
+            diff = (r["Usage"] - lg) if lg is not None else None
+            rows.append([
+                pitch,
+                pct(r["Usage"]),
+                pct(lg) if lg is not None else "-",
+                (f"{diff*100:+.1f}%" if diff is not None else "-"),
+            ])
+    draw_table(c, 398, PAGE_H - 350, 240, 210, "PITCH USAGE (OVERALL)", rows, ["Pitch", "Usage", "LG", "Diff"], font_size=6.8, max_rows=7)
 
+    metric_card(c, 652, PAGE_H - 226, 128, 86, "TEAM BB%", pct(pitch_team.get("BB%",0)), "Walk Rate", pct(bb_lg) if bb_lg is not None else None, pitch_team.get("BB%",0) <= (bb_lg or 1), "BB%")
+    k_lg = lg_pitch.get("K%")
+    metric_card(c, 652, PAGE_H - 350, 128, 86, "TEAM K%", pct(pitch_team.get("K%",0)), "Strikeout Rate", pct(k_lg) if k_lg is not None else None, pitch_team.get("K%",0) >= (k_lg or 0), "K%")
+
+    # Middle row: leaderboard tables moved up.
     hi_bb = pitch_leaders[pitch_leaders["PA"] > 0].sort_values("BB%", ascending=False).head(3) if pitch_leaders is not None and not pitch_leaders.empty else pd.DataFrame()
     hi_k = pitch_leaders[pitch_leaders["PA"] > 0].sort_values("K%", ascending=False).head(3) if pitch_leaders is not None and not pitch_leaders.empty else pd.DataFrame()
     bb_rows = [[r.Pitcher, int(r.PA), pct(r["BB%"]), pct(r["K%"]) ] for _, r in hi_bb.iterrows()]
     k_rows = [[r.Pitcher, int(r.PA), pct(r["K%"]), pct(r["BB%"]) ] for _, r in hi_k.iterrows()]
-    draw_table(c, 22, 78, 235, 130, "HIGHEST BB% PITCHERS", bb_rows, ["Pitcher", "PA", "BB%", "K%"], max_rows=3)
-    draw_table(c, 275, 78, 235, 130, "HIGHEST K% PITCHERS", k_rows, ["Pitcher", "PA", "K%", "BB%"], max_rows=3)
+    draw_table(c, 22, 150, 238, 115, "HIGHEST BB% PITCHERS", bb_rows, ["Pitcher", "PA", "BB%", "K%"], max_rows=3)
+    draw_table(c, 278, 150, 238, 115, "HIGHEST K% PITCHERS", k_rows, ["Pitcher", "PA", "K%", "BB%"], max_rows=3)
+
     snap_rows = []
     if pitcher_usage is not None and not pitcher_usage.empty:
-        cols = [c for c in ["CH", "CU", "FA", "FC", "FS", "SI", "SL"] if c in pitcher_usage.columns]
+        cols = [c2 for c2 in ["CH", "CU", "FA", "FC", "FS", "SI", "SL"] if c2 in pitcher_usage.columns]
         for _, r in pitcher_usage.head(5).iterrows():
-            snap_rows.append([r["Pitcher"], int(r["Pitches"])] + [f"{r[c]:.0f}" for c in cols[:5]])
-        draw_table(c, 528, 78, 252, 130, "PITCHER USAGE SNAPSHOT", snap_rows, ["Pitcher", "P"] + cols[:5], font_size=5.8, max_rows=5)
+            snap_rows.append([r["Pitcher"], int(r["Pitches"])] + [f"{r[c2]:.0f}" for c2 in cols[:5]])
+        draw_table(c, 535, 150, 245, 115, "PITCHER USAGE SNAPSHOT", snap_rows, ["Pitcher", "P"] + cols[:5], font_size=5.8, max_rows=5)
+
+    # Long key insight box underneath the tables.
+    top_pitch = usage_overall.iloc[0] if usage_overall is not None and not usage_overall.empty else None
+    if top_pitch is not None:
+        lg_top = lg_usage.get(top_pitch["Pitch"])
+        if lg_top is not None:
+            diff = top_pitch["Usage"] - lg_top
+            key = f"{top_pitch['Pitch']} is used {pct(top_pitch['Usage'])} overall, {diff*100:+.1f} pts vs league. Build the plan around when that pitch shows up by count."
+        else:
+            key = f"Highest overall pitch usage is {top_pitch['Pitch']} at {pct(top_pitch['Usage'])}. Build the plan around when that pitch shows up by count."
+    else:
+        key = "Identify primary pitch patterns by count and force predictable arms into the zone."
+    draw_key_box(c, 22, 55, PAGE_W - 44, 72, "KEY INSIGHT", key, icon="")
     c.showPage()
 
     # PAGE 3 Hitting
@@ -764,7 +841,7 @@ with st.sidebar:
     st.header("Report Setup")
     opponent = st.text_input("Opponent name", value="Opponent")
     uploaded_files = st.file_uploader("Upload all CSVs", type=["csv"], accept_multiple_files=True)
-    st.caption("Expected: Pregame, Copy of Standard, Catching PreGame, Stolen Bases, SBA Count, Pregame Hitting, Rate")
+    st.caption("Expected: Pregame, Copy of Standard, Catching PreGame, Stolen Bases, SBA Count, Pregame Hitting, Rate, Pitch Usage")
 
 files = detect_files(uploaded_files)
 if uploaded_files:
@@ -781,6 +858,7 @@ stolen = read_csv_file(files["stolen_bases"]) if "stolen_bases" in files else pd
 sba_count = read_csv_file(files["sba_count"]) if "sba_count" in files else pd.DataFrame()
 league_hitting = read_csv_file(files["league_hitting"]) if "league_hitting" in files else pd.DataFrame()
 league_pitching = read_csv_file(files["league_pitching"]) if "league_pitching" in files else pd.DataFrame()
+league_pitch_usage = read_csv_file(files["league_pitch_usage"]) if "league_pitch_usage" in files else pd.DataFrame()
 
 hit_team, swing_by_count, hitter_swing, hitters = build_hitting(pregame)
 pitch_team, usage_count, usage_overall, pitcher_usage, pitch_leaders = build_pitching(standard)
@@ -788,8 +866,9 @@ catch_team, catchers = build_catching(catching)
 run_team, run_counts, runners = build_running(stolen, sba_count)
 lg_hit = league_hitting_baseline(league_hitting)
 lg_pitch = league_pitching_baseline(league_pitching)
+lg_usage = league_pitch_usage_baseline(league_pitch_usage)
 
-logo_path = "Rangers.png"
+logo_path = find_logo_path()
 context = dict(
     opponent=opponent,
     logo_path=logo_path,
@@ -809,6 +888,7 @@ context = dict(
     runners=runners,
     lg_hit=lg_hit,
     lg_pitch=lg_pitch,
+    lg_usage=lg_usage,
 )
 
 c1, c2, c3, c4 = st.columns(4)
