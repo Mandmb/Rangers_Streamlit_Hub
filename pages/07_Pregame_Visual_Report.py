@@ -642,8 +642,30 @@ def draw_table(c, x, y, w, h, title, rows, headers, font_size=6.4, max_rows=6, h
 
             c.drawCentredString(x + 6 + col_w*i + col_w/2, yy + 5, text)
 
+def _wrap_lines_for_canvas(c, text, max_w, font="Helvetica", size=8):
+    """Wrap text to fit reportlab canvas width."""
+    lines = []
+    for paragraph in str(text).split("\n"):
+        paragraph = paragraph.strip()
+        if not paragraph:
+            continue
+        words = paragraph.split()
+        line = ""
+        for word in words:
+            test = (line + " " + word).strip()
+            if c.stringWidth(test, font, size) <= max_w:
+                line = test
+            else:
+                if line:
+                    lines.append(line)
+                line = word
+        if line:
+            lines.append(line)
+    return lines
+
+
 def draw_key_box(c, x, y, w, h, title, text, icon="◎"):
-    """Draw a key insight box. Supports short multi-line bullet text without changing layout."""
+    """Draw a key insight box. Fits bullet text safely inside the box."""
     round_rect(c, x, y, w, h, fill=LIGHT_BLUE, stroke=BORDER, radius=8)
     text_x = x + 72
     text_w = w - 84
@@ -657,26 +679,28 @@ def draw_key_box(c, x, y, w, h, title, text, icon="◎"):
 
     c.setFillColor(NAVY)
     c.setFont("Helvetica-Bold", 9)
-    c.drawString(text_x, y + h - 24, title)
+    c.drawString(text_x, y + h - 20, title)
 
-    # Fit more useful scouting notes without overflowing the existing box.
-    available_lines = max(2, int((h - 38) / 10))
-    yy = y + h - 41
-    used = 0
-    for raw in str(text).split("\n"):
+    # Smaller font in narrow key boxes prevents bottom overflow on Hitting Summary.
+    body_size = 7.0 if w < 310 else 7.8
+    leading = 8.4 if w < 310 else 9.6
+    yy = y + h - 34
+    min_y = y + 10
+    c.setFont("Helvetica-Bold", body_size)
+    c.setFillColor(BLACK)
+
+    raw_lines = str(text).split("\n")
+    for raw in raw_lines:
         raw = raw.strip()
-        if not raw or used >= available_lines:
+        if not raw:
             continue
-        if not raw.startswith("•") and "\n" in str(text):
-            raw = "• " + raw
-        before = yy
-        yy = draw_wrapped(
-            c, raw, text_x, yy, text_w,
-            font="Helvetica-Bold", size=8.0, leading=10,
-            max_lines=max(1, available_lines - used)
-        ) - 2
-        used += max(1, int(round((before - yy) / 10)))
-
+        wrapped = _wrap_lines_for_canvas(c, raw, text_w, font="Helvetica-Bold", size=body_size)
+        for line in wrapped:
+            if yy < min_y:
+                return
+            c.drawString(text_x, yy, line)
+            yy -= leading
+        yy -= 1.5
 
 def draw_pitch_usage_chart(c, x, y, w, h, usage_count):
     round_rect(c, x, y, w, h, fill=WHITE, stroke=BORDER, radius=7)
@@ -747,21 +771,26 @@ def draw_swing_grid(c, x, y, w, h, swing_by_count):
     if swing_by_count is not None and not swing_by_count.empty:
         lookup = dict(zip(swing_by_count["Count"], swing_by_count["SwingPct"]))
 
+    # Use more of the available white space so the count/value boxes breathe.
     cols, rows = 4, 3
-    cell_w = (w - 28) / cols
-    cell_h = (h - 42) / rows
+    pad_x = 13
+    pad_top = 31
+    pad_bottom = 12
+    gap_x = 7
+    gap_y = 7
+    cell_w = (w - 2 * pad_x - (cols - 1) * gap_x) / cols
+    cell_h = (h - pad_top - pad_bottom - (rows - 1) * gap_y) / rows
     for i, cnt in enumerate(COUNTS):
         col, row = i % cols, i // cols
-        cx = x + 14 + col * cell_w
-        cy = y + h - 36 - (row + 1) * cell_h
-        round_rect(c, cx, cy, cell_w - 7, cell_h - 6, fill=GRAY, stroke=HexColor("#E2E8F0"), radius=4)
-        # count higher in each box
+        cx = x + pad_x + col * (cell_w + gap_x)
+        cy = y + h - pad_top - (row + 1) * cell_h - row * gap_y
+        round_rect(c, cx, cy, cell_w, cell_h, fill=GRAY, stroke=HexColor("#E2E8F0"), radius=5)
+        # Count acts like the header of the mini-card; value is separated below.
         c.setFillColor(NAVY)
         c.setFont("Helvetica-Bold", 7.2)
-        c.drawCentredString(cx + (cell_w-7)/2, cy + cell_h - 15, cnt)
-        c.setFont("Helvetica-Bold", 10.5)
-        c.drawCentredString(cx + (cell_w-7)/2, cy + 8, pct(lookup.get(cnt, 0)))
-
+        c.drawCentredString(cx + cell_w/2, cy + cell_h - 10, cnt)
+        c.setFont("Helvetica-Bold", 10.8)
+        c.drawCentredString(cx + cell_w/2, cy + 8, pct(lookup.get(cnt, 0)))
 
 def draw_sba_grid(c, x, y, w, h, team_counts):
     round_rect(c, x, y, w, h, fill=WHITE, stroke=BORDER, radius=7)
@@ -774,21 +803,25 @@ def draw_sba_grid(c, x, y, w, h, team_counts):
         team_counts["Count"] = team_counts["Count"].astype(str)
         lookup = dict(zip(team_counts["Count"], pd.to_numeric(team_counts["SBA"], errors="coerce").fillna(0)))
 
+    # Same improved spacing as Swing Rate by Count.
     cols, rows = 4, 3
-    cell_w = (w - 28) / cols
-    cell_h = (h - 42) / rows
+    pad_x = 13
+    pad_top = 31
+    pad_bottom = 12
+    gap_x = 7
+    gap_y = 7
+    cell_w = (w - 2 * pad_x - (cols - 1) * gap_x) / cols
+    cell_h = (h - pad_top - pad_bottom - (rows - 1) * gap_y) / rows
     for i, cnt in enumerate(COUNTS):
         col, row = i % cols, i // cols
-        cx = x + 14 + col * cell_w
-        cy = y + h - 36 - (row + 1) * cell_h
-        round_rect(c, cx, cy, cell_w - 7, cell_h - 6, fill=GRAY, stroke=HexColor("#E2E8F0"), radius=4)
-        # count higher in each box
+        cx = x + pad_x + col * (cell_w + gap_x)
+        cy = y + h - pad_top - (row + 1) * cell_h - row * gap_y
+        round_rect(c, cx, cy, cell_w, cell_h, fill=GRAY, stroke=HexColor("#E2E8F0"), radius=5)
         c.setFillColor(NAVY)
         c.setFont("Helvetica-Bold", 7.2)
-        c.drawCentredString(cx + (cell_w-7)/2, cy + cell_h - 15, cnt)
+        c.drawCentredString(cx + cell_w/2, cy + cell_h - 10, cnt)
         c.setFont("Helvetica-Bold", 13)
-        c.drawCentredString(cx + (cell_w-7)/2, cy + 8, str(int(lookup.get(cnt, 0))))
-
+        c.drawCentredString(cx + cell_w/2, cy + 7, str(int(lookup.get(cnt, 0))))
 
 def concise(text, max_words=11):
     words = str(text).split()
@@ -876,6 +909,13 @@ def build_hitting_key_insight(hit_team, lg_hit, swing_by_count, hitters, min_hit
         low = swing_by_count.sort_values("SwingPct", ascending=True).iloc[0]
         lines.append(f"Most aggressive count is {top['Count']} ({pct(top['SwingPct'])}); expand or change eye level there.")
         lines.append(f"Most passive count is {low['Count']} ({pct(low['SwingPct'])}); attack the zone for early strikes.")
+    swing = hit_team.get("Swing%", 0)
+    lg_swing = lg_hit.get("Swing%") if isinstance(lg_hit, dict) else None
+    if lg_swing is not None:
+        if swing >= lg_swing:
+            lines.append(f"Swing% is {pct(swing)} vs {pct(lg_swing)} league; expect aggression in the zone.")
+        else:
+            lines.append(f"Swing% is {pct(swing)} vs {pct(lg_swing)} league; steal early strikes.")
     ops = hit_team.get("OPS", 0)
     lg_ops = lg_hit.get("OPS") if isinstance(lg_hit, dict) else None
     if lg_ops is not None:
@@ -1026,7 +1066,9 @@ def build_visual_pdf(context):
     draw_header(c, "ADVANCED PREGAME REPORT", opponent, 3, logo_path)
     section_bar(c, PAGE_H - 122, "HITTING SUMMARY")
     draw_swing_grid(c, 22, PAGE_H - 276, 340, 140, swing_by_count)
-    metric_card(c, 378, PAGE_H - 276, 120, 140, "HITTER SWING%", pct(hit_team.get("Swing%",0)), "Overall", pct(lg_hit.get("Swing%")) if lg_hit.get("Swing%") is not None else None, True, "Swing Rate")
+    swing_lg = lg_hit.get("Swing%") if isinstance(lg_hit, dict) else None
+    swing_better = hit_team.get("Swing%", 0) >= swing_lg if swing_lg is not None else True
+    metric_card(c, 378, PAGE_H - 276, 120, 140, "HITTER SWING%", pct(hit_team.get("Swing%",0)), "Overall", pct(swing_lg) if swing_lg is not None else None, swing_better, "Swing Rate")
     key = build_hitting_key_insight(hit_team, lg_hit, swing_by_count, hitters, min_hitter_pa)
     draw_key_box(c, 514, PAGE_H - 276, 266, 140, "KEY INSIGHT", key, icon="")
 
