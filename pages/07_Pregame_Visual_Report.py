@@ -762,6 +762,39 @@ def draw_pitch_usage_chart(c, x, y, w, h, usage_count):
         lx += 35
 
 
+
+def _grid_fill_color(value, values, mode="rate"):
+    """Return subtle heat fill for count grids."""
+    try:
+        v = float(value)
+    except Exception:
+        return GRAY
+    vals = [float(x) for x in values if x is not None and not pd.isna(x)]
+    if not vals:
+        return GRAY
+    lo, hi = min(vals), max(vals)
+    if hi == lo:
+        return GRAY
+    q = (v - lo) / (hi - lo)
+    if mode == "sba":
+        if q >= 0.75: return HexColor("#F8CACA")
+        if q >= 0.45: return HexColor("#FDECEC")
+        return HexColor("#F8FAFC")
+    else:
+        if q >= 0.75: return HexColor("#D8F3DC")
+        if q >= 0.45: return HexColor("#E8F5E9")
+        if q <= 0.20: return HexColor("#FDECEC")
+        return HexColor("#F8FAFC")
+
+def _bucket_rate(lookup, counts):
+    vals = [lookup.get(c) for c in counts if lookup.get(c) is not None]
+    vals = [float(v) for v in vals if not pd.isna(v)]
+    return sum(vals) / len(vals) if vals else 0
+
+def _bucket_sum(lookup, counts):
+    vals = [lookup.get(c, 0) for c in counts]
+    return int(sum([float(v) for v in vals if not pd.isna(v)]))
+
 def draw_swing_grid(c, x, y, w, h, swing_by_count):
     round_rect(c, x, y, w, h, fill=WHITE, stroke=BORDER, radius=7)
     c.setFillColor(NAVY)
@@ -769,28 +802,42 @@ def draw_swing_grid(c, x, y, w, h, swing_by_count):
     c.drawCentredString(x + w/2, y + h - 15, "SWING RATE BY COUNT")
     lookup = {}
     if swing_by_count is not None and not swing_by_count.empty:
-        lookup = dict(zip(swing_by_count["Count"], swing_by_count["SwingPct"]))
+        lookup = dict(zip(swing_by_count["Count"].astype(str), swing_by_count["SwingPct"]))
 
-    # Use more of the available white space so the count/value boxes breathe.
+    # 4x3 grid with better spacing and heat shading
     cols, rows = 4, 3
-    pad_x = 13
-    pad_top = 31
-    pad_bottom = 12
-    gap_x = 7
-    gap_y = 7
-    cell_w = (w - 2 * pad_x - (cols - 1) * gap_x) / cols
-    cell_h = (h - pad_top - pad_bottom - (rows - 1) * gap_y) / rows
+    grid_top = y + h - 34
+    grid_bottom = y + 30
+    cell_w = (w - 36) / cols
+    cell_h = (grid_top - grid_bottom) / rows
+    vals = [lookup.get(cnt, 0) for cnt in COUNTS]
     for i, cnt in enumerate(COUNTS):
         col, row = i % cols, i // cols
-        cx = x + pad_x + col * (cell_w + gap_x)
-        cy = y + h - pad_top - (row + 1) * cell_h - row * gap_y
-        round_rect(c, cx, cy, cell_w, cell_h, fill=GRAY, stroke=HexColor("#E2E8F0"), radius=5)
-        # Count acts like the header of the mini-card; value is separated below.
+        cx = x + 18 + col * cell_w
+        cy = grid_top - (row + 1) * cell_h
+        fill = _grid_fill_color(lookup.get(cnt, 0), vals, mode="rate")
+        round_rect(c, cx, cy + 3, cell_w - 9, cell_h - 7, fill=fill, stroke=HexColor("#D7DEE8"), radius=5)
         c.setFillColor(NAVY)
-        c.setFont("Helvetica-Bold", 7.2)
-        c.drawCentredString(cx + cell_w/2, cy + cell_h - 10, cnt)
-        c.setFont("Helvetica-Bold", 10.8)
-        c.drawCentredString(cx + cell_w/2, cy + 8, pct(lookup.get(cnt, 0)))
+        c.setFont("Helvetica-Bold", 7.3)
+        c.drawCentredString(cx + (cell_w-9)/2, cy + cell_h - 13, cnt)
+        c.setFillColor(DARK)
+        c.setFont("Helvetica-Bold", 10.2)
+        c.drawCentredString(cx + (cell_w-9)/2, cy + 11, pct(lookup.get(cnt, 0)))
+
+    # Count bucket summary inside the card
+    hitter_counts = ["1-0", "2-0", "2-1", "3-1"]
+    even_counts = ["0-0", "1-1", "2-2", "3-2"]
+    pitcher_counts = ["0-1", "0-2", "1-2"]
+    buckets = [("Hitter", _bucket_rate(lookup, hitter_counts)), ("Even", _bucket_rate(lookup, even_counts)), ("Pitcher", _bucket_rate(lookup, pitcher_counts))]
+    bx_w = (w - 44) / 3
+    for i, (lab, val) in enumerate(buckets):
+        bx = x + 18 + i * (bx_w + 4)
+        round_rect(c, bx, y + 8, bx_w, 16, fill=HexColor("#F8FAFC"), stroke=HexColor("#E2E8F0"), radius=4)
+        c.setFillColor(NAVY)
+        c.setFont("Helvetica-Bold", 5.8)
+        c.drawString(bx + 5, y + 13, lab)
+        c.setFillColor(DARK)
+        c.drawRightString(bx + bx_w - 5, y + 13, pct(val))
 
 def draw_sba_grid(c, x, y, w, h, team_counts):
     round_rect(c, x, y, w, h, fill=WHITE, stroke=BORDER, radius=7)
@@ -803,26 +850,38 @@ def draw_sba_grid(c, x, y, w, h, team_counts):
         team_counts["Count"] = team_counts["Count"].astype(str)
         lookup = dict(zip(team_counts["Count"], pd.to_numeric(team_counts["SBA"], errors="coerce").fillna(0)))
 
-    # Same improved spacing as Swing Rate by Count.
     cols, rows = 4, 3
-    pad_x = 13
-    pad_top = 31
-    pad_bottom = 12
-    gap_x = 7
-    gap_y = 7
-    cell_w = (w - 2 * pad_x - (cols - 1) * gap_x) / cols
-    cell_h = (h - pad_top - pad_bottom - (rows - 1) * gap_y) / rows
+    grid_top = y + h - 34
+    grid_bottom = y + 31
+    cell_w = (w - 36) / cols
+    cell_h = (grid_top - grid_bottom) / rows
+    vals = [lookup.get(cnt, 0) for cnt in COUNTS]
     for i, cnt in enumerate(COUNTS):
         col, row = i % cols, i // cols
-        cx = x + pad_x + col * (cell_w + gap_x)
-        cy = y + h - pad_top - (row + 1) * cell_h - row * gap_y
-        round_rect(c, cx, cy, cell_w, cell_h, fill=GRAY, stroke=HexColor("#E2E8F0"), radius=5)
+        cx = x + 18 + col * cell_w
+        cy = grid_top - (row + 1) * cell_h
+        fill = _grid_fill_color(lookup.get(cnt, 0), vals, mode="sba")
+        round_rect(c, cx, cy + 3, cell_w - 9, cell_h - 7, fill=fill, stroke=HexColor("#D7DEE8"), radius=5)
         c.setFillColor(NAVY)
-        c.setFont("Helvetica-Bold", 7.2)
-        c.drawCentredString(cx + cell_w/2, cy + cell_h - 10, cnt)
-        c.setFont("Helvetica-Bold", 13)
-        c.drawCentredString(cx + cell_w/2, cy + 7, str(int(lookup.get(cnt, 0))))
+        c.setFont("Helvetica-Bold", 7.3)
+        c.drawCentredString(cx + (cell_w-9)/2, cy + cell_h - 13, cnt)
+        c.setFillColor(DARK)
+        c.setFont("Helvetica-Bold", 11)
+        c.drawCentredString(cx + (cell_w-9)/2, cy + 10, str(int(lookup.get(cnt, 0))))
 
+    hitter_counts = ["1-0", "2-0", "2-1", "3-1"]
+    even_counts = ["0-0", "1-1", "2-2", "3-2"]
+    pitcher_counts = ["0-1", "0-2", "1-2"]
+    buckets = [("Hitter", _bucket_sum(lookup, hitter_counts)), ("Even", _bucket_sum(lookup, even_counts)), ("Pitcher", _bucket_sum(lookup, pitcher_counts))]
+    bx_w = (w - 44) / 3
+    for i, (lab, val) in enumerate(buckets):
+        bx = x + 18 + i * (bx_w + 4)
+        round_rect(c, bx, y + 8, bx_w, 16, fill=HexColor("#F8FAFC"), stroke=HexColor("#E2E8F0"), radius=4)
+        c.setFillColor(NAVY)
+        c.setFont("Helvetica-Bold", 5.8)
+        c.drawString(bx + 5, y + 13, lab)
+        c.setFillColor(DARK)
+        c.drawRightString(bx + bx_w - 5, y + 13, str(val))
 def concise(text, max_words=11):
     words = str(text).split()
     return " ".join(words[:max_words]) + ("." if len(words) > max_words else "")
@@ -959,6 +1018,90 @@ def build_running_key_insight(run_counts, run_team, runners, catch_team, catcher
     lines.append(f"Catcher CS% is {pct(cs)}; take extra bases only when jumps/timing are clean.")
     return "\n".join(lines[:5])
 
+
+def draw_plan_box(c, x, y, w, h, title, lines):
+    round_rect(c, x, y, w, h, fill=WHITE, stroke=BORDER, radius=8)
+    round_rect(c, x, y + h - 22, w, 22, fill=NAVY, stroke=NAVY, radius=6)
+    c.setFillColor(WHITE)
+    c.setFont("Helvetica-Bold", 8.5)
+    c.drawCentredString(x + w / 2, y + h - 15, title)
+    yy = y + h - 35
+    for line in lines[:4]:
+        c.setFillColor(RED)
+        c.circle(x + 13, yy + 3, 1.7, fill=1, stroke=0)
+        yy = draw_wrapped(c, line, x + 22, yy + 7, w - 34, font="Helvetica-Bold", size=7.2, leading=9, max_lines=2) - 5
+
+def build_primary_threat_lines(hitters, runners, pitch_leaders, min_hitter_pa=30, min_pitcher_pa=20):
+    lines = []
+    if hitters is not None and not hitters.empty:
+        q = hitters[hitters["PA"] >= min_hitter_pa].copy()
+        if q.empty:
+            q = hitters.copy()
+        bats = q.sort_values("OPS", ascending=False).head(2)
+        if not bats.empty:
+            txt = ", ".join([f"{r.Player} {num(r.OPS)} OPS" for _, r in bats.iterrows()])
+            lines.append(f"Bats: {txt}")
+    if runners is not None and not runners.empty:
+        run = runners.sort_values("SBA", ascending=False).head(2)
+        if not run.empty:
+            txt = ", ".join([f"{r.Runner} {int(r.SBA)} SBA" for _, r in run.iterrows()])
+            lines.append(f"Runners: {txt}")
+    if pitch_leaders is not None and not pitch_leaders.empty:
+        q = pitch_leaders[pitch_leaders["PA"] >= min_pitcher_pa].copy()
+        if not q.empty:
+            arms = q.sort_values("BB%", ascending=False).head(2)
+            txt = ", ".join([f"{r.Pitcher} {pct(r['BB%'])} BB%" for _, r in arms.iterrows()])
+            lines.append(f"Pressure: {txt}")
+    return lines[:4]
+
+def build_pitching_plan_lines(usage_count, usage_overall, pitch_leaders, min_pitcher_pa):
+    lines = []
+    if usage_overall is not None and not usage_overall.empty:
+        top_pitch = usage_overall.iloc[0]["Pitch"]
+        counts = _top_usage_counts(usage_count, top_pitch, 2)
+        if counts:
+            lines.append(f"Expect {top_pitch} in {counts}; be ready early.")
+        else:
+            lines.append(f"Build approach around heavy {top_pitch} usage.")
+    if pitch_leaders is not None and not pitch_leaders.empty:
+        q = pitch_leaders[pitch_leaders["PA"] >= min_pitcher_pa].sort_values("BB%", ascending=False).head(2)
+        if not q.empty:
+            names = ", ".join([str(x) for x in q["Pitcher"].tolist()])
+            lines.append(f"Force {names} into the zone; do not expand early.")
+    lines.append("Protect against elevated secondary usage in advantage counts.")
+    return lines
+
+def build_hitting_plan_lines(swing_by_count, hitters, min_hitter_pa):
+    lines = []
+    if swing_by_count is not None and not swing_by_count.empty:
+        top = swing_by_count.sort_values("SwingPct", ascending=False).iloc[0]
+        low = swing_by_count.sort_values("SwingPct", ascending=True).iloc[0]
+        lines.append(f"Expand/change eye level in {top['Count']} counts.")
+        lines.append(f"Attack zone in {low['Count']} counts; they are more passive.")
+    if hitters is not None and not hitters.empty:
+        q = hitters[hitters["PA"] >= min_hitter_pa].copy()
+        if q.empty:
+            q = hitters.copy()
+        bats = q.sort_values("OPS", ascending=False).head(2)
+        if not bats.empty:
+            names = ", ".join([str(x) for x in bats["Player"].tolist()])
+            lines.append(f"Do not let {names} create extra-base damage.")
+    return lines
+
+def build_running_plan_lines(run_counts, runners):
+    lines = []
+    if run_counts is not None and not run_counts.empty:
+        rc = run_counts.copy()
+        rc["SBA"] = pd.to_numeric(rc["SBA"], errors="coerce").fillna(0)
+        top = rc.sort_values("SBA", ascending=False).iloc[0]
+        lines.append(f"Control tempo in {top['Count']} counts; most SBA volume there.")
+    if runners is not None and not runners.empty:
+        vols = runners.sort_values("SBA", ascending=False).head(2)["Runner"].astype(str).tolist()
+        if vols:
+            lines.append(f"Hold/slide-step with {', '.join(vols)} aboard.")
+    lines.append("Vary looks and times before first movement.")
+    return lines
+
 def build_visual_pdf(context):
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=landscape(letter))
@@ -989,32 +1132,44 @@ def build_visual_pdf(context):
     metric_card(c, x0 + 2*(card_w+gap), y, card_w, 98, "TEAM BASERUNNING", pct(run_team.get("SB%",0)), "SB Success", pct(run_lg) if run_lg is not None else None, run_team.get("SB%",0) >= (run_lg or 0), "SB%")
     metric_card(c, x0 + 3*(card_w+gap), y, card_w, 98, "TEAM CATCHING", pct(catch_team.get("CS%",0)), "Caught Stealing", pct(catch_lg) if catch_lg is not None else None, catch_team.get("CS%",0) >= (catch_lg or 0), "CS%")
 
-    # Takeaways and Game plan, balanced with fixed line limits
+    # Takeaways, Primary Threats, and Game Plan
     tx_y = 75; box_h = 220
-    round_rect(c, 22, tx_y, 345, box_h, fill=WHITE, stroke=BORDER, radius=8)
-    round_rect(c, 22, tx_y + box_h - 28, 345, 28, fill=NAVY, stroke=NAVY, radius=8)
-    c.setFillColor(WHITE); c.setFont("Helvetica-Bold", 13); c.drawCentredString(194, tx_y + box_h - 19, "KEY TAKEAWAYS")
-    yy = tx_y + box_h - 62
-    for item in insights:
-        c.setFillColor(RED)
-        c.circle(48, yy + 4, 2.2, fill=1, stroke=0)
-        yy = draw_wrapped(c, item, 64, yy + 8, 270, font="Helvetica-Bold", size=9, leading=13, max_lines=2) - 16
+    left_w, mid_w, right_w = 245, 245, 250
+    round_rect(c, 22, tx_y, left_w, box_h, fill=WHITE, stroke=BORDER, radius=8)
+    round_rect(c, 22, tx_y + box_h - 28, left_w, 28, fill=NAVY, stroke=NAVY, radius=8)
+    c.setFillColor(WHITE); c.setFont("Helvetica-Bold", 12); c.drawCentredString(22 + left_w/2, tx_y + box_h - 19, "KEY TAKEAWAYS")
+    yy = tx_y + box_h - 58
+    for item in insights[:4]:
+        c.setFillColor(RED); c.circle(42, yy + 4, 2.0, fill=1, stroke=0)
+        yy = draw_wrapped(c, item, 56, yy + 8, left_w - 72, font="Helvetica-Bold", size=7.8, leading=11, max_lines=2) - 10
 
-    round_rect(c, 382, tx_y, PAGE_W - 404, box_h, fill=WHITE, stroke=BORDER, radius=8)
-    round_rect(c, 382, tx_y + box_h - 28, PAGE_W - 404, 28, fill=NAVY, stroke=NAVY, radius=8)
-    c.setFillColor(WHITE); c.setFont("Helvetica-Bold", 13); c.drawCentredString(585, tx_y + box_h - 19, "GAME PLAN")
-    plan = [
-        ("PITCHING APPROACH", "Attack early, then expand when counts favor us."),
-        ("DEFENSIVE APPROACH", "Control steal counts with tempo, holds, and quick exchanges."),
-        ("OFFENSIVE APPROACH", "Force their staff into the zone; target high-BB arms."),
-        ("KEY MATCHUPS", f"Circle {hitters.iloc[0]['Player'] if not hitters.empty else 'top OPS bat'} as primary threat."),
-        ("BOTTOM LINE", "Win counts, control the running game, execute the plan."),
-    ]
+    px = 282
+    round_rect(c, px, tx_y, mid_w, box_h, fill=WHITE, stroke=BORDER, radius=8)
+    round_rect(c, px, tx_y + box_h - 28, mid_w, 28, fill=NAVY, stroke=NAVY, radius=8)
+    c.setFillColor(WHITE); c.setFont("Helvetica-Bold", 12); c.drawCentredString(px + mid_w/2, tx_y + box_h - 19, "PRIMARY THREATS")
+    threat_lines = build_primary_threat_lines(hitters, runners, pitch_leaders, min_hitter_pa, min_pitcher_pa)
     yy = tx_y + box_h - 55
+    for line in threat_lines:
+        c.setFillColor(RED); c.circle(px + 18, yy + 4, 2.0, fill=1, stroke=0)
+        yy = draw_wrapped(c, line, px + 32, yy + 8, mid_w - 46, font="Helvetica-Bold", size=7.6, leading=10, max_lines=3) - 12
+    win_condition = "Win condition: force high-BB arms into the zone, neutralize the top runners, and avoid damage from the primary OPS bats."
+    draw_wrapped(c, win_condition, px + 18, tx_y + 35, mid_w - 36, font="Helvetica-Bold", size=7.4, leading=10, color=NAVY, max_lines=4)
+
+    gx = 542
+    round_rect(c, gx, tx_y, right_w, box_h, fill=WHITE, stroke=BORDER, radius=8)
+    round_rect(c, gx, tx_y + box_h - 28, right_w, 28, fill=NAVY, stroke=NAVY, radius=8)
+    c.setFillColor(WHITE); c.setFont("Helvetica-Bold", 12); c.drawCentredString(gx + right_w/2, tx_y + box_h - 19, "GAME PLAN")
+    plan = [
+        ("PITCHING", "Attack early, then expand when counts favor us."),
+        ("DEFENSE", "Control steal counts with tempo, holds, and quick exchanges."),
+        ("OFFENSE", "Force their staff into the zone; target high-BB arms."),
+        ("BOTTOM LINE", "Win counts, control the run game, execute the plan."),
+    ]
+    yy = tx_y + box_h - 54
     for title, text in plan:
-        c.setFillColor(RED); c.setFont("Helvetica-Bold", 8.5); c.drawString(410, yy, title)
-        draw_wrapped(c, text, 410, yy - 12, 320, size=8.5, leading=10, max_lines=2)
-        yy -= 34
+        c.setFillColor(RED); c.setFont("Helvetica-Bold", 8); c.drawString(gx + 16, yy, title)
+        draw_wrapped(c, text, gx + 16, yy - 11, right_w - 32, size=7.6, leading=9, max_lines=2)
+        yy -= 37
     c.showPage()
 
     # PAGE 2 Pitching
@@ -1057,9 +1212,10 @@ def build_visual_pdf(context):
             snap_rows.append([r["Pitcher"], int(r["Pitches"])] + [f"{r[c2]:.0f}" for c2 in cols[:5]])
         draw_table(c, 535, 122, 245, 112, "PITCHER USAGE SNAPSHOT", snap_rows, ["Pitcher", "P"] + cols[:5], font_size=5.8, max_rows=5)
 
-    # Long key insight box underneath the tables.
+    # Long key insight and action plan boxes underneath the tables.
     key = build_pitching_key_insight(pitch_team, lg_pitch, usage_overall, lg_usage, pitch_leaders, min_pitcher_pa, usage_count)
-    draw_key_box(c, 22, 35, PAGE_W - 44, 74, "KEY INSIGHT", key, icon="")
+    draw_key_box(c, 22, 35, 500, 74, "KEY INSIGHT", key, icon="")
+    draw_plan_box(c, 535, 35, 245, 74, "ATTACK PLAN", build_pitching_plan_lines(usage_count, usage_overall, pitch_leaders, min_pitcher_pa))
     c.showPage()
 
     # PAGE 3 Hitting
@@ -1070,7 +1226,8 @@ def build_visual_pdf(context):
     swing_better = hit_team.get("Swing%", 0) >= swing_lg if swing_lg is not None else True
     metric_card(c, 378, PAGE_H - 276, 120, 140, "HITTER SWING%", pct(hit_team.get("Swing%",0)), "Overall", pct(swing_lg) if swing_lg is not None else None, swing_better, "Swing Rate")
     key = build_hitting_key_insight(hit_team, lg_hit, swing_by_count, hitters, min_hitter_pa)
-    draw_key_box(c, 514, PAGE_H - 276, 266, 140, "KEY INSIGHT", key, icon="")
+    draw_key_box(c, 514, PAGE_H - 240, 266, 104, "KEY INSIGHT", key, icon="")
+    draw_plan_box(c, 514, PAGE_H - 276, 266, 31, "PITCHING PLAN", build_hitting_plan_lines(swing_by_count, hitters, min_hitter_pa)[:1])
 
     q_hitters = hitters[hitters["PA"] >= min_hitter_pa].copy() if hitters is not None and not hitters.empty else pd.DataFrame()
     top3 = q_hitters.sort_values("OPS", ascending=False).head(3) if not q_hitters.empty else pd.DataFrame()
@@ -1101,9 +1258,10 @@ def build_visual_pdf(context):
     metric_card(c, 280, PAGE_H - 215, 240, 82, "TEAM SB SUCCESS %", pct(run_team.get("SB%",0)), "Baserunning", pct(run_lg) if run_lg is not None else None, run_team.get("SB%",0) >= (run_lg or 0), "SB%")
     run_key = build_running_key_insight(run_counts, run_team, runners, catch_team, catchers)
     draw_key_box(c, 540, PAGE_H - 215, 240, 82, "KEY INSIGHT", run_key, icon="")
-    draw_sba_grid(c, 22, PAGE_H - 380, 360, 145, run_counts)
+    draw_sba_grid(c, 22, PAGE_H - 388, 360, 153, run_counts)
     c_rows = [[r.Catcher, int(r.SBA), int(r.CS), int(r.SB), pct(r["CS%"])] for _, r in catchers.head(5).iterrows()] if catchers is not None and not catchers.empty else []
-    draw_table(c, 405, PAGE_H - 380, 375, 145, "CATCHER LEADERBOARD (BY CS%)", c_rows, ["Catcher", "SBA", "CS", "SB", "CS%"], font_size=6.2, max_rows=5)
+    draw_table(c, 405, PAGE_H - 388, 180, 153, "CATCHER LEADERBOARD (BY CS%)", c_rows, ["Catcher", "SBA", "CS", "SB", "CS%"], font_size=5.6, max_rows=5)
+    draw_plan_box(c, 600, PAGE_H - 388, 180, 153, "RUNNING GAME PLAN", build_running_plan_lines(run_counts, runners))
     r_rows = [[r.Runner, int(r.SBA), int(r.SB), pct(r["SB%"])] for _, r in runners.head(7).iterrows()] if runners is not None and not runners.empty else []
     draw_table(c, 22, 80, 758, 135, "INDIVIDUAL RUNNER TENDENCIES (SB%)", r_rows, ["Runner", "SBA", "SB", "SB%"], font_size=6.5, max_rows=7)
     c.showPage()
