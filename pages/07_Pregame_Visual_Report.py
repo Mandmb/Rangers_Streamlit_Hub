@@ -754,6 +754,8 @@ def build_visual_pdf(context):
     logo_path = context.get("logo_path", "Rangers.png")
     hit_team = context["hit_team"]; pitch_team = context["pitch_team"]; catch_team = context["catch_team"]; run_team = context["run_team"]
     lg_hit = context["lg_hit"]; lg_pitch = context["lg_pitch"]; lg_usage = context.get("lg_usage", {})
+    min_hitter_pa = int(context.get("min_hitter_pa", 30) or 0)
+    min_pitcher_pa = int(context.get("min_pitcher_pa", 20) or 0)
     usage_count = context["usage_count"]; usage_overall = context["usage_overall"]; pitcher_usage = context["pitcher_usage"]; pitch_leaders = context["pitch_leaders"]
     swing_by_count = context["swing_by_count"]; hitters = context["hitters"]
     catchers = context["catchers"]; run_counts = context["run_counts"]; runners = context["runners"]
@@ -801,7 +803,7 @@ def build_visual_pdf(context):
 
     # PAGE 2 Pitching
     draw_header(c, "ADVANCED PREGAME REPORT", opponent, 2, logo_path)
-    section_bar(c, PAGE_H - 122, "PITCHING PLAN")
+    section_bar(c, PAGE_H - 122, "PITCHING SUMMARY")
 
     # Top row: pitch usage chart, overall usage table, and two team cards aligned with the table top.
     draw_pitch_usage_chart(c, 22, PAGE_H - 350, 360, 210, usage_count)
@@ -825,12 +827,12 @@ def build_visual_pdf(context):
     metric_card(c, 652, PAGE_H - 350, 128, 86, "TEAM K%", pct(pitch_team.get("K%",0)), "Strikeout Rate", pct(k_lg) if k_lg is not None else None, pitch_team.get("K%",0) >= (k_lg or 0), "K%")
 
     # Middle row: leaderboard tables moved up.
-    hi_bb = pitch_leaders[pitch_leaders["PA"] > 0].sort_values("BB%", ascending=False).head(3) if pitch_leaders is not None and not pitch_leaders.empty else pd.DataFrame()
-    hi_k = pitch_leaders[pitch_leaders["PA"] > 0].sort_values("K%", ascending=False).head(3) if pitch_leaders is not None and not pitch_leaders.empty else pd.DataFrame()
+    hi_bb = pitch_leaders[pitch_leaders["PA"] >= min_pitcher_pa].sort_values("BB%", ascending=False).head(3) if pitch_leaders is not None and not pitch_leaders.empty else pd.DataFrame()
+    hi_k = pitch_leaders[pitch_leaders["PA"] >= min_pitcher_pa].sort_values("K%", ascending=False).head(3) if pitch_leaders is not None and not pitch_leaders.empty else pd.DataFrame()
     bb_rows = [[r.Pitcher, int(r.PA), pct(r["BB%"]), pct(r["K%"]) ] for _, r in hi_bb.iterrows()]
     k_rows = [[r.Pitcher, int(r.PA), pct(r["K%"]), pct(r["BB%"]) ] for _, r in hi_k.iterrows()]
-    draw_table(c, 22, 122, 238, 112, "HIGHEST BB% PITCHERS", bb_rows, ["Pitcher", "PA", "BB%", "K%"], max_rows=3)
-    draw_table(c, 278, 122, 238, 112, "HIGHEST K% PITCHERS", k_rows, ["Pitcher", "PA", "K%", "BB%"], max_rows=3)
+    draw_table(c, 22, 122, 238, 112, f"HIGHEST BB% PITCHERS (MIN {min_pitcher_pa} PA)", bb_rows, ["Pitcher", "PA", "BB%", "K%"], max_rows=3)
+    draw_table(c, 278, 122, 238, 112, f"HIGHEST K% PITCHERS (MIN {min_pitcher_pa} PA)", k_rows, ["Pitcher", "PA", "K%", "BB%"], max_rows=3)
 
     snap_rows = []
     if pitcher_usage is not None and not pitcher_usage.empty:
@@ -855,19 +857,20 @@ def build_visual_pdf(context):
 
     # PAGE 3 Hitting
     draw_header(c, "ADVANCED PREGAME REPORT", opponent, 3, logo_path)
-    section_bar(c, PAGE_H - 122, "HITTING PLAN")
+    section_bar(c, PAGE_H - 122, "HITTING SUMMARY")
     draw_swing_grid(c, 22, PAGE_H - 276, 340, 140, swing_by_count)
     metric_card(c, 378, PAGE_H - 276, 120, 140, "HITTER SWING%", pct(hit_team.get("Swing%",0)), "Overall", pct(lg_hit.get("Swing%")) if lg_hit.get("Swing%") is not None else None, True, "Swing Rate")
     sw_top = swing_by_count.sort_values("SwingPct", ascending=False).iloc[0] if swing_by_count is not None and not swing_by_count.empty else None
     key = f"They swing most in {sw_top['Count']} counts ({pct(sw_top['SwingPct'])}). Use that count to expand, change eye level, and avoid predictable zone strikes." if sw_top is not None else "Use swing/take tendencies to shape attack zones and choose when to expand."
     draw_key_box(c, 514, PAGE_H - 276, 266, 140, "KEY INSIGHT", key, icon="")
 
-    top3 = hitters.sort_values("OPS", ascending=False).head(3) if hitters is not None and not hitters.empty else pd.DataFrame()
-    bot3 = hitters[hitters["PA"] > 0].sort_values("OPS", ascending=True).head(3) if hitters is not None and not hitters.empty else pd.DataFrame()
+    q_hitters = hitters[hitters["PA"] >= min_hitter_pa].copy() if hitters is not None and not hitters.empty else pd.DataFrame()
+    top3 = q_hitters.sort_values("OPS", ascending=False).head(3) if not q_hitters.empty else pd.DataFrame()
+    bot3 = q_hitters.sort_values("OPS", ascending=True).head(3) if not q_hitters.empty else pd.DataFrame()
     top_rows = [[r.Player, int(r.PA), num(r.AVG), num(r.OBP), num(r.SLG), num(r.OPS), pct(r["BB%"]), pct(r["K%"]) ] for _, r in top3.iterrows()]
     bot_rows = [[r.Player, int(r.PA), num(r.AVG), num(r.OBP), num(r.SLG), num(r.OPS), pct(r["BB%"]), pct(r["K%"]) ] for _, r in bot3.iterrows()]
-    draw_table(c, 22, 205, 370, 105, "TOP 3 HITTERS (BY OPS)", top_rows, ["Player", "PA", "AVG", "OBP", "SLG", "OPS", "BB%", "K%"], font_size=5.8, max_rows=3)
-    draw_table(c, 410, 205, 370, 105, "BOTTOM 3 HITTERS (BY OPS)", bot_rows, ["Player", "PA", "AVG", "OBP", "SLG", "OPS", "BB%", "K%"], font_size=5.8, max_rows=3)
+    draw_table(c, 22, 205, 370, 105, f"TOP 3 HITTERS BY OPS (MIN {min_hitter_pa} PA)", top_rows, ["Player", "PA", "AVG", "OBP", "SLG", "OPS", "BB%", "K%"], font_size=5.8, max_rows=3)
+    draw_table(c, 410, 205, 370, 105, f"BOTTOM 3 HITTERS BY OPS (MIN {min_hitter_pa} PA)", bot_rows, ["Player", "PA", "AVG", "OBP", "SLG", "OPS", "BB%", "K%"], font_size=5.8, max_rows=3)
 
     leader_specs = [("BEST AVG", "AVG", False), ("BEST OBP", "OBP", False), ("BEST SLG", "SLG", False), ("BEST OPS", "OPS", False), ("BEST BB%", "BB%", False), ("LOWEST K%", "K%", True)]
     start_x, start_y = 22, 44
@@ -876,7 +879,7 @@ def build_visual_pdf(context):
     for i, (title, stat, asc) in enumerate(leader_specs):
         xx = start_x + (i % 3) * (box_w + gap_x)
         yy = start_y + (1 - i // 3) * (box_h + gap_y)
-        df = hitters[hitters["PA"] > 0].sort_values(stat, ascending=asc).head(3) if hitters is not None and not hitters.empty else pd.DataFrame()
+        df = q_hitters.sort_values(stat, ascending=asc).head(3) if not q_hitters.empty else pd.DataFrame()
         rows = [[r.Player, pct(r[stat]) if "%" in stat else num(r[stat]), int(r.PA)] for _, r in df.iterrows()]
         draw_table(c, xx, yy, box_w, box_h, title, rows, ["Player", stat, "PA"], font_size=5.6, max_rows=3)
     c.showPage()
@@ -916,6 +919,8 @@ st.caption("Upload all opponent and league CSVs at once. The app auto-detects fi
 with st.sidebar:
     st.header("Report Setup")
     opponent = st.text_input("Opponent name", value="Opponent")
+    min_hitter_pa = st.number_input("Minimum hitter PA for leaderboards", min_value=0, value=30, step=5)
+    min_pitcher_pa = st.number_input("Minimum pitcher PA for leaderboards", min_value=0, value=20, step=5)
     uploaded_files = st.file_uploader("Upload all CSVs", type=["csv"], accept_multiple_files=True)
     st.caption("Expected: Pregame, Copy of Standard, Catching PreGame, Stolen Bases, SBA Count, Pregame Hitting, Rate, Pitch Usage, Pitch Usage")
 
@@ -965,6 +970,8 @@ context = dict(
     lg_hit=lg_hit,
     lg_pitch=lg_pitch,
     lg_usage=lg_usage,
+    min_hitter_pa=min_hitter_pa,
+    min_pitcher_pa=min_pitcher_pa,
 )
 
 c1, c2, c3, c4 = st.columns(4)
@@ -972,6 +979,7 @@ c1.metric("Team OPS", num(hit_team.get("OPS", 0)))
 c2.metric("Opponent BB%", pct(pitch_team.get("BB%", 0)))
 c3.metric("SB Success", pct(run_team.get("SB%", 0)))
 c4.metric("Catcher CS%", pct(catch_team.get("CS%", 0)))
+st.caption(f"Leaderboard qualifiers: hitters min {min_hitter_pa} PA; pitchers min {min_pitcher_pa} PA faced.")
 
 st.markdown("### Data Source Check")
 st.write({
