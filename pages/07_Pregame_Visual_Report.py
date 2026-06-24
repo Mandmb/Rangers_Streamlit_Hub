@@ -604,7 +604,9 @@ def build_running_insights(run_counts, run_team, runners, catch_team, catchers):
     out.append(f"Team SB success is {pct(run_team.get('SB%', 0))}; prioritize holds, looks, and slide-step timing.")
     if runners is not None and not runners.empty:
         vols = runners.head(2)["Runner"].tolist()
-        out.append(f"Highest-volume runners: {', '.join(vols)}; have the battery plan ready before they reach.")
+        vol_names = [str(v).strip() for v in vols if pd.notna(v) and str(v).strip()]
+        if vol_names:
+            out.append(f"Highest-volume runners: {', '.join(vol_names)}; have the battery plan ready before they reach.")
     out.append(f"Team CS% is {pct(catch_team.get('CS%', 0))}; catcher exchange and pitcher time to plate both matter here.")
     if catchers is not None and not catchers.empty:
         top_c = catchers.sort_values("CS%", ascending=False).iloc[0]
