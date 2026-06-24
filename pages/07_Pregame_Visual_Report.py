@@ -98,10 +98,10 @@ def norm_pitch(p):
     if p in ["UN", "", "NAN", "NONE"]:
         return None
     aliases = {
-        "FASTBALL": "FA", "FOURSEAM": "FA", "4SEAM": "FA", "4-SEAM": "FA", "FF": "FA",
+        "FASTBALL": "FA", "FOURSEAM": "FA", "4SEAM": "FA", "4-SEAM": "FA", "FF": "FA", "FB": "FA",
         "SINKER": "SI", "TWOSEAM": "SI", "2SEAM": "SI", "2-SEAM": "SI",
-        "CUTTER": "FC", "SLIDER": "SL", "CURVE": "CU", "CURVEBALL": "CU",
-        "CHANGEUP": "CH", "CHANGE": "CH", "SPLITTER": "FS", "SPLIT": "FS", "SWEEPER": "SW"
+        "CUTTER": "FC", "CT": "FC", "SLIDER": "SL", "CURVE": "CU", "CURVEBALL": "CU", "CB": "CU",
+        "CHANGEUP": "CH", "CHANGE": "CH", "OS": "CH", "OFFSPEED": "CH", "SPLITTER": "FS", "SPLIT": "FS", "SWEEPER": "SW"
     }
     return aliases.get(p, p)
 
@@ -429,34 +429,51 @@ def league_pitching_baseline(df):
     return {'BB%': val(['BB%', 'BBPct', 'Walk%']), 'K%': val(['K%', 'KPct', 'SO%'])}
 
 
+def _to_rate_series(series):
+    raw = series.astype(str)
+    has_percent = raw.str.contains("%", regex=False).any()
+    vals = raw.str.replace("%", "", regex=False).str.replace(",", "", regex=False)
+    vals = pd.to_numeric(vals, errors="coerce")
+    if has_percent or (vals.dropna().mean() and vals.dropna().mean() > 1):
+        vals = vals / 100
+    return vals
+
 def league_pitch_usage_baseline(df):
-    """Return league pitch usage as {Pitch: usage_rate} from Pitch Usage.csv."""
+    """Return league pitch usage as {Pitch: usage_rate} from Pitch Usage.csv.
+    Supports summary files with pitch columns like FB/SI/CT/SL/SW/CB/OS and raw pitch-level files.
+    """
     if df is None or getattr(df, "empty", True):
         return {}
-
-    pitch_col = find_col(df, ["Pitch", "Pitch Type", "pitchType", "TaggedPitchType", "AutoPitchType"])
-    usage_col = find_col(df, ["Usage", "Usage%", "Pitch Usage", "Pitch%", "%", "Pct"])
-
+    tmp = df.copy()
+    split_col = find_col(tmp, ["SplitBy", "splitBy", "Split"])
+    if split_col:
+        total = tmp[tmp[split_col].astype(str).str.upper().eq("TOTAL")]
+        if not total.empty:
+            tmp = total.copy()
+    summary_pitch_cols = {
+        "FB": "FA", "FF": "FA", "FB": "FA", "FA": "FA", "SI": "SI", "CT": "FC", "FC": "FC",
+        "SL": "SL", "SW": "SW", "CB": "CU", "CU": "CU", "OS": "CH", "CH": "CH", "FS": "FS"
+    }
+    usage = {}
+    for col in tmp.columns:
+        key = str(col).strip().upper()
+        if key in summary_pitch_cols:
+            vals = _to_rate_series(tmp[col]).dropna()
+            if not vals.empty:
+                usage[summary_pitch_cols[key]] = float(vals.iloc[0])
+    if usage:
+        return usage
+    pitch_col = find_col(tmp, ["Pitch", "Pitch Type", "pitchType", "TaggedPitchType", "AutoPitchType", "PitchType"])
+    usage_col = find_col(tmp, ["Usage", "Usage%", "Pitch Usage", "Pitch%", "%", "Pct"])
     if pitch_col is None:
         return {}
-
-    tmp = df.copy()
     tmp["Pitch"] = tmp[pitch_col].apply(norm_pitch)
     tmp = tmp[tmp["Pitch"].notna()]
-
     if usage_col:
-        vals = tmp[usage_col].astype(str).str.replace("%", "", regex=False)
-        vals = pd.to_numeric(vals, errors="coerce")
-        if vals.dropna().mean() and vals.dropna().mean() > 1:
-            vals = vals / 100
-        tmp["Usage"] = vals
+        tmp["Usage"] = _to_rate_series(tmp[usage_col])
         return tmp.groupby("Pitch")["Usage"].mean().dropna().to_dict()
-
-    # Fallback: calculate usage from pitch rows if file is raw pitch-level data
     total = len(tmp)
-    if total == 0:
-        return {}
-    return (tmp["Pitch"].value_counts() / total).to_dict()
+    return (tmp["Pitch"].value_counts() / total).to_dict() if total else {}
 
 # -----------------------------
 # PDF drawing helpers
@@ -659,9 +676,9 @@ def draw_swing_grid(c, x, y, w, h, swing_by_count):
         # count higher in each box
         c.setFillColor(NAVY)
         c.setFont("Helvetica-Bold", 7.2)
-        c.drawCentredString(cx + (cell_w-7)/2, cy + cell_h - 15, cnt)
+        c.drawCentredString(cx + (cell_w-7)/2, cy + cell_h - 11, cnt)
         c.setFont("Helvetica-Bold", 10.5)
-        c.drawCentredString(cx + (cell_w-7)/2, cy + 10, pct(lookup.get(cnt, 0)))
+        c.drawCentredString(cx + (cell_w-7)/2, cy + max(9, cell_h/2 - 5), pct(lookup.get(cnt, 0)))
 
 
 def draw_sba_grid(c, x, y, w, h, team_counts):
@@ -686,9 +703,9 @@ def draw_sba_grid(c, x, y, w, h, team_counts):
         # count higher in each box
         c.setFillColor(NAVY)
         c.setFont("Helvetica-Bold", 7.2)
-        c.drawCentredString(cx + (cell_w-7)/2, cy + cell_h - 15, cnt)
+        c.drawCentredString(cx + (cell_w-7)/2, cy + cell_h - 11, cnt)
         c.setFont("Helvetica-Bold", 13)
-        c.drawCentredString(cx + (cell_w-7)/2, cy + 10, str(int(lookup.get(cnt, 0))))
+        c.drawCentredString(cx + (cell_w-7)/2, cy + max(9, cell_h/2 - 5), str(int(lookup.get(cnt, 0))))
 
 
 def concise(text, max_words=11):
@@ -825,7 +842,7 @@ def build_visual_pdf(context):
     metric_card(c, 378, PAGE_H - 276, 120, 140, "HITTER SWING%", pct(hit_team.get("Swing%",0)), "Overall", pct(lg_hit.get("Swing%")) if lg_hit.get("Swing%") is not None else None, True, "Swing Rate")
     sw_top = swing_by_count.sort_values("SwingPct", ascending=False).iloc[0] if swing_by_count is not None and not swing_by_count.empty else None
     key = f"They swing most in {sw_top['Count']} counts ({pct(sw_top['SwingPct'])}). Use that count to expand." if sw_top is not None else "Use swing/take tendencies to shape attack zones."
-    draw_key_box(c, 514, PAGE_H - 276, 266, 140, "KEY INSIGHT", key, icon="◎")
+    draw_key_box(c, 514, PAGE_H - 276, 266, 140, "KEY INSIGHT", key, icon="")
 
     top3 = hitters.sort_values("OPS", ascending=False).head(3) if hitters is not None and not hitters.empty else pd.DataFrame()
     bot3 = hitters[hitters["PA"] > 0].sort_values("OPS", ascending=True).head(3) if hitters is not None and not hitters.empty else pd.DataFrame()
@@ -835,11 +852,12 @@ def build_visual_pdf(context):
     draw_table(c, 410, 205, 370, 105, "BOTTOM 3 HITTERS (BY OPS)", bot_rows, ["Player", "PA", "AVG", "OBP", "SLG", "OPS", "BB%", "K%"], font_size=5.8, max_rows=3)
 
     leader_specs = [("BEST AVG", "AVG", False), ("BEST OBP", "OBP", False), ("BEST SLG", "SLG", False), ("BEST OPS", "OPS", False), ("BEST BB%", "BB%", False), ("LOWEST K%", "K%", True)]
-    start_x, start_y = 22, 72
-    box_w, box_h = 120, 70
+    start_x, start_y = 22, 44
+    box_w, box_h = 240, 72
+    gap_x, gap_y = 20, 12
     for i, (title, stat, asc) in enumerate(leader_specs):
-        xx = start_x + (i % 6) * (box_w + 12)
-        yy = start_y
+        xx = start_x + (i % 3) * (box_w + gap_x)
+        yy = start_y + (1 - i // 3) * (box_h + gap_y)
         df = hitters[hitters["PA"] > 0].sort_values(stat, ascending=asc).head(3) if hitters is not None and not hitters.empty else pd.DataFrame()
         rows = [[r.Player, pct(r[stat]) if "%" in stat else num(r[stat]), int(r.PA)] for _, r in df.iterrows()]
         draw_table(c, xx, yy, box_w, box_h, title, rows, ["Player", stat, "PA"], font_size=5.6, max_rows=3)
@@ -850,7 +868,7 @@ def build_visual_pdf(context):
     section_bar(c, PAGE_H - 122, "CATCHING & RUNNING GAME")
     metric_card(c, 22, PAGE_H - 215, 240, 82, "TEAM CS%", pct(catch_team.get("CS%",0)), "Caught Stealing", None, True, "Catcher CS%")
     metric_card(c, 280, PAGE_H - 215, 240, 82, "TEAM SB SUCCESS %", pct(run_team.get("SB%",0)), "Baserunning", None, True, "SB%")
-    draw_key_box(c, 540, PAGE_H - 215, 240, 82, "KEY INSIGHT", insights[2] if len(insights) > 2 else "Control tempo and prevent free 90s.", icon="◎")
+    draw_key_box(c, 540, PAGE_H - 215, 240, 82, "KEY INSIGHT", insights[2] if len(insights) > 2 else "Control tempo and prevent free 90s.", icon="")
     draw_sba_grid(c, 22, PAGE_H - 380, 360, 145, run_counts)
     c_rows = [[r.Catcher, int(r.SBA), int(r.CS), int(r.SB), pct(r["CS%"])] for _, r in catchers.head(5).iterrows()] if catchers is not None and not catchers.empty else []
     draw_table(c, 405, PAGE_H - 380, 375, 145, "CATCHER LEADERBOARD (BY CS%)", c_rows, ["Catcher", "SBA", "CS", "SB", "CS%"], font_size=6.2, max_rows=5)
@@ -863,15 +881,8 @@ def build_visual_pdf(context):
 
 
 def find_logo_path():
-    """Find Rangers logo if present; otherwise return None and draw fallback T mark."""
-    candidates = [
-        "Rangers.png",
-        "rangers.png",
-        "assets/Rangers.png",
-        "assets/rangers.png",
-        "images/Rangers.png",
-        "images/rangers.png",
-    ]
+    """Find Rangers logo automatically if it exists in the repo."""
+    candidates = ["Rangers.png", "rangers.png", "assets/Rangers.png", "assets/rangers.png", "images/Rangers.png", "images/rangers.png"]
     for path in candidates:
         if os.path.exists(path):
             return path
@@ -887,7 +898,7 @@ with st.sidebar:
     st.header("Report Setup")
     opponent = st.text_input("Opponent name", value="Opponent")
     uploaded_files = st.file_uploader("Upload all CSVs", type=["csv"], accept_multiple_files=True)
-    st.caption("Expected: Pregame, Copy of Standard, Catching PreGame, Stolen Bases, SBA Count, Pregame Hitting, Rate, Pitch Usage")
+    st.caption("Expected: Pregame, Copy of Standard, Catching PreGame, Stolen Bases, SBA Count, Pregame Hitting, Rate, Pitch Usage, Pitch Usage")
 
 files = detect_files(uploaded_files)
 if uploaded_files:
@@ -942,6 +953,16 @@ c1.metric("Team OPS", num(hit_team.get("OPS", 0)))
 c2.metric("Opponent BB%", pct(pitch_team.get("BB%", 0)))
 c3.metric("SB Success", pct(run_team.get("SB%", 0)))
 c4.metric("Catcher CS%", pct(catch_team.get("CS%", 0)))
+
+st.markdown("### Data Source Check")
+st.write({
+    "Hitting metrics source": files.get("pregame").name if "pregame" in files else "Missing Pregame.csv",
+    "Pitching metrics source": files.get("standard").name if "standard" in files else "Missing Standard.csv",
+    "Catching metrics source": files.get("catching").name if "catching" in files else "Missing Catching PreGame.csv",
+    "Running team source": files.get("stolen_bases").name if "stolen_bases" in files else "Missing Stolen Bases.csv",
+    "Running individual source": files.get("sba_count").name if "sba_count" in files else "Missing SBA Count.csv",
+    "League pitch usage source": files.get("league_pitch_usage").name if "league_pitch_usage" in files else "Missing Pitch Usage.csv",
+})
 
 tabs = st.tabs(["Pitching", "Hitting", "Catching & Running", "PDF"])
 with tabs[0]:
