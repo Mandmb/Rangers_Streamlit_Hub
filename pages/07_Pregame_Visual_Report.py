@@ -621,6 +621,7 @@ def draw_table(c, x, y, w, h, title, rows, headers, font_size=6.4, max_rows=6, h
             c.drawCentredString(x + 6 + col_w*i + col_w/2, yy + 5, text)
 
 def draw_key_box(c, x, y, w, h, title, text, icon="◎"):
+    """Draw a key insight box. Supports short multi-line bullet text without changing layout."""
     round_rect(c, x, y, w, h, fill=LIGHT_BLUE, stroke=BORDER, radius=8)
     text_x = x + 72
     text_w = w - 84
@@ -631,10 +632,28 @@ def draw_key_box(c, x, y, w, h, title, text, icon="◎"):
     else:
         text_x = x + 18
         text_w = w - 36
+
     c.setFillColor(NAVY)
     c.setFont("Helvetica-Bold", 9)
     c.drawString(text_x, y + h - 24, title)
-    draw_wrapped(c, text, text_x, y + h - 41, text_w, font="Helvetica-Bold", size=8.2, leading=11, max_lines=4)
+
+    # Fit more useful scouting notes without overflowing the existing box.
+    available_lines = max(2, int((h - 38) / 10))
+    yy = y + h - 41
+    used = 0
+    for raw in str(text).split("\n"):
+        raw = raw.strip()
+        if not raw or used >= available_lines:
+            continue
+        if not raw.startswith("•") and "\n" in str(text):
+            raw = "• " + raw
+        before = yy
+        yy = draw_wrapped(
+            c, raw, text_x, yy, text_w,
+            font="Helvetica-Bold", size=8.0, leading=10,
+            max_lines=max(1, available_lines - used)
+        ) - 2
+        used += max(1, int(round((before - yy) / 10)))
 
 
 def draw_pitch_usage_chart(c, x, y, w, h, usage_count):
@@ -754,21 +773,129 @@ def concise(text, max_words=11):
     return " ".join(words[:max_words]) + ("." if len(words) > max_words else "")
 
 def build_insights(pitch_team, usage_overall, swing_by_count, run_counts, hitters):
+    """Executive-summary takeaways only. Keep them short so Page 1 stays clean."""
     insights = []
     if usage_overall is not None and not usage_overall.empty:
         top = usage_overall.iloc[0]
         insights.append(f"High {top['Pitch']} usage ({pct(top['Usage'])}); be ready in leverage counts.")
     if swing_by_count is not None and not swing_by_count.empty:
         top = swing_by_count.sort_values("SwingPct", ascending=False).iloc[0]
-        insights.append(f"Most aggressive in {top['Count']} counts ({pct(top['SwingPct'])}).")
+        low = swing_by_count.sort_values("SwingPct", ascending=True).iloc[0]
+        insights.append(f"Most aggressive in {top['Count']} counts ({pct(top['SwingPct'])}); most passive in {low['Count']}.")
     if run_counts is not None and not run_counts.empty:
-        rc = run_counts.copy(); rc["SBA"] = pd.to_numeric(rc["SBA"], errors="coerce").fillna(0)
+        rc = run_counts.copy()
+        rc["SBA"] = pd.to_numeric(rc["SBA"], errors="coerce").fillna(0)
         top = rc.sort_values("SBA", ascending=False).iloc[0]
         insights.append(f"Running game peaks in {top['Count']} counts ({int(top['SBA'])} SBA).")
     if hitters is not None and not hitters.empty:
         top = hitters.sort_values("OPS", ascending=False).iloc[0]
         insights.append(f"Circle {top['Player']} as top OPS threat ({num(top['OPS'])}).")
-    return [concise(i, 12) for i in insights[:3]]
+    return [concise(i, 16) for i in insights[:4]]
+
+
+def _top_usage_counts(usage_count, pitch, n=3):
+    if usage_count is None or usage_count.empty or pitch is None or pitch not in usage_count.columns:
+        return ""
+    tmp = usage_count[["Count", pitch]].copy()
+    tmp[pitch] = pd.to_numeric(tmp[pitch], errors="coerce").fillna(0)
+    tmp = tmp.sort_values(pitch, ascending=False).head(n)
+    return ", ".join([f"{r.Count} ({pct(r[pitch])})" for _, r in tmp.iterrows()])
+
+
+def build_pitching_key_insight(pitch_team, lg_pitch, usage_overall, lg_usage, pitch_leaders, min_pitcher_pa, usage_count):
+    lines = []
+    if usage_overall is not None and not usage_overall.empty:
+        top = usage_overall.iloc[0]
+        top_pitch = top["Pitch"]
+        lg_top = lg_usage.get(top_pitch) if isinstance(lg_usage, dict) else None
+        if lg_top is not None:
+            diff = top["Usage"] - lg_top
+            lines.append(f"{top_pitch} usage is {pct(top['Usage'])}, {diff*100:+.1f} pts vs league; plan around it early.")
+        else:
+            lines.append(f"{top_pitch} is their primary pitch at {pct(top['Usage'])}; be ready for it in leverage counts.")
+        counts_txt = _top_usage_counts(usage_count, top_pitch, 3)
+        if counts_txt:
+            lines.append(f"Highest {top_pitch} count usage: {counts_txt}; hitters should expect it there.")
+
+        diffs = []
+        for _, r in usage_overall.iterrows():
+            lg = lg_usage.get(r["Pitch"]) if isinstance(lg_usage, dict) else None
+            if lg is not None:
+                diffs.append((r["Pitch"], float(r["Usage"]) - float(lg), float(r["Usage"]), float(lg)))
+        diffs = sorted(diffs, key=lambda x: x[1], reverse=True)
+        if diffs and diffs[0][1] > 0:
+            lines.append(f"Most elevated pitch vs league is {diffs[0][0]} ({diffs[0][1]*100:+.1f} pts); protect against that weapon.")
+    bb = pitch_team.get("BB%", 0)
+    bb_lg = lg_pitch.get("BB%") if isinstance(lg_pitch, dict) else None
+    if bb_lg is not None:
+        if bb > bb_lg:
+            lines.append(f"BB% is {pct(bb)} vs {pct(bb_lg)} league; extend ABs and force strike-zone execution.")
+        else:
+            lines.append(f"BB% is {pct(bb)} vs {pct(bb_lg)} league; avoid falling behind by taking too much.")
+    k = pitch_team.get("K%", 0)
+    k_lg = lg_pitch.get("K%") if isinstance(lg_pitch, dict) else None
+    if k_lg is not None:
+        if k < k_lg:
+            lines.append(f"K% is below league ({pct(k)} vs {pct(k_lg)}); contact opportunities are available.")
+        else:
+            lines.append(f"K% is above league ({pct(k)} vs {pct(k_lg)}); shorten up with two strikes.")
+    if pitch_leaders is not None and not pitch_leaders.empty:
+        q = pitch_leaders[pitch_leaders["PA"] >= min_pitcher_pa].copy()
+        if not q.empty:
+            bb_arm = q.sort_values("BB%", ascending=False).iloc[0]
+            lines.append(f"Target {bb_arm.Pitcher}: highest qualified BB% ({pct(bb_arm['BB%'])}); make him prove command.")
+    return "\n".join(lines[:5])
+
+
+def build_hitting_key_insight(hit_team, lg_hit, swing_by_count, hitters, min_hitter_pa):
+    lines = []
+    if swing_by_count is not None and not swing_by_count.empty:
+        top = swing_by_count.sort_values("SwingPct", ascending=False).iloc[0]
+        low = swing_by_count.sort_values("SwingPct", ascending=True).iloc[0]
+        lines.append(f"Most aggressive count is {top['Count']} ({pct(top['SwingPct'])}); expand or change eye level there.")
+        lines.append(f"Most passive count is {low['Count']} ({pct(low['SwingPct'])}); attack the zone for early strikes.")
+    ops = hit_team.get("OPS", 0)
+    lg_ops = lg_hit.get("OPS") if isinstance(lg_hit, dict) else None
+    if lg_ops is not None:
+        if ops >= lg_ops:
+            lines.append(f"Team OPS is {num(ops)} vs {num(lg_ops)} league; avoid free baserunners before the middle.")
+        else:
+            lines.append(f"Team OPS is {num(ops)} vs {num(lg_ops)} league; challenge lower-damage zones.")
+    if hitters is not None and not hitters.empty:
+        q = hitters[hitters["PA"] >= min_hitter_pa].copy()
+        if q.empty:
+            q = hitters.copy()
+        threats = q.sort_values("OPS", ascending=False).head(2)
+        if not threats.empty:
+            names = ", ".join([str(x) for x in threats["Player"].tolist()])
+            lines.append(f"Primary OPS threats: {names}; do not let them beat us in RBI spots.")
+        low_k = q.sort_values("K%", ascending=True).head(1)
+        if not low_k.empty:
+            r = low_k.iloc[0]
+            lines.append(f"{r.Player} has the lowest K% ({pct(r['K%'])}); pitch to weak contact, not chase.")
+    return "\n".join(lines[:5])
+
+
+def build_running_key_insight(run_counts, run_team, runners, catch_team, catchers):
+    lines = []
+    if run_counts is not None and not run_counts.empty:
+        rc = run_counts.copy()
+        rc["SBA"] = pd.to_numeric(rc["SBA"], errors="coerce").fillna(0)
+        top = rc.sort_values("SBA", ascending=False).iloc[0]
+        lines.append(f"SBA volume peaks in {top['Count']} counts ({int(top['SBA'])} attempts); control tempo there.")
+    sbp = run_team.get("SB%", 0)
+    lines.append(f"Team SB success is {pct(sbp)}; prioritize holds, looks, and slide-step timing.")
+    if runners is not None and not runners.empty:
+        vols = runners.sort_values("SBA", ascending=False).head(2)["Runner"].astype(str).tolist()
+        if vols:
+            lines.append(f"Highest-volume runners: {', '.join(vols)}; have the battery plan ready before they reach.")
+        efficient = runners[runners["SBA"] >= 2].sort_values("SB%", ascending=False).head(1)
+        if not efficient.empty:
+            r = efficient.iloc[0]
+            lines.append(f"{r.Runner} is highly efficient ({pct(r['SB%'])}); vary looks immediately.")
+    cs = catch_team.get("CS%", 0)
+    lines.append(f"Catcher CS% is {pct(cs)}; take extra bases only when jumps/timing are clean.")
+    return "\n".join(lines[:5])
 
 def build_visual_pdf(context):
     buffer = io.BytesIO()
@@ -865,16 +992,7 @@ def build_visual_pdf(context):
         draw_table(c, 535, 122, 245, 112, "PITCHER USAGE SNAPSHOT", snap_rows, ["Pitcher", "P"] + cols[:5], font_size=5.8, max_rows=5)
 
     # Long key insight box underneath the tables.
-    top_pitch = usage_overall.iloc[0] if usage_overall is not None and not usage_overall.empty else None
-    if top_pitch is not None:
-        lg_top = lg_usage.get(top_pitch["Pitch"])
-        if lg_top is not None:
-            diff = top_pitch["Usage"] - lg_top
-            key = f"{top_pitch['Pitch']} is used {pct(top_pitch['Usage'])} overall, {diff*100:+.1f} pts vs league. Build the plan around when that pitch shows up by count; force them to execute secondary pitches when behind."
-        else:
-            key = f"Highest overall pitch usage is {top_pitch['Pitch']} at {pct(top_pitch['Usage'])}. Build the plan around when that pitch shows up by count; make them prove they can land secondary pitches."
-    else:
-        key = "Identify primary pitch patterns by count and force predictable arms into the zone."
+    key = build_pitching_key_insight(pitch_team, lg_pitch, usage_overall, lg_usage, pitch_leaders, min_pitcher_pa, usage_count)
     draw_key_box(c, 22, 35, PAGE_W - 44, 74, "KEY INSIGHT", key, icon="")
     c.showPage()
 
@@ -883,8 +1001,7 @@ def build_visual_pdf(context):
     section_bar(c, PAGE_H - 122, "HITTING SUMMARY")
     draw_swing_grid(c, 22, PAGE_H - 276, 340, 140, swing_by_count)
     metric_card(c, 378, PAGE_H - 276, 120, 140, "HITTER SWING%", pct(hit_team.get("Swing%",0)), "Overall", pct(lg_hit.get("Swing%")) if lg_hit.get("Swing%") is not None else None, True, "Swing Rate")
-    sw_top = swing_by_count.sort_values("SwingPct", ascending=False).iloc[0] if swing_by_count is not None and not swing_by_count.empty else None
-    key = f"They swing most in {sw_top['Count']} counts ({pct(sw_top['SwingPct'])}). Use that count to expand, change eye level, and avoid predictable zone strikes." if sw_top is not None else "Use swing/take tendencies to shape attack zones and choose when to expand."
+    key = build_hitting_key_insight(hit_team, lg_hit, swing_by_count, hitters, min_hitter_pa)
     draw_key_box(c, 514, PAGE_H - 276, 266, 140, "KEY INSIGHT", key, icon="")
 
     q_hitters = hitters[hitters["PA"] >= min_hitter_pa].copy() if hitters is not None and not hitters.empty else pd.DataFrame()
@@ -912,7 +1029,7 @@ def build_visual_pdf(context):
     section_bar(c, PAGE_H - 122, "CATCHING & RUNNING GAME")
     metric_card(c, 22, PAGE_H - 215, 240, 82, "TEAM CS%", pct(catch_team.get("CS%",0)), "Caught Stealing", None, True, "Catcher CS%")
     metric_card(c, 280, PAGE_H - 215, 240, 82, "TEAM SB SUCCESS %", pct(run_team.get("SB%",0)), "Baserunning", None, True, "SB%")
-    run_key = (insights[2] + " Prioritize holds, slide steps, and catcher exchange in their most active counts.") if len(insights) > 2 else "Control tempo, vary holds, and prevent free 90s with runners on."
+    run_key = build_running_key_insight(run_counts, run_team, runners, catch_team, catchers)
     draw_key_box(c, 540, PAGE_H - 215, 240, 82, "KEY INSIGHT", run_key, icon="")
     draw_sba_grid(c, 22, PAGE_H - 380, 360, 145, run_counts)
     c_rows = [[r.Catcher, int(r.SBA), int(r.CS), int(r.SB), pct(r["CS%"])] for _, r in catchers.head(5).iterrows()] if catchers is not None and not catchers.empty else []
