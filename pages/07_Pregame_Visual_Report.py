@@ -428,44 +428,6 @@ def league_pitching_baseline(df):
         return parse_rate_value(base[col]) if col else None
     return {'BB%': val(['BB%', 'BBPct', 'Walk%']), 'K%': val(['K%', 'KPct', 'SO%'])}
 
-
-
-def league_pitch_usage_baseline(df):
-    """Return league pitch usage rates by normalized pitch type.
-
-    Supports TrackMan/CSV league pitch usage exports like:
-    FB, SI, CT, SL, SW, CB, OS, FS with a TOTAL row.
-    Values may be stored as percentages ("56.3%") or decimals.
-    """
-    if df is None or df.empty:
-        return {}
-
-    # Prefer the TOTAL row when present; otherwise use the first data row.
-    total_mask = df.astype(str).apply(lambda row: row.str.strip().str.upper().eq('TOTAL').any(), axis=1)
-    base = df[total_mask].iloc[0] if total_mask.any() else df.iloc[0]
-
-    # Common league CSV pitch names -> internal names used in the report.
-    pitch_aliases = {
-        'FB': 'FA', 'FF': 'FA', 'FA': 'FA',
-        'SI': 'SI',
-        'CT': 'FC', 'FC': 'FC',
-        'SL': 'SL',
-        'SW': 'SW',
-        'CB': 'CU', 'CU': 'CU',
-        'OS': 'CH', 'CH': 'CH',
-        'FS': 'FS',
-    }
-
-    out = {}
-    for raw_col, norm_col in pitch_aliases.items():
-        col = find_col(df, [raw_col])
-        if col is None or col not in base.index:
-            continue
-        val = parse_rate_value(base[col])
-        if val is not None and not pd.isna(val):
-            out[norm_col] = val
-    return out
-
 # -----------------------------
 # PDF drawing helpers
 # -----------------------------
