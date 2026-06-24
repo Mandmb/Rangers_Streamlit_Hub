@@ -140,6 +140,10 @@ def detect_files(files):
         name = f.name.lower()
         if "pitch usage" in name:
             out["league_pitch_usage"] = f
+        elif "base running" in name or "baserunning" in name:
+            out["league_baserunning"] = f
+        elif "catcher" in name and "pregame" not in name:
+            out["league_catcher"] = f
         elif "pregame hitting" in name:
             out["league_hitting"] = f
         elif "rate" in name:
@@ -445,6 +449,24 @@ def league_pitching_baseline(df):
         return parse_rate_value(base[col]) if col else None
     return {'BB%': val(['BB%', 'BBPct', 'Walk%']), 'K%': val(['K%', 'KPct', 'SO%'])}
 
+
+def league_catcher_baseline(df):
+    """Return league catching baselines from the catcher league CSV."""
+    if df is None or df.empty:
+        return {"CS%": None}
+    total = df[df.astype(str).apply(lambda row: row.str.upper().eq("TOTAL").any(), axis=1)].head(1)
+    base = total.iloc[0] if not total.empty else df.iloc[0]
+    col = find_col(df, ["CS%", "CSPct", "CaughtStealing%", "Caught Stealing%"] )
+    return {"CS%": parse_rate_value(base[col]) if col else None}
+
+def league_baserunning_baseline(df):
+    """Return league baserunning baselines from the base running league CSV."""
+    if df is None or df.empty:
+        return {"SB%": None}
+    total = df[df.astype(str).apply(lambda row: row.str.upper().eq("TOTAL").any(), axis=1)].head(1)
+    base = total.iloc[0] if not total.empty else df.iloc[0]
+    col = find_col(df, ["SB%", "SBPct", "StolenBase%", "Stolen Base%"] )
+    return {"SB%": parse_rate_value(base[col]) if col else None}
 
 def _to_rate_series(series):
     raw = series.astype(str)
@@ -904,6 +926,8 @@ def build_visual_pdf(context):
     logo_path = context.get("logo_path", "Rangers.png")
     hit_team = context["hit_team"]; pitch_team = context["pitch_team"]; catch_team = context["catch_team"]; run_team = context["run_team"]
     lg_hit = context["lg_hit"]; lg_pitch = context["lg_pitch"]; lg_usage = context.get("lg_usage", {})
+    lg_run = context.get("lg_run", {})
+    lg_catch = context.get("lg_catch", {})
     min_hitter_pa = int(context.get("min_hitter_pa", 30) or 0)
     min_pitcher_pa = int(context.get("min_pitcher_pa", 20) or 0)
     usage_count = context["usage_count"]; usage_overall = context["usage_overall"]; pitcher_usage = context["pitcher_usage"]; pitch_leaders = context["pitch_leaders"]
@@ -920,8 +944,10 @@ def build_visual_pdf(context):
     metric_card(c, x0, y, card_w, 98, "TEAM HITTING", num(hit_team.get("OPS", 0)), "OPS", num(hit_lg) if hit_lg is not None else None, hit_team.get("OPS",0) >= (hit_lg or 0), "Team OPS")
     bb_lg = lg_pitch.get("BB%")
     metric_card(c, x0 + (card_w+gap), y, card_w, 98, "TEAM PITCHING", pct(pitch_team.get("BB%", 0)), "BB% Allowed", pct(bb_lg) if bb_lg is not None else None, pitch_team.get("BB%",0) <= (bb_lg or 1), "Opponent BB%")
-    metric_card(c, x0 + 2*(card_w+gap), y, card_w, 98, "TEAM BASERUNNING", pct(run_team.get("SB%",0)), "SB Success", None, True, "SB%")
-    metric_card(c, x0 + 3*(card_w+gap), y, card_w, 98, "TEAM CATCHING", pct(catch_team.get("CS%",0)), "Caught Stealing", None, True, "CS%")
+    run_lg = lg_run.get("SB%") if isinstance(lg_run, dict) else None
+    catch_lg = lg_catch.get("CS%") if isinstance(lg_catch, dict) else None
+    metric_card(c, x0 + 2*(card_w+gap), y, card_w, 98, "TEAM BASERUNNING", pct(run_team.get("SB%",0)), "SB Success", pct(run_lg) if run_lg is not None else None, run_team.get("SB%",0) >= (run_lg or 0), "SB%")
+    metric_card(c, x0 + 3*(card_w+gap), y, card_w, 98, "TEAM CATCHING", pct(catch_team.get("CS%",0)), "Caught Stealing", pct(catch_lg) if catch_lg is not None else None, catch_team.get("CS%",0) >= (catch_lg or 0), "CS%")
 
     # Takeaways and Game plan, balanced with fixed line limits
     tx_y = 75; box_h = 220
@@ -1027,8 +1053,10 @@ def build_visual_pdf(context):
     # PAGE 4 Catching & Running
     draw_header(c, "ADVANCED PREGAME REPORT", opponent, 4, logo_path)
     section_bar(c, PAGE_H - 122, "CATCHING & RUNNING GAME")
-    metric_card(c, 22, PAGE_H - 215, 240, 82, "TEAM CS%", pct(catch_team.get("CS%",0)), "Caught Stealing", None, True, "Catcher CS%")
-    metric_card(c, 280, PAGE_H - 215, 240, 82, "TEAM SB SUCCESS %", pct(run_team.get("SB%",0)), "Baserunning", None, True, "SB%")
+    run_lg = lg_run.get("SB%") if isinstance(lg_run, dict) else None
+    catch_lg = lg_catch.get("CS%") if isinstance(lg_catch, dict) else None
+    metric_card(c, 22, PAGE_H - 215, 240, 82, "TEAM CS%", pct(catch_team.get("CS%",0)), "Caught Stealing", pct(catch_lg) if catch_lg is not None else None, catch_team.get("CS%",0) >= (catch_lg or 0), "Catcher CS%")
+    metric_card(c, 280, PAGE_H - 215, 240, 82, "TEAM SB SUCCESS %", pct(run_team.get("SB%",0)), "Baserunning", pct(run_lg) if run_lg is not None else None, run_team.get("SB%",0) >= (run_lg or 0), "SB%")
     run_key = build_running_key_insight(run_counts, run_team, runners, catch_team, catchers)
     draw_key_box(c, 540, PAGE_H - 215, 240, 82, "KEY INSIGHT", run_key, icon="")
     draw_sba_grid(c, 22, PAGE_H - 380, 360, 145, run_counts)
@@ -1062,7 +1090,7 @@ with st.sidebar:
     min_hitter_pa = st.number_input("Minimum hitter PA for leaderboards", min_value=0, value=30, step=5)
     min_pitcher_pa = st.number_input("Minimum pitcher PA for leaderboards", min_value=0, value=20, step=5)
     uploaded_files = st.file_uploader("Upload all CSVs", type=["csv"], accept_multiple_files=True)
-    st.caption("Expected: Pregame, Copy of Standard, Catching PreGame, Stolen Bases, SBA Count, Pregame Hitting, Rate, Pitch Usage, Pitch Usage")
+    st.caption("Expected: Pregame, Copy of Standard, Catching PreGame, Stolen Bases, SBA Count, Pregame Hitting, Rate, Pitch Usage, Catcher, Base Running, Pitch Usage")
 
 files = detect_files(uploaded_files)
 if uploaded_files:
@@ -1080,6 +1108,8 @@ sba_count = read_csv_file(files["sba_count"]) if "sba_count" in files else pd.Da
 league_hitting = read_csv_file(files["league_hitting"]) if "league_hitting" in files else pd.DataFrame()
 league_pitching = read_csv_file(files["league_pitching"]) if "league_pitching" in files else pd.DataFrame()
 league_pitch_usage = read_csv_file(files["league_pitch_usage"]) if "league_pitch_usage" in files else pd.DataFrame()
+league_catcher = read_csv_file(files["league_catcher"]) if "league_catcher" in files else pd.DataFrame()
+league_baserunning = read_csv_file(files["league_baserunning"]) if "league_baserunning" in files else pd.DataFrame()
 
 hit_team, swing_by_count, hitter_swing, hitters = build_hitting(pregame)
 pitch_team, usage_count, usage_overall, pitcher_usage, pitch_leaders = build_pitching(standard)
@@ -1088,6 +1118,8 @@ run_team, run_counts, runners = build_running(stolen, sba_count)
 lg_hit = league_hitting_baseline(league_hitting)
 lg_pitch = league_pitching_baseline(league_pitching)
 lg_usage = league_pitch_usage_baseline(league_pitch_usage)
+lg_catch = league_catcher_baseline(league_catcher)
+lg_run = league_baserunning_baseline(league_baserunning)
 
 logo_path = find_logo_path()
 context = dict(
@@ -1110,6 +1142,8 @@ context = dict(
     lg_hit=lg_hit,
     lg_pitch=lg_pitch,
     lg_usage=lg_usage,
+    lg_catch=lg_catch,
+    lg_run=lg_run,
     min_hitter_pa=min_hitter_pa,
     min_pitcher_pa=min_pitcher_pa,
 )
@@ -1117,8 +1151,8 @@ context = dict(
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Team OPS", num(hit_team.get("OPS", 0)))
 c2.metric("Opponent BB%", pct(pitch_team.get("BB%", 0)))
-c3.metric("SB Success", pct(run_team.get("SB%", 0)))
-c4.metric("Catcher CS%", pct(catch_team.get("CS%", 0)))
+c3.metric("SB Success", pct(run_team.get("SB%", 0)), delta=(f"LG {pct(lg_run.get('SB%'))}" if lg_run.get('SB%') is not None else None))
+c4.metric("Catcher CS%", pct(catch_team.get("CS%", 0)), delta=(f"LG {pct(lg_catch.get('CS%'))}" if lg_catch.get('CS%') is not None else None))
 st.caption(f"Leaderboard qualifiers: hitters min {min_hitter_pa} PA; pitchers min {min_pitcher_pa} PA faced.")
 
 st.markdown("### Data Source Check")
@@ -1129,6 +1163,8 @@ st.write({
     "Running team source": files.get("stolen_bases").name if "stolen_bases" in files else "Missing Stolen Bases.csv",
     "Running individual source": files.get("sba_count").name if "sba_count" in files else "Missing SBA Count.csv",
     "League pitch usage source": files.get("league_pitch_usage").name if "league_pitch_usage" in files else "Missing Pitch Usage.csv",
+    "League catcher CS% source": files.get("league_catcher").name if "league_catcher" in files else "Missing Catcher league CSV",
+    "League baserunning SB% source": files.get("league_baserunning").name if "league_baserunning" in files else "Missing Base Running league CSV",
 })
 
 tabs = st.tabs(["Pitching", "Hitting", "Catching & Running", "PDF"])
