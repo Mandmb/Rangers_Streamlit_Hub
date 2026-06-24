@@ -573,7 +573,7 @@ def metric_card(c, x, y, w, h, title, value, subtitle="", lg=None, better=True, 
     c.setFont("Helvetica-Bold", 7.3)
     c.drawCentredString(x + w/2, y + 10, ("▲ BETTER" if better else "▼ BELOW AVG"))
 
-def draw_table(c, x, y, w, h, title, rows, headers, font_size=6.4, max_rows=6):
+def draw_table(c, x, y, w, h, title, rows, headers, font_size=6.4, max_rows=6, highlight_diff=False):
     round_rect(c, x, y, w, h, fill=WHITE, stroke=BORDER, radius=7)
     c.setFillColor(NAVY); c.setFont("Helvetica-Bold", 8); c.drawCentredString(x + w/2, y + h - 15, title)
     rows = rows[:max_rows]
@@ -595,6 +595,29 @@ def draw_table(c, x, y, w, h, title, rows, headers, font_size=6.4, max_rows=6):
             max_chars = 18 if i == 0 else 8
             if len(text) > max_chars:
                 text = text[:max_chars-1] + "…"
+
+            # Optional conditional formatting for Diff column in Pitch Usage table.
+            # Positive differences are green; negative differences are red.
+            is_diff_col = i < len(headers) and str(headers[i]).strip().lower() == "diff"
+            if highlight_diff and is_diff_col and text not in ["-", "", "nan", "None"]:
+                stripped = text.strip()
+                if stripped.startswith("+"):
+                    c.setFillColor(GREEN_BG)
+                    c.rect(x + 6 + col_w*i + 2, yy + 2, col_w - 4, row_h - 4, stroke=0, fill=1)
+                    c.setFillColor(GREEN)
+                    c.setFont("Helvetica-Bold", font_size)
+                elif stripped.startswith("-"):
+                    c.setFillColor(RED_BG)
+                    c.rect(x + 6 + col_w*i + 2, yy + 2, col_w - 4, row_h - 4, stroke=0, fill=1)
+                    c.setFillColor(RED)
+                    c.setFont("Helvetica-Bold", font_size)
+                else:
+                    c.setFillColor(BLACK)
+                    c.setFont("Helvetica", font_size)
+            else:
+                c.setFillColor(BLACK)
+                c.setFont("Helvetica", font_size)
+
             c.drawCentredString(x + 6 + col_w*i + col_w/2, yy + 5, text)
 
 def draw_key_box(c, x, y, w, h, title, text, icon="◎"):
@@ -820,7 +843,7 @@ def build_visual_pdf(context):
                 pct(lg) if lg is not None else "-",
                 (f"{diff*100:+.1f}%" if diff is not None else "-"),
             ])
-    draw_table(c, 398, PAGE_H - 350, 240, 210, "PITCH USAGE (OVERALL)", rows, ["Pitch", "Usage", "LG", "Diff"], font_size=6.8, max_rows=7)
+    draw_table(c, 398, PAGE_H - 350, 240, 210, "PITCH USAGE (OVERALL)", rows, ["Pitch", "Usage", "LG", "Diff"], font_size=6.8, max_rows=7, highlight_diff=True)
 
     metric_card(c, 652, PAGE_H - 226, 128, 86, "TEAM BB%", pct(pitch_team.get("BB%",0)), "Walk Rate", pct(bb_lg) if bb_lg is not None else None, pitch_team.get("BB%",0) <= (bb_lg or 1), "BB%")
     k_lg = lg_pitch.get("K%")
