@@ -1272,25 +1272,25 @@ def build_visual_pdf(context):
     # PAGE 3 Hitting
     draw_header(c, "ADVANCED PREGAME REPORT", opponent, 3, logo_path)
     section_bar(c, PAGE_H - 122, "HITTING SUMMARY")
-    draw_swing_grid(c, 22, PAGE_H - 306, 360, 170, swing_by_count)
+    draw_swing_grid(c, 22, PAGE_H - 330, 360, 194, swing_by_count)
     swing_lg = lg_hit.get("Swing%") if isinstance(lg_hit, dict) else None
     swing_better = hit_team.get("Swing%", 0) >= swing_lg if swing_lg is not None else True
     metric_card(c, 394, PAGE_H - 238, 120, 102, "HITTER SWING%", pct(hit_team.get("Swing%",0)), "Overall", pct(swing_lg) if swing_lg is not None else None, swing_better, "Swing Rate")
     key = build_hitting_key_insight(hit_team, lg_hit, swing_by_count, hitters, min_hitter_pa)
     draw_key_box(c, 528, PAGE_H - 238, 252, 102, "KEY INSIGHT", key, icon="")
-    draw_plan_box(c, 394, PAGE_H - 306, 386, 58, "PITCHING PLAN", build_hitting_plan_lines(swing_by_count, hitters, min_hitter_pa))
+    draw_plan_box(c, 394, PAGE_H - 330, 386, 82, "PITCHING PLAN", build_hitting_plan_lines(swing_by_count, hitters, min_hitter_pa))
 
     q_hitters = hitters[hitters["PA"] >= min_hitter_pa].copy() if hitters is not None and not hitters.empty else pd.DataFrame()
     top3 = q_hitters.sort_values("OPS", ascending=False).head(3) if not q_hitters.empty else pd.DataFrame()
     bot3 = q_hitters.sort_values("OPS", ascending=True).head(3) if not q_hitters.empty else pd.DataFrame()
     top_rows = [[r.Player, int(r.PA), num(r.AVG), num(r.OBP), num(r.SLG), num(r.OPS), pct(r["BB%"]), pct(r["K%"]) ] for _, r in top3.iterrows()]
     bot_rows = [[r.Player, int(r.PA), num(r.AVG), num(r.OBP), num(r.SLG), num(r.OPS), pct(r["BB%"]), pct(r["K%"]) ] for _, r in bot3.iterrows()]
-    draw_table(c, 22, 190, 370, 100, f"TOP 3 HITTERS BY OPS (MIN {min_hitter_pa} PA)", top_rows, ["Player", "PA", "AVG", "OBP", "SLG", "OPS", "BB%", "K%"], font_size=5.8, max_rows=3)
-    draw_table(c, 410, 190, 370, 100, f"BOTTOM 3 HITTERS BY OPS (MIN {min_hitter_pa} PA)", bot_rows, ["Player", "PA", "AVG", "OBP", "SLG", "OPS", "BB%", "K%"], font_size=5.8, max_rows=3)
+    draw_table(c, 22, 165, 370, 95, f"TOP 3 HITTERS BY OPS (MIN {min_hitter_pa} PA)", top_rows, ["Player", "PA", "AVG", "OBP", "SLG", "OPS", "BB%", "K%"], font_size=5.8, max_rows=3)
+    draw_table(c, 410, 165, 370, 95, f"BOTTOM 3 HITTERS BY OPS (MIN {min_hitter_pa} PA)", bot_rows, ["Player", "PA", "AVG", "OBP", "SLG", "OPS", "BB%", "K%"], font_size=5.8, max_rows=3)
 
     leader_specs = [("BEST AVG", "AVG", False), ("BEST OBP", "OBP", False), ("BEST SLG", "SLG", False), ("BEST OPS", "OPS", False), ("BEST BB%", "BB%", False), ("LOWEST K%", "K%", True)]
-    start_x, start_y = 22, 35
-    box_w, box_h = 240, 66
+    start_x, start_y = 22, 26
+    box_w, box_h = 240, 62
     gap_x, gap_y = 20, 10
     for i, (title, stat, asc) in enumerate(leader_specs):
         xx = start_x + (i % 3) * (box_w + gap_x)
