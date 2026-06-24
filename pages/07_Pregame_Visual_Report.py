@@ -694,9 +694,9 @@ def draw_swing_grid(c, x, y, w, h, swing_by_count):
         # count higher in each box
         c.setFillColor(NAVY)
         c.setFont("Helvetica-Bold", 7.2)
-        c.drawCentredString(cx + (cell_w-7)/2, cy + cell_h - 8, cnt)
+        c.drawCentredString(cx + (cell_w-7)/2, cy + cell_h - 15, cnt)
         c.setFont("Helvetica-Bold", 10.5)
-        c.drawCentredString(cx + (cell_w-7)/2, cy + 9, pct(lookup.get(cnt, 0)))
+        c.drawCentredString(cx + (cell_w-7)/2, cy + 8, pct(lookup.get(cnt, 0)))
 
 
 def draw_sba_grid(c, x, y, w, h, team_counts):
@@ -721,9 +721,9 @@ def draw_sba_grid(c, x, y, w, h, team_counts):
         # count higher in each box
         c.setFillColor(NAVY)
         c.setFont("Helvetica-Bold", 7.2)
-        c.drawCentredString(cx + (cell_w-7)/2, cy + cell_h - 8, cnt)
+        c.drawCentredString(cx + (cell_w-7)/2, cy + cell_h - 15, cnt)
         c.setFont("Helvetica-Bold", 13)
-        c.drawCentredString(cx + (cell_w-7)/2, cy + 9, str(int(lookup.get(cnt, 0))))
+        c.drawCentredString(cx + (cell_w-7)/2, cy + 8, str(int(lookup.get(cnt, 0))))
 
 
 def concise(text, max_words=11):
@@ -829,15 +829,15 @@ def build_visual_pdf(context):
     hi_k = pitch_leaders[pitch_leaders["PA"] > 0].sort_values("K%", ascending=False).head(3) if pitch_leaders is not None and not pitch_leaders.empty else pd.DataFrame()
     bb_rows = [[r.Pitcher, int(r.PA), pct(r["BB%"]), pct(r["K%"]) ] for _, r in hi_bb.iterrows()]
     k_rows = [[r.Pitcher, int(r.PA), pct(r["K%"]), pct(r["BB%"]) ] for _, r in hi_k.iterrows()]
-    draw_table(c, 22, 150, 238, 115, "HIGHEST BB% PITCHERS", bb_rows, ["Pitcher", "PA", "BB%", "K%"], max_rows=3)
-    draw_table(c, 278, 150, 238, 115, "HIGHEST K% PITCHERS", k_rows, ["Pitcher", "PA", "K%", "BB%"], max_rows=3)
+    draw_table(c, 22, 122, 238, 112, "HIGHEST BB% PITCHERS", bb_rows, ["Pitcher", "PA", "BB%", "K%"], max_rows=3)
+    draw_table(c, 278, 122, 238, 112, "HIGHEST K% PITCHERS", k_rows, ["Pitcher", "PA", "K%", "BB%"], max_rows=3)
 
     snap_rows = []
     if pitcher_usage is not None and not pitcher_usage.empty:
         cols = [c2 for c2 in ["CH", "CU", "FA", "FC", "FS", "SI", "SL"] if c2 in pitcher_usage.columns]
         for _, r in pitcher_usage.head(5).iterrows():
             snap_rows.append([r["Pitcher"], int(r["Pitches"])] + [f"{r[c2]:.0f}" for c2 in cols[:5]])
-        draw_table(c, 535, 150, 245, 115, "PITCHER USAGE SNAPSHOT", snap_rows, ["Pitcher", "P"] + cols[:5], font_size=5.8, max_rows=5)
+        draw_table(c, 535, 122, 245, 112, "PITCHER USAGE SNAPSHOT", snap_rows, ["Pitcher", "P"] + cols[:5], font_size=5.8, max_rows=5)
 
     # Long key insight box underneath the tables.
     top_pitch = usage_overall.iloc[0] if usage_overall is not None and not usage_overall.empty else None
@@ -845,12 +845,12 @@ def build_visual_pdf(context):
         lg_top = lg_usage.get(top_pitch["Pitch"])
         if lg_top is not None:
             diff = top_pitch["Usage"] - lg_top
-            key = f"{top_pitch['Pitch']} is used {pct(top_pitch['Usage'])} overall, {diff*100:+.1f} pts vs league. Build the plan around when that pitch shows up by count."
+            key = f"{top_pitch['Pitch']} is used {pct(top_pitch['Usage'])} overall, {diff*100:+.1f} pts vs league. Build the plan around when that pitch shows up by count; force them to execute secondary pitches when behind."
         else:
-            key = f"Highest overall pitch usage is {top_pitch['Pitch']} at {pct(top_pitch['Usage'])}. Build the plan around when that pitch shows up by count."
+            key = f"Highest overall pitch usage is {top_pitch['Pitch']} at {pct(top_pitch['Usage'])}. Build the plan around when that pitch shows up by count; make them prove they can land secondary pitches."
     else:
         key = "Identify primary pitch patterns by count and force predictable arms into the zone."
-    draw_key_box(c, 22, 55, PAGE_W - 44, 72, "KEY INSIGHT", key, icon="")
+    draw_key_box(c, 22, 35, PAGE_W - 44, 74, "KEY INSIGHT", key, icon="")
     c.showPage()
 
     # PAGE 3 Hitting
@@ -859,7 +859,7 @@ def build_visual_pdf(context):
     draw_swing_grid(c, 22, PAGE_H - 276, 340, 140, swing_by_count)
     metric_card(c, 378, PAGE_H - 276, 120, 140, "HITTER SWING%", pct(hit_team.get("Swing%",0)), "Overall", pct(lg_hit.get("Swing%")) if lg_hit.get("Swing%") is not None else None, True, "Swing Rate")
     sw_top = swing_by_count.sort_values("SwingPct", ascending=False).iloc[0] if swing_by_count is not None and not swing_by_count.empty else None
-    key = f"They swing most in {sw_top['Count']} counts ({pct(sw_top['SwingPct'])}). Use that count to expand." if sw_top is not None else "Use swing/take tendencies to shape attack zones."
+    key = f"They swing most in {sw_top['Count']} counts ({pct(sw_top['SwingPct'])}). Use that count to expand, change eye level, and avoid predictable zone strikes." if sw_top is not None else "Use swing/take tendencies to shape attack zones and choose when to expand."
     draw_key_box(c, 514, PAGE_H - 276, 266, 140, "KEY INSIGHT", key, icon="")
 
     top3 = hitters.sort_values("OPS", ascending=False).head(3) if hitters is not None and not hitters.empty else pd.DataFrame()
@@ -886,7 +886,8 @@ def build_visual_pdf(context):
     section_bar(c, PAGE_H - 122, "CATCHING & RUNNING GAME")
     metric_card(c, 22, PAGE_H - 215, 240, 82, "TEAM CS%", pct(catch_team.get("CS%",0)), "Caught Stealing", None, True, "Catcher CS%")
     metric_card(c, 280, PAGE_H - 215, 240, 82, "TEAM SB SUCCESS %", pct(run_team.get("SB%",0)), "Baserunning", None, True, "SB%")
-    draw_key_box(c, 540, PAGE_H - 215, 240, 82, "KEY INSIGHT", insights[2] if len(insights) > 2 else "Control tempo and prevent free 90s.", icon="")
+    run_key = (insights[2] + " Prioritize holds, slide steps, and catcher exchange in their most active counts.") if len(insights) > 2 else "Control tempo, vary holds, and prevent free 90s with runners on."
+    draw_key_box(c, 540, PAGE_H - 215, 240, 82, "KEY INSIGHT", run_key, icon="")
     draw_sba_grid(c, 22, PAGE_H - 380, 360, 145, run_counts)
     c_rows = [[r.Catcher, int(r.SBA), int(r.CS), int(r.SB), pct(r["CS%"])] for _, r in catchers.head(5).iterrows()] if catchers is not None and not catchers.empty else []
     draw_table(c, 405, PAGE_H - 380, 375, 145, "CATCHER LEADERBOARD (BY CS%)", c_rows, ["Catcher", "SBA", "CS", "SB", "CS%"], font_size=6.2, max_rows=5)
