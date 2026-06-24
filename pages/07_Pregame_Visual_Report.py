@@ -861,6 +861,22 @@ def build_visual_pdf(context):
     buffer.seek(0)
     return buffer.getvalue()
 
+
+def find_logo_path():
+    """Find Rangers logo if present; otherwise return None and draw fallback T mark."""
+    candidates = [
+        "Rangers.png",
+        "rangers.png",
+        "assets/Rangers.png",
+        "assets/rangers.png",
+        "images/Rangers.png",
+        "images/rangers.png",
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return None
+
 # -----------------------------
 # Streamlit UI
 # -----------------------------
