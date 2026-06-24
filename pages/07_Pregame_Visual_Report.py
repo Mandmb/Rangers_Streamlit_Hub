@@ -428,6 +428,36 @@ def league_pitching_baseline(df):
         return parse_rate_value(base[col]) if col else None
     return {'BB%': val(['BB%', 'BBPct', 'Walk%']), 'K%': val(['K%', 'KPct', 'SO%'])}
 
+
+def league_pitch_usage_baseline(df):
+    """Return league pitch usage as {Pitch: usage_rate} from Pitch Usage.csv."""
+    if df is None or getattr(df, "empty", True):
+        return {}
+
+    pitch_col = find_col(df, ["Pitch", "Pitch Type", "pitchType", "TaggedPitchType", "AutoPitchType"])
+    usage_col = find_col(df, ["Usage", "Usage%", "Pitch Usage", "Pitch%", "%", "Pct"])
+
+    if pitch_col is None:
+        return {}
+
+    tmp = df.copy()
+    tmp["Pitch"] = tmp[pitch_col].apply(norm_pitch)
+    tmp = tmp[tmp["Pitch"].notna()]
+
+    if usage_col:
+        vals = tmp[usage_col].astype(str).str.replace("%", "", regex=False)
+        vals = pd.to_numeric(vals, errors="coerce")
+        if vals.dropna().mean() and vals.dropna().mean() > 1:
+            vals = vals / 100
+        tmp["Usage"] = vals
+        return tmp.groupby("Pitch")["Usage"].mean().dropna().to_dict()
+
+    # Fallback: calculate usage from pitch rows if file is raw pitch-level data
+    total = len(tmp)
+    if total == 0:
+        return {}
+    return (tmp["Pitch"].value_counts() / total).to_dict()
+
 # -----------------------------
 # PDF drawing helpers
 # -----------------------------
