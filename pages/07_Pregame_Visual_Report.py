@@ -1253,20 +1253,20 @@ def build_visual_pdf(context):
     hi_k = pitch_leaders[pitch_leaders["PA"] >= min_pitcher_pa].sort_values("K%", ascending=False).head(3) if pitch_leaders is not None and not pitch_leaders.empty else pd.DataFrame()
     bb_rows = [[r.Pitcher, int(r.PA), pct(r["BB%"]), pct(r["K%"]) ] for _, r in hi_bb.iterrows()]
     k_rows = [[r.Pitcher, int(r.PA), pct(r["K%"]), pct(r["BB%"]) ] for _, r in hi_k.iterrows()]
-    draw_table(c, 22, 132, 238, 104, f"HIGHEST BB% PITCHERS (MIN {min_pitcher_pa} PA)", bb_rows, ["Pitcher", "PA", "BB%", "K%"], max_rows=3)
-    draw_table(c, 278, 132, 238, 104, f"HIGHEST K% PITCHERS (MIN {min_pitcher_pa} PA)", k_rows, ["Pitcher", "PA", "K%", "BB%"], max_rows=3)
+    draw_table(c, 22, 146, 238, 104, f"HIGHEST BB% PITCHERS (MIN {min_pitcher_pa} PA)", bb_rows, ["Pitcher", "PA", "BB%", "K%"], max_rows=3)
+    draw_table(c, 278, 146, 238, 104, f"HIGHEST K% PITCHERS (MIN {min_pitcher_pa} PA)", k_rows, ["Pitcher", "PA", "K%", "BB%"], max_rows=3)
 
     snap_rows = []
     if pitcher_usage is not None and not pitcher_usage.empty:
         cols = [c2 for c2 in ["CH", "CU", "FA", "FC", "FS", "SI", "SL"] if c2 in pitcher_usage.columns]
         for _, r in pitcher_usage.head(5).iterrows():
             snap_rows.append([r["Pitcher"], int(r["Pitches"])] + [f"{r[c2]:.0f}" for c2 in cols[:5]])
-        draw_table(c, 535, 132, 245, 104, "PITCHER USAGE SNAPSHOT", snap_rows, ["Pitcher", "P"] + cols[:5], font_size=5.8, max_rows=5)
+        draw_table(c, 535, 146, 245, 104, "PITCHER USAGE SNAPSHOT", snap_rows, ["Pitcher", "P"] + cols[:5], font_size=5.8, max_rows=5)
 
     # Long key insight and action plan boxes underneath the tables.
     key = build_pitching_key_insight(pitch_team, lg_pitch, usage_overall, lg_usage, pitch_leaders, min_pitcher_pa, usage_count)
-    draw_key_box(c, 22, 46, 500, 70, "KEY INSIGHT", key, icon="")
-    draw_plan_box(c, 535, 46, 245, 70, "ATTACK PLAN", build_pitching_plan_lines(usage_count, usage_overall, pitch_leaders, min_pitcher_pa))
+    draw_key_box(c, 22, 46, 500, 84, "KEY INSIGHT", key, icon="")
+    draw_plan_box(c, 535, 46, 245, 84, "ATTACK PLAN", build_pitching_plan_lines(usage_count, usage_overall, pitch_leaders, min_pitcher_pa))
     c.showPage()
 
     # PAGE 3 Hitting
