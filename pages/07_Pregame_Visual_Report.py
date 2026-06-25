@@ -729,6 +729,50 @@ def draw_bullet_lines(c, lines, x, y, w, bullet_color=RED, text_color=DARK,
         yy -= leading * len(wrapped) + 5.0
     return yy
 
+
+def draw_stat_leader_box(c, x, y, w, h, title, rows, headers, max_rows=3):
+    """Compact 3-column leader box with clearer text and a light-blue header row."""
+    round_rect(c, x, y, w, h, fill=WHITE, stroke=BORDER, radius=7)
+    c.setFillColor(NAVY)
+    c.setFont("Helvetica-Bold", 7.6)
+    c.drawCentredString(x + w/2, y + h - 11, title)
+
+    pad = 7
+    table_x = x + pad
+    table_w = w - pad * 2
+    header_h = 13
+    row_h = 11.2
+    header_y = y + h - 29
+
+    c.setFillColor(GRAY)
+    c.rect(table_x, header_y, table_w, header_h, stroke=0, fill=1)
+
+    col_fracs = [0.54, 0.25, 0.21]
+    col_x = [table_x, table_x + table_w * col_fracs[0], table_x + table_w * (col_fracs[0] + col_fracs[1])]
+    col_w = [table_w * f for f in col_fracs]
+
+    c.setFillColor(NAVY)
+    c.setFont("Helvetica-Bold", 6.5)
+    c.drawString(col_x[0] + 4, header_y + 4, str(headers[0])[:12])
+    c.drawCentredString(col_x[1] + col_w[1]/2, header_y + 4, str(headers[1])[:8])
+    c.drawCentredString(col_x[2] + col_w[2]/2, header_y + 4, str(headers[2])[:5])
+
+    c.setFont("Helvetica", 6.4)
+    for r, row in enumerate(rows[:max_rows]):
+        yy = header_y - row_h * (r + 1)
+        if r % 2 == 0:
+            c.setFillColor(HexColor("#FAFBFD"))
+            c.rect(table_x, yy, table_w, row_h, stroke=0, fill=1)
+        c.setFillColor(BLACK)
+        name = str(row[0])
+        if len(name) > 20:
+            name = name[:19] + "…"
+        c.drawString(col_x[0] + 4, yy + 3.4, name)
+        c.setFont("Helvetica-Bold", 6.4)
+        c.drawCentredString(col_x[1] + col_w[1]/2, yy + 3.4, str(row[1]))
+        c.setFont("Helvetica", 6.4)
+        c.drawCentredString(col_x[2] + col_w[2]/2, yy + 3.4, str(row[2]))
+
 def draw_pitch_usage_chart(c, x, y, w, h, usage_count):
     round_rect(c, x, y, w, h, fill=WHITE, stroke=BORDER, radius=7)
     c.setFillColor(NAVY)
@@ -1290,14 +1334,14 @@ def build_visual_pdf(context):
 
     leader_specs = [("BEST AVG", "AVG", False), ("BEST OBP", "OBP", False), ("BEST SLG", "SLG", False), ("BEST OPS", "OPS", False), ("BEST BB%", "BB%", False), ("LOWEST K%", "K%", True)]
     start_x, start_y = 22, 42
-    box_w, box_h = 240, 58
-    gap_x, gap_y = 20, 8
+    box_w, box_h = 240, 62
+    gap_x, gap_y = 20, 6
     for i, (title, stat, asc) in enumerate(leader_specs):
         xx = start_x + (i % 3) * (box_w + gap_x)
         yy = start_y + (1 - i // 3) * (box_h + gap_y)
         df = q_hitters.sort_values(stat, ascending=asc).head(3) if not q_hitters.empty else pd.DataFrame()
         rows = [[r.Player, pct(r[stat]) if "%" in stat else num(r[stat]), int(r.PA)] for _, r in df.iterrows()]
-        draw_table(c, xx, yy, box_w, box_h, title, rows, ["Player", stat, "PA"], font_size=5.6, max_rows=3)
+        draw_stat_leader_box(c, xx, yy, box_w, box_h, title, rows, ["Player", stat, "PA"], max_rows=3)
     c.showPage()
 
     # PAGE 4 Catching & Running
