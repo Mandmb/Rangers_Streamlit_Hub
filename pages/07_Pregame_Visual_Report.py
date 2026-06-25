@@ -734,14 +734,14 @@ def draw_stat_leader_box(c, x, y, w, h, title, rows, headers, max_rows=3):
     """Compact 3-column leader box with clearer text and a light-blue header row."""
     round_rect(c, x, y, w, h, fill=WHITE, stroke=BORDER, radius=7)
     c.setFillColor(NAVY)
-    c.setFont("Helvetica-Bold", 7.6)
+    c.setFont("Helvetica-Bold", 7.4)
     c.drawCentredString(x + w/2, y + h - 11, title)
 
     pad = 7
     table_x = x + pad
     table_w = w - pad * 2
     header_h = 13
-    row_h = 11.2
+    row_h = 10.8
     header_y = y + h - 29
 
     c.setFillColor(GRAY)
@@ -752,12 +752,12 @@ def draw_stat_leader_box(c, x, y, w, h, title, rows, headers, max_rows=3):
     col_w = [table_w * f for f in col_fracs]
 
     c.setFillColor(NAVY)
-    c.setFont("Helvetica-Bold", 6.5)
-    c.drawString(col_x[0] + 4, header_y + 4, str(headers[0])[:12])
-    c.drawCentredString(col_x[1] + col_w[1]/2, header_y + 4, str(headers[1])[:8])
-    c.drawCentredString(col_x[2] + col_w[2]/2, header_y + 4, str(headers[2])[:5])
+    c.setFont("Helvetica-Bold", 6.1)
+    c.drawString(col_x[0] + 4, header_y + 4.1, str(headers[0])[:12])
+    c.drawCentredString(col_x[1] + col_w[1]/2, header_y + 4.1, str(headers[1])[:8])
+    c.drawCentredString(col_x[2] + col_w[2]/2, header_y + 4.1, str(headers[2])[:5])
 
-    c.setFont("Helvetica", 6.4)
+    c.setFont("Helvetica", 5.85)
     for r, row in enumerate(rows[:max_rows]):
         yy = header_y - row_h * (r + 1)
         if r % 2 == 0:
@@ -765,13 +765,13 @@ def draw_stat_leader_box(c, x, y, w, h, title, rows, headers, max_rows=3):
             c.rect(table_x, yy, table_w, row_h, stroke=0, fill=1)
         c.setFillColor(BLACK)
         name = str(row[0])
-        if len(name) > 20:
-            name = name[:19] + "…"
-        c.drawString(col_x[0] + 4, yy + 3.4, name)
-        c.setFont("Helvetica-Bold", 6.4)
-        c.drawCentredString(col_x[1] + col_w[1]/2, yy + 3.4, str(row[1]))
-        c.setFont("Helvetica", 6.4)
-        c.drawCentredString(col_x[2] + col_w[2]/2, yy + 3.4, str(row[2]))
+        if len(name) > 18:
+            name = name[:17] + "…"
+        c.drawString(col_x[0] + 4, yy + 3.2, name)
+        c.setFont("Helvetica-Bold", 5.9)
+        c.drawCentredString(col_x[1] + col_w[1]/2, yy + 3.2, str(row[1]))
+        c.setFont("Helvetica", 5.85)
+        c.drawCentredString(col_x[2] + col_w[2]/2, yy + 3.2, str(row[2]))
 
 def draw_pitch_usage_chart(c, x, y, w, h, usage_count):
     round_rect(c, x, y, w, h, fill=WHITE, stroke=BORDER, radius=7)
@@ -1377,7 +1377,7 @@ def find_logo_path():
 # Streamlit UI
 # -----------------------------
 st.title("Advanced Pregame Report")
-st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: Logo/Layout polish.")
+st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: Mini cards text fit polish.")
 
 with st.sidebar:
     st.header("Report Setup")
