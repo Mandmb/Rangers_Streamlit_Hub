@@ -1253,20 +1253,20 @@ def build_visual_pdf(context):
     hi_k = pitch_leaders[pitch_leaders["PA"] >= min_pitcher_pa].sort_values("K%", ascending=False).head(3) if pitch_leaders is not None and not pitch_leaders.empty else pd.DataFrame()
     bb_rows = [[r.Pitcher, int(r.PA), pct(r["BB%"]), pct(r["K%"]) ] for _, r in hi_bb.iterrows()]
     k_rows = [[r.Pitcher, int(r.PA), pct(r["K%"]), pct(r["BB%"]) ] for _, r in hi_k.iterrows()]
-    draw_table(c, 22, 110, 238, 112, f"HIGHEST BB% PITCHERS (MIN {min_pitcher_pa} PA)", bb_rows, ["Pitcher", "PA", "BB%", "K%"], max_rows=3)
-    draw_table(c, 278, 110, 238, 112, f"HIGHEST K% PITCHERS (MIN {min_pitcher_pa} PA)", k_rows, ["Pitcher", "PA", "K%", "BB%"], max_rows=3)
+    draw_table(c, 22, 132, 238, 104, f"HIGHEST BB% PITCHERS (MIN {min_pitcher_pa} PA)", bb_rows, ["Pitcher", "PA", "BB%", "K%"], max_rows=3)
+    draw_table(c, 278, 132, 238, 104, f"HIGHEST K% PITCHERS (MIN {min_pitcher_pa} PA)", k_rows, ["Pitcher", "PA", "K%", "BB%"], max_rows=3)
 
     snap_rows = []
     if pitcher_usage is not None and not pitcher_usage.empty:
         cols = [c2 for c2 in ["CH", "CU", "FA", "FC", "FS", "SI", "SL"] if c2 in pitcher_usage.columns]
         for _, r in pitcher_usage.head(5).iterrows():
             snap_rows.append([r["Pitcher"], int(r["Pitches"])] + [f"{r[c2]:.0f}" for c2 in cols[:5]])
-        draw_table(c, 535, 110, 245, 112, "PITCHER USAGE SNAPSHOT", snap_rows, ["Pitcher", "P"] + cols[:5], font_size=5.8, max_rows=5)
+        draw_table(c, 535, 132, 245, 104, "PITCHER USAGE SNAPSHOT", snap_rows, ["Pitcher", "P"] + cols[:5], font_size=5.8, max_rows=5)
 
     # Long key insight and action plan boxes underneath the tables.
     key = build_pitching_key_insight(pitch_team, lg_pitch, usage_overall, lg_usage, pitch_leaders, min_pitcher_pa, usage_count)
-    draw_key_box(c, 22, 26, 500, 72, "KEY INSIGHT", key, icon="")
-    draw_plan_box(c, 535, 26, 245, 72, "ATTACK PLAN", build_pitching_plan_lines(usage_count, usage_overall, pitch_leaders, min_pitcher_pa))
+    draw_key_box(c, 22, 46, 500, 70, "KEY INSIGHT", key, icon="")
+    draw_plan_box(c, 535, 46, 245, 70, "ATTACK PLAN", build_pitching_plan_lines(usage_count, usage_overall, pitch_leaders, min_pitcher_pa))
     c.showPage()
 
     # PAGE 3 Hitting
@@ -1285,13 +1285,13 @@ def build_visual_pdf(context):
     bot3 = q_hitters.sort_values("OPS", ascending=True).head(3) if not q_hitters.empty else pd.DataFrame()
     top_rows = [[r.Player, int(r.PA), num(r.AVG), num(r.OBP), num(r.SLG), num(r.OPS), pct(r["BB%"]), pct(r["K%"]) ] for _, r in top3.iterrows()]
     bot_rows = [[r.Player, int(r.PA), num(r.AVG), num(r.OBP), num(r.SLG), num(r.OPS), pct(r["BB%"]), pct(r["K%"]) ] for _, r in bot3.iterrows()]
-    draw_table(c, 22, 165, 370, 95, f"TOP 3 HITTERS BY OPS (MIN {min_hitter_pa} PA)", top_rows, ["Player", "PA", "AVG", "OBP", "SLG", "OPS", "BB%", "K%"], font_size=5.8, max_rows=3)
-    draw_table(c, 410, 165, 370, 95, f"BOTTOM 3 HITTERS BY OPS (MIN {min_hitter_pa} PA)", bot_rows, ["Player", "PA", "AVG", "OBP", "SLG", "OPS", "BB%", "K%"], font_size=5.8, max_rows=3)
+    draw_table(c, 22, 180, 370, 88, f"TOP 3 HITTERS BY OPS (MIN {min_hitter_pa} PA)", top_rows, ["Player", "PA", "AVG", "OBP", "SLG", "OPS", "BB%", "K%"], font_size=5.8, max_rows=3)
+    draw_table(c, 410, 180, 370, 88, f"BOTTOM 3 HITTERS BY OPS (MIN {min_hitter_pa} PA)", bot_rows, ["Player", "PA", "AVG", "OBP", "SLG", "OPS", "BB%", "K%"], font_size=5.8, max_rows=3)
 
     leader_specs = [("BEST AVG", "AVG", False), ("BEST OBP", "OBP", False), ("BEST SLG", "SLG", False), ("BEST OPS", "OPS", False), ("BEST BB%", "BB%", False), ("LOWEST K%", "K%", True)]
-    start_x, start_y = 22, 26
-    box_w, box_h = 240, 62
-    gap_x, gap_y = 20, 10
+    start_x, start_y = 22, 42
+    box_w, box_h = 240, 58
+    gap_x, gap_y = 20, 8
     for i, (title, stat, asc) in enumerate(leader_specs):
         xx = start_x + (i % 3) * (box_w + gap_x)
         yy = start_y + (1 - i // 3) * (box_h + gap_y)
