@@ -1358,7 +1358,7 @@ def build_visual_pdf(context):
     draw_table(c, 405, PAGE_H - 388, 180, 153, "CATCHER LEADERBOARD (BY CS%)", c_rows, ["Catcher", "SBA", "CS", "SB", "CS%"], font_size=5.6, max_rows=5)
     draw_plan_box(c, 600, PAGE_H - 388, 180, 153, "RUNNING GAME PLAN", build_running_plan_lines(run_counts, runners))
     r_rows = [[r.Runner, int(r.SBA), int(r.SB), pct(r["SB%"])] for _, r in runners.head(7).iterrows()] if runners is not None and not runners.empty else []
-    draw_table(c, 22, 60, 758, 135, "INDIVIDUAL RUNNER TENDENCIES (SB%)", r_rows, ["Runner", "SBA", "SB", "SB%"], font_size=6.5, max_rows=7)
+    draw_table(c, 22, 80, 758, 135, "INDIVIDUAL RUNNER TENDENCIES (SB%)", r_rows, ["Runner", "SBA", "SB", "SB%"], font_size=6.5, max_rows=7)
     c.showPage()
     c.save()
     buffer.seek(0)
