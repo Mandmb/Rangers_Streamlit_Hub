@@ -189,6 +189,9 @@ def optimize_order(selected_df, user_weights):
     if "Position" in lineup.columns:
         display_cols.append("Position")
 
+    if "Bats" in lineup.columns:
+        display_cols.append("Bats")
+
     display_cols += REQUIRED_STATS + ["Overall Score", "Spot Fit Score"]
 
     return lineup[display_cols]
@@ -261,6 +264,25 @@ position_col = find_column(
 if position_col:
     df["Position"] = df[position_col].apply(normalize_position)
 
+bats_col = find_column(
+    df,
+    [
+        "Bats",
+        "bats",
+        "BatSide",
+        "batSide",
+        "BatterSide",
+        "batterSide",
+        "HitterSide",
+        "hitterSide",
+        "Side",
+        "side",
+    ],
+)
+
+if bats_col:
+    df["Bats"] = df[bats_col].astype(str).str.upper().str.strip()
+
 st.sidebar.header("Stat Weights")
 
 avg_weight = st.sidebar.slider("AVG Weight", 0.0, 5.0, 1.0, 0.1)
@@ -299,6 +321,9 @@ preview_cols = ["playerFullName"]
 if "Position" in df.columns:
     preview_cols.append("Position")
 
+if "Bats" in df.columns:
+    preview_cols.append("Bats")
+
 preview_cols += REQUIRED_STATS + ["Overall Score"]
 
 st.dataframe(
@@ -324,7 +349,33 @@ if st.button("Optimize Lineup", type="primary"):
     lineup = optimize_order(selected, weights)
 
     st.subheader("Optimized Lineup")
-    st.dataframe(lineup, use_container_width=True, hide_index=True)
+
+    def color_hitter_name(row):
+        if "Bats" not in lineup.columns:
+            return ""
+
+        side = str(row["Bats"]).upper().strip()
+
+        if side == "L":
+            return "color: red; font-weight: bold;"
+        elif side == "S":
+            return "color: blue; font-weight: bold;"
+        else:
+            return "color: black;"
+
+    styled_lineup = lineup.style.apply(
+        lambda row: [
+            color_hitter_name(row) if col == "playerFullName" else ""
+            for col in lineup.columns
+        ],
+        axis=1,
+    )
+
+    st.dataframe(
+        styled_lineup,
+        use_container_width=True,
+        hide_index=True,
+    )
 
     csv = lineup.to_csv(index=False).encode("utf-8")
 
