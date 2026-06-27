@@ -3,6 +3,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import html
+from datetime import datetime
+from io import BytesIO
 
 st.set_page_config(page_title="Lineup Optimization", layout="wide")
 
@@ -54,49 +56,20 @@ def normalize_position(pos):
 
 
 def normalize_bats(value):
-    """
-    Converts batting-hand values into L/R/S.
-    Handles clean values like L, R, S and messy values like 'LHH', 'Left', 'Switch', etc.
-    Defaults to R only when the value is blank or cannot be identified.
-    """
     if pd.isna(value):
         return "R"
-
     side = str(value).strip().upper()
-
-    if side in ["", "NAN", "NONE", "NULL", "UNKNOWN"]:
-        return "R"
-
-    cleaned = (
-        side.replace("-", " ")
-        .replace("_", " ")
-        .replace("/", " ")
-        .replace("\\", " ")
-        .replace(".", "")
-        .strip()
-    )
-
-    left_values = ["L", "LEFT", "LHH", "LH", "LEFT HANDED", "LEFTY", "BATS LEFT"]
-    right_values = ["R", "RIGHT", "RHH", "RH", "RIGHT HANDED", "RIGHTY", "BATS RIGHT"]
-    switch_values = ["S", "SW", "SWITCH", "BOTH", "SH", "SWITCH HITTER", "BATS SWITCH"]
-
-    if cleaned in left_values:
+    left_values = ["L", "LEFT", "LHH", "LH", "LEFT-HANDED", "LEFT HANDED"]
+    right_values = ["R", "RIGHT", "RHH", "RH", "RIGHT-HANDED", "RIGHT HANDED"]
+    switch_values = ["S", "SW", "SWITCH", "BOTH", "SH", "SWITCH-HITTER", "SWITCH HITTER"]
+    if side in left_values:
         return "L"
-    if cleaned in right_values:
+    if side in right_values:
         return "R"
-    if cleaned in switch_values:
+    if side in switch_values:
         return "S"
+    return side
 
-    if "SWITCH" in cleaned or cleaned == "BOTH":
-        return "S"
-    if "LEFT" in cleaned or cleaned.startswith("L"):
-        return "L"
-    if "RIGHT" in cleaned or cleaned.startswith("R"):
-        return "R"
-    if cleaned.startswith("S"):
-        return "S"
-
-    return "R"
 
 def hitter_name_color(side):
     side = normalize_bats(side)
@@ -267,6 +240,7 @@ def render_lineup_table(lineup):
 
 def prepare_dataframe(uploaded_file, label):
     try:
+        uploaded_file.seek(0)
         df = pd.read_csv(uploaded_file)
     except Exception as e:
         st.error(f"Could not read {label} CSV: {e}")
@@ -292,19 +266,6 @@ def prepare_dataframe(uploaded_file, label):
     for stat in REQUIRED_STATS:
         df[stat] = pd.to_numeric(df[stat], errors="coerce").fillna(0)
 
-    pa_col = find_column(
-        df,
-        [
-            "PA", "pa", "PlateAppearances", "plateAppearances",
-            "Plate Appearances", "plate appearances", "PAs", "pas",
-            "Total PA", "totalPA", "TotalPA"
-        ],
-    )
-    if pa_col:
-        df["PA"] = pd.to_numeric(df[pa_col], errors="coerce").fillna(0).astype(int)
-    else:
-        df["PA"] = 0
-
     position_col = find_column(df, ["Position", "position", "POS", "pos", "PrimaryPosition", "primaryPosition"])
     if position_col:
         df["Position"] = df[position_col].apply(normalize_position)
@@ -323,6 +284,16 @@ def prepare_dataframe(uploaded_file, label):
         df["Bats"] = df[bats_col].apply(normalize_bats)
     else:
         df["Bats"] = "R"
+
+    pa_col = find_column(
+        df,
+        [
+            "PA", "pa", "PlateAppearances", "plateAppearances",
+            "Plate Appearances", "plate appearances", "PAs", "pas",
+        ],
+    )
+    if pa_col:
+        df["PA"] = pd.to_numeric(df[pa_col], errors="coerce").fillna(0).astype(int)
 
     return df
 
@@ -366,6 +337,185 @@ def show_player_pool(df):
         use_container_width=True,
         hide_index=True,
     )
+
+
+def create_all_lineups_pdf(lineups_by_mode):
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    from reportlab.lib.pagesizes import letter, landscape
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import inch
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+
+    buffer = BytesIO()
+    page_size = landscape(letter)
+
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=page_size,
+        leftMargin=0.35 * inch,
+        rightMargin=0.35 * inch,
+        topMargin=0.25 * inch,
+        bottomMargin=0.25 * inch,
+    )
+
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "TitleStyle",
+        parent=styles["Title"],
+        fontName="Helvetica-Bold",
+        fontSize=18,
+        leading=20,
+        textColor=colors.HexColor("#002D72"),
+        alignment=TA_CENTER,
+        spaceAfter=2,
+    )
+    subtitle_style = ParagraphStyle(
+        "SubtitleStyle",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=8,
+        leading=10,
+        textColor=colors.HexColor("#555555"),
+        alignment=TA_CENTER,
+        spaceAfter=6,
+    )
+    section_style = ParagraphStyle(
+        "SectionStyle",
+        parent=styles["Heading2"],
+        fontName="Helvetica-Bold",
+        fontSize=11,
+        leading=12,
+        textColor=colors.white,
+        alignment=TA_LEFT,
+        leftIndent=4,
+        spaceAfter=0,
+    )
+    name_style_base = ParagraphStyle(
+        "NameBase",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=6.6,
+        leading=7.5,
+        alignment=TA_LEFT,
+    )
+    cell_style = ParagraphStyle(
+        "CellStyle",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=6.6,
+        leading=7.5,
+        alignment=TA_CENTER,
+    )
+
+    story = []
+    story.append(Paragraph("LINEUP OPTIMIZATION REPORT", title_style))
+    story.append(
+        Paragraph(
+            f"Overall, vs RHP, and vs LHP optimized lineups • Generated {datetime.now().strftime('%b %d, %Y')}",
+            subtitle_style,
+        )
+    )
+
+    def p(txt, style):
+        return Paragraph(str(txt), style)
+
+    def name_paragraph(name, bats):
+        style = ParagraphStyle(
+            f"Name_{str(bats)}_{str(name)[:4]}",
+            parent=name_style_base,
+            textColor=colors.HexColor(hitter_name_color(bats)),
+        )
+        return Paragraph(html.escape(str(name)), style)
+
+    table_cols = ["#", "Player", "Pos", "Bats", "PA", "AVG", "OBP", "SLG", "ISO", "SB", "Score"]
+    col_widths = [0.27*inch, 1.75*inch, 0.42*inch, 0.35*inch, 0.38*inch, 0.48*inch, 0.48*inch, 0.48*inch, 0.48*inch, 0.35*inch, 0.55*inch]
+
+    for mode, lineup in lineups_by_mode.items():
+        section = Table(
+            [[Paragraph(mode.upper(), section_style)]],
+            colWidths=[sum(col_widths)],
+            rowHeights=[0.22 * inch],
+        )
+        section.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#002D72")),
+                    ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#002D72")),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ]
+            )
+        )
+        story.append(section)
+
+        data = [[p(c, cell_style) for c in table_cols]]
+        for _, row in lineup.iterrows():
+            pos = row["Position"] if "Position" in lineup.columns else ""
+            bats = row["Bats"] if "Bats" in lineup.columns else "R"
+            pa = row["PA"] if "PA" in lineup.columns else ""
+            data.append(
+                [
+                    p(format_cell(row["Lineup Spot"], "Lineup Spot"), cell_style),
+                    name_paragraph(row["playerFullName"], bats),
+                    p(format_cell(pos, "Position"), cell_style),
+                    p(format_cell(bats, "Bats"), cell_style),
+                    p(format_cell(pa, "PA"), cell_style),
+                    p(format_cell(row["AVG"], "AVG"), cell_style),
+                    p(format_cell(row["OBP"], "OBP"), cell_style),
+                    p(format_cell(row["SLG"], "SLG"), cell_style),
+                    p(format_cell(row["ISO"], "ISO"), cell_style),
+                    p(format_cell(row["SB"], "SB"), cell_style),
+                    p(format_cell(row["Overall Score"], "Overall Score"), cell_style),
+                ]
+            )
+
+        table = Table(data, colWidths=col_widths, repeatRows=1)
+        table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#BA0C2F")),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#DDDDDD")),
+                    ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                    ("ALIGN", (1, 1), (1, -1), "LEFT"),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F6F7FA")]),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 2.6),
+                    ("TOPPADDING", (0, 0), (-1, -1), 2.6),
+                ]
+            )
+        )
+        story.append(table)
+        story.append(Spacer(1, 0.10 * inch))
+
+    story.append(
+        Paragraph(
+            '<font color="#BA0C2F"><b>LHH</b></font> = red &nbsp;&nbsp; | &nbsp;&nbsp; '
+            '<font color="#002D72"><b>Switch</b></font> = blue &nbsp;&nbsp; | &nbsp;&nbsp; '
+            '<font color="#111111"><b>RHH</b></font> = black',
+            subtitle_style,
+        )
+    )
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+def build_pdf_lineups(files, weights, enforce_positions):
+    lineups = {}
+    for mode_name, uploaded in files.items():
+        if uploaded is None:
+            return None, f"Missing {mode_name} CSV. Upload all 3 CSVs to create the PDF."
+        df_mode = prepare_dataframe(uploaded, mode_name)
+        if df_mode is None:
+            return None, f"Could not prepare {mode_name} CSV."
+        lineup_mode_df, _ = build_lineup(df_mode, weights, enforce_positions, mode_name)
+        if lineup_mode_df is None:
+            return None, f"Could not build {mode_name} lineup."
+        lineups[mode_name] = lineup_mode_df
+    return lineups, None
 
 
 st.title("Lineup Optimization")
@@ -445,6 +595,26 @@ st.download_button(
     mime="text/csv",
 )
 
+st.divider()
+st.subheader("PDF Report")
+
+pdf_lineups, pdf_error = build_pdf_lineups(files, weights, enforce_positions)
+
+if pdf_error:
+    st.info(pdf_error)
+else:
+    try:
+        pdf_bytes = create_all_lineups_pdf(pdf_lineups)
+        st.download_button(
+            label="Download PDF with All 3 Optimized Lineups",
+            data=pdf_bytes,
+            file_name="all_three_optimized_lineups.pdf",
+            mime="application/pdf",
+            type="primary",
+        )
+    except Exception as e:
+        st.error(f"Could not create PDF report: {e}")
+
 st.markdown("### Lineup Notes")
 st.write(
     """
@@ -453,7 +623,6 @@ st.write(
     - Position requirements are optional.
     - When position requirements are off, the app selects the best 9 offensive players.
     - When position requirements are on, the app attempts to include C, 1B, 2B, 3B, SS, 3 OF, and DH.
-    - PA is displayed between Bats and AVG when available in the CSV.
     - The batting order uses both your selected stat weights and spot-specific logic.
     """
 )
