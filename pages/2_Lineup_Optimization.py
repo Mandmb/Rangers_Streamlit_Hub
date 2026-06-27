@@ -1,28 +1,20 @@
+
 import streamlit as st
 import pandas as pd
 import numpy as np
 import html
-from io import BytesIO
 from datetime import date
+from io import BytesIO
+import tempfile
+import os
 
-try:
-    from PIL import Image
-except Exception:
-    Image = None
-
-try:
-    from reportlab.lib import colors
-    from reportlab.lib.pagesizes import landscape, letter
-    from reportlab.lib.units import inch
-    from reportlab.lib.utils import ImageReader
-    from reportlab.pdfgen import canvas
-except Exception:
-    colors = None
-    landscape = None
-    letter = None
-    inch = 72
-    ImageReader = None
-    canvas = None
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import landscape, letter
+from reportlab.lib.units import inch
+from reportlab.platypus import Table, TableStyle
+from reportlab.pdfgen import canvas
+from reportlab.lib.utils import ImageReader
+from PIL import Image
 
 st.set_page_config(page_title="Lineup Optimization", layout="wide")
 
@@ -50,15 +42,9 @@ LINEUP_SPOT_WEIGHTS = {
     9: {"AVG": 0.15, "OBP": 0.30, "SLG": 0.15, "ISO": 0.05, "SB": 0.35},
 }
 
-DEFAULT_PRIMARY = "#002D72"
-DEFAULT_SECONDARY = "#BA0C2F"
-HAND_RED = "#BA0C2F"
-HAND_BLUE = "#002D72"
-HAND_BLACK = "#111111"
-
 
 # =====================================================
-# GENERAL HELPERS
+# BASIC HELPERS
 # =====================================================
 
 def clean_colnames(df):
@@ -87,30 +73,25 @@ def normalize_bats(value):
     if pd.isna(value):
         return "R"
     side = str(value).strip().upper()
-    side = side.replace("-", " ").replace("_", " ").strip()
-    left_values = ["L", "LEFT", "LHH", "LH", "LEFT HANDED", "LEFT HAND", "LEFTY"]
-    right_values = ["R", "RIGHT", "RHH", "RH", "RIGHT HANDED", "RIGHT HAND", "RIGHTY"]
-    switch_values = ["S", "SW", "SWITCH", "BOTH", "SH", "SWITCH HITTER", "SWITCH HIT"]
+    left_values = ["L", "LEFT", "LHH", "LH", "LEFT-HANDED", "LEFT HANDED"]
+    right_values = ["R", "RIGHT", "RHH", "RH", "RIGHT-HANDED", "RIGHT HANDED"]
+    switch_values = ["S", "SW", "SWITCH", "BOTH", "SH", "SWITCH-HITTER", "SWITCH HITTER"]
     if side in left_values:
         return "L"
     if side in right_values:
         return "R"
     if side in switch_values:
         return "S"
-    if side.startswith("L"):
-        return "L"
-    if side.startswith("S") or "SWITCH" in side:
-        return "S"
-    return "R"
+    return side
 
 
 def hitter_name_color(side):
     side = normalize_bats(side)
     if side == "L":
-        return HAND_RED
+        return "#BA0C2F"
     if side == "S":
-        return HAND_BLUE
-    return HAND_BLACK
+        return "#002D72"
+    return "#111111"
 
 
 def player_eligible_for_position(player_pos, required_pos):
@@ -122,96 +103,6 @@ def player_eligible_for_position(player_pos, required_pos):
         return "OF" in positions
     return required_pos in positions
 
-
-def fmt_decimal(value, digits=3):
-    try:
-        x = float(value)
-        return f"{x:.{digits}f}".replace("0.", ".")
-    except Exception:
-        return ""
-
-
-def fmt_score(value):
-    try:
-        return f"{float(value):.2f}"
-    except Exception:
-        return ""
-
-
-def hex_to_rgb(hex_color):
-    hex_color = str(hex_color).strip().lstrip("#")
-    if len(hex_color) != 6:
-        return (0, 45, 114)
-    return tuple(int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
-
-
-def rgb_to_hex(rgb):
-    return "#%02x%02x%02x" % tuple(int(max(0, min(255, v))) for v in rgb)
-
-
-def darken(hex_color, factor=0.75):
-    r, g, b = hex_to_rgb(hex_color)
-    return rgb_to_hex((r * factor, g * factor, b * factor))
-
-
-def lighten(hex_color, factor=0.88):
-    r, g, b = hex_to_rgb(hex_color)
-    return rgb_to_hex((255 - (255 - r) * factor, 255 - (255 - g) * factor, 255 - (255 - b) * factor))
-
-
-def reportlab_color(hex_color):
-    r, g, b = hex_to_rgb(hex_color)
-    return colors.Color(r / 255, g / 255, b / 255)
-
-
-# =====================================================
-# LOGO / COLORS
-# =====================================================
-
-def extract_logo_colors(logo_bytes):
-    if not logo_bytes or Image is None:
-        return DEFAULT_PRIMARY, DEFAULT_SECONDARY
-    try:
-        img = Image.open(BytesIO(logo_bytes)).convert("RGBA")
-        img.thumbnail((180, 180))
-        arr = np.array(img)
-        rgb = arr[:, :, :3]
-        alpha = arr[:, :, 3]
-        mask = alpha > 40
-        if not mask.any():
-            return DEFAULT_PRIMARY, DEFAULT_SECONDARY
-        pixels = rgb[mask]
-        # Remove near-white and near-black so logos do not choose background/outline first.
-        brightness = pixels.mean(axis=1)
-        saturation = pixels.max(axis=1) - pixels.min(axis=1)
-        keep = (brightness < 245) & (brightness > 25) & (saturation > 18)
-        pixels = pixels[keep] if keep.any() else pixels
-        # Quantize by rounding to reduce noise.
-        rounded = (pixels // 24) * 24
-        unique, counts = np.unique(rounded, axis=0, return_counts=True)
-        order = np.argsort(counts)[::-1]
-        chosen = []
-        for idx in order:
-            c = unique[idx]
-            if not chosen:
-                chosen.append(c)
-                continue
-            dist = np.linalg.norm(c.astype(float) - chosen[0].astype(float))
-            if dist > 85:
-                chosen.append(c)
-                break
-        if not chosen:
-            return DEFAULT_PRIMARY, DEFAULT_SECONDARY
-        primary = rgb_to_hex(chosen[0])
-        secondary = rgb_to_hex(chosen[1]) if len(chosen) > 1 else DEFAULT_SECONDARY
-        return darken(primary, 0.78), darken(secondary, 0.86)
-    except Exception:
-        return DEFAULT_PRIMARY, DEFAULT_SECONDARY
-
-
-# =====================================================
-# LINEUP OPTIMIZATION
-# =====================================================
 
 def normalize_stats(df, stat_cols):
     df = df.copy()
@@ -242,7 +133,10 @@ def calculate_spot_fit_score(row, spot, normalized_df, user_weights):
     user_total = max(sum(user_weights.values()), 1)
     combined_weights = {}
     for stat in REQUIRED_STATS:
-        combined_weights[stat] = (spot_weights[stat] * 0.60) + (user_weights[stat] / user_total * 0.40)
+        combined_weights[stat] = (spot_weights[stat] * 0.60) + (
+            user_weights[stat] / user_total * 0.40
+        )
+
     score = 0
     for stat in REQUIRED_STATS:
         score += normalized_df.loc[row.name, stat] * combined_weights[stat]
@@ -256,23 +150,32 @@ def select_best_9_no_positions(df):
 def select_best_9_with_positions(df, position_col):
     selected_rows = []
     used_indexes = set()
+
     for required_pos, count_needed in POSITION_REQUIREMENTS.items():
         eligible = df[
             (~df.index.isin(used_indexes))
             & (df[position_col].apply(lambda p: player_eligible_for_position(p, required_pos)))
         ].sort_values("Overall Score", ascending=False)
+
         if len(eligible) < count_needed:
-            st.warning(f"Not enough eligible players for {required_pos}. Needed {count_needed}, found {len(eligible)}.")
+            st.warning(
+                f"Not enough eligible players for {required_pos}. Needed {count_needed}, found {len(eligible)}."
+            )
             continue
+
         chosen = eligible.head(count_needed)
         selected_rows.append(chosen)
         used_indexes.update(chosen.index.tolist())
+
     if not selected_rows:
         return pd.DataFrame()
+
     selected = pd.concat(selected_rows)
+
     if len(selected) < 9:
         remaining = df[~df.index.isin(selected.index)].sort_values("Overall Score", ascending=False)
         selected = pd.concat([selected, remaining.head(9 - len(selected))])
+
     return selected.head(9).copy()
 
 
@@ -281,28 +184,62 @@ def optimize_order(selected_df, user_weights):
     normalized = normalize_stats(selected_df, REQUIRED_STATS)
     remaining = selected_df.copy()
     lineup_rows = []
+
     for spot in range(1, 10):
         scores = []
         for idx, row in remaining.iterrows():
             spot_score = calculate_spot_fit_score(row, spot, normalized, user_weights)
             scores.append((idx, spot_score))
+
         best_idx, best_score = max(scores, key=lambda x: x[1])
         best_row = remaining.loc[best_idx].copy()
         best_row["Lineup Spot"] = spot
         best_row["Spot Fit Score"] = round(best_score, 4)
         lineup_rows.append(best_row)
         remaining = remaining.drop(best_idx)
+
     lineup = pd.DataFrame(lineup_rows)
     display_cols = ["Lineup Spot", "playerFullName"]
+
     if "Position" in lineup.columns:
         display_cols.append("Position")
     if "Bats" in lineup.columns:
         display_cols.append("Bats")
     if "PA" in lineup.columns:
         display_cols.append("PA")
+
     display_cols += REQUIRED_STATS + ["Overall Score", "Spot Fit Score"]
     return lineup[display_cols]
 
+
+def format_decimal(value):
+    try:
+        return f"{float(value):.3f}".replace("0.", ".")
+    except Exception:
+        return str(value)
+
+
+def format_cell(value, col):
+    if pd.isna(value):
+        return ""
+    if col in ["AVG", "OBP", "SLG", "ISO"]:
+        return format_decimal(value)
+    if col in ["Overall Score", "Spot Fit Score"]:
+        try:
+            return f"{float(value):.4f}"
+        except Exception:
+            return str(value)
+    if col in ["SB", "PA"]:
+        try:
+            return f"{int(float(value))}"
+        except Exception:
+            return str(value)
+    return str(value)
+
+
+# =====================================================
+# DATA PREP
+# =====================================================
 
 def prepare_dataframe(uploaded_file, label):
     try:
@@ -310,29 +247,37 @@ def prepare_dataframe(uploaded_file, label):
     except Exception as e:
         st.error(f"Could not read {label} CSV: {e}")
         return None
+
     df = clean_colnames(df)
-    name_col = find_column(df, ["playerFullName", "PlayerFullName", "player_name", "playerName", "Name", "Player", "FullName", "fullName"])
+
+    name_col = find_column(df, ["playerFullName", "PlayerFullName", "player_name", "playerName", "Name", "Player"])
     if name_col is None:
         st.error(f"Could not find a player name column in {label}. The app expects `playerFullName`.")
         return None
+
     df["playerFullName"] = df[name_col].astype(str).str.strip()
     bad_names = ["", "none", "nan", "null", "unknown"]
     df = df[~df["playerFullName"].str.lower().isin(bad_names)].copy()
+
     missing_stats = [stat for stat in REQUIRED_STATS if stat not in df.columns]
     if missing_stats:
         st.error(f"Missing required stat columns in {label}: {missing_stats}")
         st.write("Your CSV must include:", REQUIRED_STATS)
         return None
+
     for stat in REQUIRED_STATS:
         df[stat] = pd.to_numeric(df[stat], errors="coerce").fillna(0)
-    pa_col = find_column(df, ["PA", "pa", "PlateAppearances", "plateAppearances", "Plate Appearances", "plate appearances"])
+
+    pa_col = find_column(df, ["PA", "pa", "PlateAppearances", "plateAppearances", "Plate Appearances"])
     if pa_col:
         df["PA"] = pd.to_numeric(df[pa_col], errors="coerce").fillna(0).astype(int)
     else:
         df["PA"] = 0
+
     position_col = find_column(df, ["Position", "position", "POS", "pos", "PrimaryPosition", "primaryPosition"])
     if position_col:
         df["Position"] = df[position_col].apply(normalize_position)
+
     bats_col = find_column(
         df,
         [
@@ -347,6 +292,7 @@ def prepare_dataframe(uploaded_file, label):
         df["Bats"] = df[bats_col].apply(normalize_bats)
     else:
         df["Bats"] = "R"
+
     return df
 
 
@@ -354,63 +300,71 @@ def build_lineup(df, weights, enforce_positions, label):
     df = df.copy()
     df["Overall Score"] = calculate_overall_score(df, weights)
     df["Overall Score"] = df["Overall Score"].round(4)
+
     if len(df) < 9:
         st.error(f"{label}: You need at least 9 players in the CSV.")
         return None, df
+
     can_enforce = enforce_positions and "Position" in df.columns
     if enforce_positions and not can_enforce:
         st.warning(f"{label}: No position column found. Position requirements were ignored.")
-    selected = select_best_9_with_positions(df, "Position") if can_enforce else select_best_9_no_positions(df)
+
+    if can_enforce:
+        selected = select_best_9_with_positions(df, "Position")
+    else:
+        selected = select_best_9_no_positions(df)
+
     if len(selected) < 9:
         st.error(f"{label}: Could not select 9 players. Check player pool and positions.")
         return None, df
+
     lineup = optimize_order(selected, weights)
     return lineup, df
-
-
-# =====================================================
-# METRICS / TABLE DISPLAY
-# =====================================================
-
-def weighted_metric(lineup, col):
-    if lineup is None or lineup.empty or col not in lineup.columns:
-        return 0
-    if "PA" in lineup.columns and lineup["PA"].sum() > 0:
-        return float(np.average(pd.to_numeric(lineup[col], errors="coerce").fillna(0), weights=pd.to_numeric(lineup["PA"], errors="coerce").fillna(0)))
-    return float(pd.to_numeric(lineup[col], errors="coerce").fillna(0).mean())
 
 
 def lineup_summary(lineup):
     if lineup is None or lineup.empty:
         return {"AVG": 0, "OBP": 0, "SLG": 0, "ISO": 0, "SB": 0, "PA": 0, "Score": 0}
-    return {
-        "AVG": weighted_metric(lineup, "AVG"),
-        "OBP": weighted_metric(lineup, "OBP"),
-        "SLG": weighted_metric(lineup, "SLG"),
-        "ISO": weighted_metric(lineup, "ISO"),
-        "SB": int(pd.to_numeric(lineup["SB"], errors="coerce").fillna(0).sum()) if "SB" in lineup.columns else 0,
-        "PA": int(pd.to_numeric(lineup["PA"], errors="coerce").fillna(0).sum()) if "PA" in lineup.columns else 0,
-        "Score": float(pd.to_numeric(lineup["Spot Fit Score"], errors="coerce").fillna(0).sum()) if "Spot Fit Score" in lineup.columns else 0,
-    }
+
+    summary = {}
+    total_pa = float(pd.to_numeric(lineup.get("PA", pd.Series([0] * len(lineup))), errors="coerce").fillna(0).sum())
+    weights_pa = pd.to_numeric(lineup.get("PA", pd.Series([0] * len(lineup))), errors="coerce").fillna(0)
+
+    for stat in ["AVG", "OBP", "SLG", "ISO"]:
+        vals = pd.to_numeric(lineup[stat], errors="coerce").fillna(0)
+        if total_pa > 0:
+            summary[stat] = float((vals * weights_pa).sum() / total_pa)
+        else:
+            summary[stat] = float(vals.mean())
+
+    summary["SB"] = int(pd.to_numeric(lineup["SB"], errors="coerce").fillna(0).sum())
+    summary["PA"] = int(total_pa)
+    summary["Score"] = float(pd.to_numeric(lineup["Spot Fit Score"], errors="coerce").fillna(0).sum())
+    return summary
 
 
-def format_cell(value, col):
-    if pd.isna(value):
-        return ""
-    if col in ["AVG", "OBP", "SLG", "ISO"]:
-        return fmt_decimal(value, 3)
-    if col in ["Overall Score", "Spot Fit Score"]:
-        return f"{float(value):.4f}"
-    if col in ["SB", "PA", "Lineup Spot"]:
-        try:
-            return f"{int(float(value))}"
-        except Exception:
-            return str(value)
-    return str(value)
+def total_avg_row(lineup):
+    s = lineup_summary(lineup)
+    return [
+        "TOTAL/AVG",
+        "",
+        "—",
+        "—",
+        str(s["PA"]),
+        format_decimal(s["AVG"]),
+        format_decimal(s["OBP"]),
+        format_decimal(s["SLG"]),
+        format_decimal(s["ISO"]),
+        str(s["SB"]),
+    ]
 
+
+# =====================================================
+# WEBSITE TABLE
+# =====================================================
 
 def render_lineup_table(lineup):
-    cols = lineup.columns.tolist()
+    cols = [c for c in lineup.columns if c not in ["Overall Score", "Spot Fit Score"]]
     table_html = """
     <style>
     .lineup-table {width: 100%; border-collapse: collapse; font-family: Arial, sans-serif; font-size: 15px;}
@@ -419,12 +373,15 @@ def render_lineup_table(lineup):
     .lineup-table tr:nth-child(even) {background-color: #f7f7f7;}
     .lineup-table tr:nth-child(odd) {background-color: #ffffff;}
     .player-name-cell {text-align: left !important; font-weight: 800;}
+    .total-row td {background-color: #E8EEF8 !important; color: #002D72; font-weight: 900;}
     </style>
     <table class="lineup-table"><thead><tr>
     """
+    pretty_cols = {"Lineup Spot": "#", "playerFullName": "Player", "Position": "Pos"}
     for col in cols:
-        table_html += f"<th>{html.escape(str(col))}</th>"
+        table_html += f"<th>{html.escape(pretty_cols.get(str(col), str(col)))}</th>"
     table_html += "</tr></thead><tbody>"
+
     for _, row in lineup.iterrows():
         table_html += "<tr>"
         bats = row["Bats"] if "Bats" in lineup.columns else "R"
@@ -437,6 +394,26 @@ def render_lineup_table(lineup):
             else:
                 table_html += f"<td>{safe_value}</td>"
         table_html += "</tr>"
+
+    # Total / average row
+    s = lineup_summary(lineup)
+    total_values = {
+        "Lineup Spot": "TOTAL/AVG",
+        "playerFullName": "",
+        "Position": "—",
+        "Bats": "—",
+        "PA": s["PA"],
+        "AVG": s["AVG"],
+        "OBP": s["OBP"],
+        "SLG": s["SLG"],
+        "ISO": s["ISO"],
+        "SB": s["SB"],
+    }
+    table_html += '<tr class="total-row">'
+    for col in cols:
+        table_html += f"<td>{html.escape(format_cell(total_values.get(col, ''), col))}</td>"
+    table_html += "</tr>"
+
     table_html += "</tbody></table>"
     st.markdown(table_html, unsafe_allow_html=True)
 
@@ -445,235 +422,443 @@ def show_player_pool(df):
     preview_cols = ["playerFullName"]
     if "Position" in df.columns:
         preview_cols.append("Position")
-    preview_cols += ["Bats", "PA"]
+    preview_cols.append("Bats")
+    if "PA" in df.columns:
+        preview_cols.append("PA")
     preview_cols += REQUIRED_STATS + ["Overall Score"]
-    st.dataframe(df[preview_cols].sort_values("Overall Score", ascending=False), use_container_width=True, hide_index=True)
+    st.dataframe(
+        df[preview_cols].sort_values("Overall Score", ascending=False),
+        use_container_width=True,
+        hide_index=True,
+    )
 
 
 # =====================================================
-# PROFESSIONAL PDF EXPORT
+# BRANDING / COLORS
 # =====================================================
 
-def draw_centered_text(c, text, x, y, font="Helvetica-Bold", size=12, color_hex="#000000"):
-    c.setFillColor(reportlab_color(color_hex))
-    c.setFont(font, size)
-    c.drawCentredString(x, y, text)
+def clamp(v):
+    return max(0, min(255, int(v)))
 
 
-def draw_right_text(c, text, x, y, font="Helvetica", size=10, color_hex="#000000"):
-    c.setFillColor(reportlab_color(color_hex))
-    c.setFont(font, size)
-    c.drawRightString(x, y, text)
+def rgb_to_hex(rgb):
+    return "#{:02X}{:02X}{:02X}".format(clamp(rgb[0]), clamp(rgb[1]), clamp(rgb[2]))
 
 
-def draw_logo(c, logo_bytes, x, y, w, h):
-    if not logo_bytes or ImageReader is None:
+def luminance(rgb):
+    r, g, b = [x / 255 for x in rgb]
+    return 0.299 * r + 0.587 * g + 0.114 * b
+
+
+def darken(rgb, factor=0.55):
+    return tuple(clamp(x * factor) for x in rgb)
+
+
+def extract_team_colors(logo_file):
+    default_primary = (0, 45, 114)
+    default_accent = (186, 12, 47)
+
+    if logo_file is None:
+        return default_primary, default_accent
+
+    try:
+        logo_file.seek(0)
+        img = Image.open(logo_file).convert("RGBA")
+        img.thumbnail((180, 180))
+
+        pixels = []
+        for r, g, b, a in img.getdata():
+            if a < 120:
+                continue
+            # Skip nearly white / gray background
+            if r > 235 and g > 235 and b > 235:
+                continue
+            if abs(r - g) < 12 and abs(g - b) < 12 and abs(r - b) < 12:
+                continue
+            pixels.append((r, g, b))
+
+        if not pixels:
+            return default_primary, default_accent
+
+        # Quantize by color buckets
+        buckets = {}
+        for r, g, b in pixels:
+            key = (round(r / 32) * 32, round(g / 32) * 32, round(b / 32) * 32)
+            buckets[key] = buckets.get(key, 0) + 1
+
+        ranked = sorted(buckets.items(), key=lambda x: x[1], reverse=True)
+        colors_found = [c for c, _ in ranked]
+
+        primary = colors_found[0]
+        accent = default_accent
+
+        for c in colors_found[1:]:
+            # Select a second color that is visually different
+            dist = sum((c[i] - primary[i]) ** 2 for i in range(3)) ** 0.5
+            if dist > 90:
+                accent = c
+                break
+
+        if luminance(primary) > 0.55:
+            primary = darken(primary, 0.55)
+        if luminance(accent) > 0.65:
+            accent = darken(accent, 0.65)
+
+        return primary, accent
+    except Exception:
+        return default_primary, default_accent
+
+
+def save_logo_temp(logo_file):
+    if logo_file is None:
+        return None
+    try:
+        suffix = os.path.splitext(logo_file.name)[1] or ".png"
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        logo_file.seek(0)
+        tmp.write(logo_file.read())
+        tmp.close()
+        logo_file.seek(0)
+        return tmp.name
+    except Exception:
+        return None
+
+
+# =====================================================
+# PDF EXPORT
+# =====================================================
+
+def draw_rounded_rect(c, x, y, w, h, radius=6, fill=colors.white, stroke=colors.HexColor("#DDDDDD"), stroke_width=1):
+    c.setFillColor(fill)
+    c.setStrokeColor(stroke)
+    c.setLineWidth(stroke_width)
+    c.roundRect(x, y, w, h, radius, fill=1, stroke=1)
+
+
+def draw_metric_block(c, x, y, w, h, label, value, label_color, value_color):
+    c.setStrokeColor(colors.HexColor("#E2E2E2"))
+    c.setLineWidth(0.6)
+    c.line(x + w, y + 5, x + w, y + h - 5)
+
+    c.setFillColor(label_color)
+    c.setFont("Helvetica-Bold", 7.5)
+    c.drawCentredString(x + w / 2, y + h - 16, label)
+
+    c.setFillColor(value_color)
+    c.setFont("Helvetica-Bold", 17)
+    c.drawCentredString(x + w / 2, y + 9, value)
+
+
+def draw_logo(c, logo_path, x, y, max_w, max_h):
+    if not logo_path:
         return
     try:
-        c.drawImage(ImageReader(BytesIO(logo_bytes)), x, y, width=w, height=h, preserveAspectRatio=True, mask="auto")
+        img = ImageReader(logo_path)
+        iw, ih = img.getSize()
+        scale = min(max_w / iw, max_h / ih)
+        w = iw * scale
+        h = ih * scale
+        c.drawImage(img, x + (max_w - w) / 2, y + (max_h - h) / 2, width=w, height=h, mask="auto")
     except Exception:
         pass
 
 
-def draw_metric_box(c, x, y, w, h, label, value, value_color):
-    c.setStrokeColor(reportlab_color("#D6DAE2"))
-    c.setLineWidth(0.6)
-    c.rect(x, y, w, h, stroke=1, fill=0)
-    draw_centered_text(c, label, x + w / 2, y + h - 13, "Helvetica-Bold", 6.2, "#111111")
-    draw_centered_text(c, value, x + w / 2, y + 9, "Helvetica-Bold", 12, value_color)
-
-
-def draw_summary_strip(c, x, y, w, h, primary, secondary, overall_summary):
-    label_w = 1.48 * inch
-    c.setFillColor(reportlab_color(primary))
-    c.roundRect(x, y, label_w, h, 4, fill=1, stroke=0)
-    draw_centered_text(c, "TEAM", x + label_w / 2, y + h / 2 + 8, "Helvetica-Bold", 11, "#FFFFFF")
-    draw_centered_text(c, "SUMMARY", x + label_w / 2, y + h / 2 - 7, "Helvetica-Bold", 11, "#FFFFFF")
-
-    metric_w = (w - label_w) / 4
-    labels = ["Team AVG", "Team OBP", "Team SLG", "Projected Lineup Score"]
-    values = [fmt_decimal(overall_summary["AVG"]), fmt_decimal(overall_summary["OBP"]), fmt_decimal(overall_summary["SLG"]), fmt_score(overall_summary["Score"])]
-    value_colors = [primary, primary, primary, secondary]
-    for i, (lab, val, col) in enumerate(zip(labels, values, value_colors)):
-        draw_metric_box(c, x + label_w + i * metric_w, y, metric_w, h, lab, val, col)
-
-
-def draw_hand_legend(c, x, y, w, h):
-    c.setStrokeColor(reportlab_color("#C7CAD1"))
-    c.setLineWidth(0.8)
-    c.rect(x, y, w, h, stroke=1, fill=0)
-    c.setFont("Helvetica-Bold", 7.5)
-    c.setFillColor(reportlab_color(DEFAULT_PRIMARY))
-    c.drawString(x + 10, y + h - 14, "BATTING HAND LEGEND")
-    c.setFont("Helvetica-Bold", 6.4)
-    c.setFillColor(reportlab_color(HAND_BLACK))
-    c.drawString(x + 10, y + h - 29, "R = Right-Handed")
-    c.setFillColor(reportlab_color(HAND_RED))
-    c.drawString(x + 10, y + h - 42, "L = Left-Handed")
-    c.setFillColor(reportlab_color(HAND_BLUE))
-    c.drawString(x + 10, y + h - 55, "S = Switch-Hitter")
-
-
-def draw_lineup_panel(c, lineup, title, x, y, w, h, panel_color, accent_color):
-    summary = lineup_summary(lineup)
-    c.setFillColor(reportlab_color(panel_color))
-    c.roundRect(x, y + h - 28, w, 28, 5, fill=1, stroke=0)
-    draw_centered_text(c, title, x + w / 2, y + h - 18, "Helvetica-Bold", 9.2, "#FFFFFF")
-
-    metric_h = 34
-    metric_y = y + h - 28 - metric_h
-    metric_w = w / 4
-    metrics = [
-        ("Team AVG", fmt_decimal(summary["AVG"]), panel_color),
-        ("Team OBP", fmt_decimal(summary["OBP"]), panel_color),
-        ("Team SLG", fmt_decimal(summary["SLG"]), panel_color),
-        ("Projected Score", fmt_score(summary["Score"]), accent_color),
-    ]
-    for i, (lab, val, val_color) in enumerate(metrics):
-        draw_metric_box(c, x + i * metric_w, metric_y, metric_w, metric_h, lab, val, val_color)
-
-    header_y = metric_y - 18
-    row_h = 18
-    columns = [
-        ("#", 0.06), ("PLAYER", 0.29), ("POS", 0.08), ("BATS", 0.08), ("PA", 0.08),
-        ("AVG", 0.085), ("OBP", 0.085), ("SLG", 0.085), ("ISO", 0.075), ("SB", 0.075),
-    ]
-    total_ratio = sum(r for _, r in columns)
-    widths = [w * r / total_ratio for _, r in columns]
-
-    c.setFillColor(reportlab_color(panel_color))
-    c.rect(x, header_y, w, row_h, fill=1, stroke=0)
-    c.setFillColor(colors.white)
-    c.setFont("Helvetica-Bold", 5.8)
-    cx = x
-    for (lab, _), cw in zip(columns, widths):
-        c.drawCentredString(cx + cw / 2, header_y + 6, lab)
-        cx += cw
-
-    data_y = header_y - row_h
-    c.setFont("Helvetica", 5.9)
-    for i, (_, row) in enumerate(lineup.iterrows(), start=1):
-        fill = "#FFFFFF" if i % 2 else "#F4F6FA"
-        c.setFillColor(reportlab_color(fill))
-        c.rect(x, data_y, w, row_h, fill=1, stroke=0)
-        vals = [
-            str(i),
+def pdf_table_data(lineup):
+    rows = [["#", "PLAYER", "POS", "BATS", "PA", "AVG", "OBP", "SLG", "ISO", "SB"]]
+    for _, row in lineup.iterrows():
+        rows.append([
+            format_cell(row.get("Lineup Spot", ""), "Lineup Spot"),
             str(row.get("playerFullName", "")),
             str(row.get("Position", "")),
             str(row.get("Bats", "")),
-            str(int(float(row.get("PA", 0)))) if str(row.get("PA", "")).strip() != "" else "",
-            fmt_decimal(row.get("AVG", 0)),
-            fmt_decimal(row.get("OBP", 0)),
-            fmt_decimal(row.get("SLG", 0)),
-            fmt_decimal(row.get("ISO", 0)),
-            str(int(float(row.get("SB", 0)))) if str(row.get("SB", "")).strip() != "" else "",
-        ]
-        cx = x
-        for j, (val, cw) in enumerate(zip(vals, widths)):
-            if j == 1:
-                c.setFillColor(reportlab_color(hitter_name_color(row.get("Bats", "R"))))
-                c.setFont("Helvetica-Bold", 5.8)
-                c.drawString(cx + 3, data_y + 6, val[:24])
-                c.setFont("Helvetica", 5.9)
-            elif j == 3:
-                c.setFillColor(reportlab_color(hitter_name_color(row.get("Bats", "R"))))
-                c.setFont("Helvetica-Bold", 5.8)
-                c.drawCentredString(cx + cw / 2, data_y + 6, val)
-                c.setFont("Helvetica", 5.9)
-            else:
-                c.setFillColor(reportlab_color("#111111"))
-                c.drawCentredString(cx + cw / 2, data_y + 6, val)
-            cx += cw
-        data_y -= row_h
+            format_cell(row.get("PA", 0), "PA"),
+            format_cell(row.get("AVG", 0), "AVG"),
+            format_cell(row.get("OBP", 0), "OBP"),
+            format_cell(row.get("SLG", 0), "SLG"),
+            format_cell(row.get("ISO", 0), "ISO"),
+            format_cell(row.get("SB", 0), "SB"),
+        ])
 
-    # Total / average row
-    total_y = data_y
-    c.setFillColor(reportlab_color(lighten(panel_color, 0.92)))
-    c.rect(x, total_y, w, row_h + 2, fill=1, stroke=0)
-    total_vals = ["", "TOTAL/AVG", "—", "—", str(summary["PA"]), fmt_decimal(summary["AVG"]), fmt_decimal(summary["OBP"]), fmt_decimal(summary["SLG"]), fmt_decimal(summary["ISO"]), str(summary["SB"])]
-    c.setFont("Helvetica-Bold", 5.7)
-    c.setFillColor(reportlab_color(panel_color))
-    cx = x
-    for val, cw in zip(total_vals, widths):
-        if val == "TOTAL/AVG":
-            c.drawString(cx + 3, total_y + 7, val)
+    rows.append(total_avg_row(lineup))
+    return rows
+
+
+def draw_lineup_panel(c, lineup, x, y, w, h, title, header_color):
+    header_h = 30
+    metrics_h = 39
+    table_top_gap = 2
+
+    # Outer panel
+    draw_rounded_rect(c, x, y, w, h, radius=6, fill=colors.white, stroke=colors.HexColor("#D7D7D7"))
+
+    # Big panel header
+    c.setFillColor(header_color)
+    c.roundRect(x, y + h - header_h, w, header_h, 6, fill=1, stroke=0)
+    # Square off bottom of rounded header
+    c.rect(x, y + h - header_h, w, 7, fill=1, stroke=0)
+
+    c.setFillColor(colors.white)
+    c.setFont("Helvetica-Bold", 12)
+    c.drawCentredString(x + w / 2, y + h - 20, title)
+
+    # Metrics row
+    s = lineup_summary(lineup)
+    metric_y = y + h - header_h - metrics_h
+    metric_w = w / 4
+
+    metric_labels = ["Team AVG", "Team OBP", "Team SLG", "Projected Score"]
+    metric_vals = [
+        format_decimal(s["AVG"]),
+        format_decimal(s["OBP"]),
+        format_decimal(s["SLG"]),
+        f"{s['Score']:.2f}",
+    ]
+
+    c.setFillColor(colors.white)
+    c.rect(x, metric_y, w, metrics_h, fill=1, stroke=0)
+
+    for i, (lab, val) in enumerate(zip(metric_labels, metric_vals)):
+        value_color = colors.HexColor("#BA0C2F") if i == 3 else header_color
+        draw_metric_block(
+            c,
+            x + i * metric_w,
+            metric_y,
+            metric_w,
+            metrics_h,
+            lab,
+            val,
+            colors.HexColor("#111111"),
+            value_color,
+        )
+
+    # Table
+    rows = pdf_table_data(lineup)
+    col_widths = [
+        w * 0.055,  # #
+        w * 0.295,  # Player
+        w * 0.075,  # Pos
+        w * 0.075,  # Bats
+        w * 0.080,  # PA
+        w * 0.085,  # AVG
+        w * 0.085,  # OBP
+        w * 0.085,  # SLG
+        w * 0.085,  # ISO
+        w * 0.080,  # SB
+    ]
+
+    table_h = h - header_h - metrics_h - table_top_gap - 8
+    row_h = table_h / len(rows)
+    table = Table(rows, colWidths=col_widths, rowHeights=[row_h] * len(rows))
+
+    style = TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), header_color),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, 0), 6.0),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("ALIGN", (1, 1), (1, -2), "LEFT"),
+        ("FONTNAME", (0, 1), (-1, -2), "Helvetica"),
+        ("FONTSIZE", (0, 1), (-1, -2), 5.7),
+        ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#E1E1E1")),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#EAF0FA")),
+        ("TEXTCOLOR", (0, -1), (-1, -1), header_color),
+        ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+        ("FONTSIZE", (0, -1), (-1, -1), 5.8),
+    ])
+
+    for r in range(1, len(rows) - 1):
+        if r % 2 == 0:
+            style.add("BACKGROUND", (0, r), (-1, r), colors.HexColor("#F7F8FB"))
         else:
-            c.drawCentredString(cx + cw / 2, total_y + 7, val)
-        cx += cw
+            style.add("BACKGROUND", (0, r), (-1, r), colors.white)
 
-    # Panel border
-    c.setStrokeColor(reportlab_color("#D7DCE5"))
-    c.setLineWidth(0.7)
-    c.roundRect(x, total_y, w, h - (total_y - y), 5, fill=0, stroke=1)
+        bats = rows[r][3]
+        if bats == "L":
+            style.add("TEXTCOLOR", (1, r), (1, r), colors.HexColor("#BA0C2F"))
+            style.add("FONTNAME", (1, r), (1, r), "Helvetica-Bold")
+        elif bats == "S":
+            style.add("TEXTCOLOR", (1, r), (1, r), colors.HexColor("#002D72"))
+            style.add("FONTNAME", (1, r), (1, r), "Helvetica-Bold")
+        else:
+            style.add("TEXTCOLOR", (1, r), (1, r), colors.HexColor("#111111"))
+
+    table.setStyle(style)
+    table.wrapOn(c, w, table_h)
+    table.drawOn(c, x, y + 6)
 
 
-def create_professional_pdf(lineups, logo_bytes, report_title, report_date, team_name, primary, secondary):
-    if canvas is None:
-        raise RuntimeError("ReportLab is not installed. Add `reportlab` to requirements.txt.")
-
+def generate_all_lineups_pdf(lineups, report_title, team_name, report_date, logo_file, primary_rgb, accent_rgb):
     buffer = BytesIO()
     page_w, page_h = landscape(letter)
     c = canvas.Canvas(buffer, pagesize=landscape(letter))
 
-    margin = 0.25 * inch
-    top = page_h - margin
-    logo_w = 0.72 * inch
-    logo_h = 0.72 * inch
+    primary = colors.HexColor(rgb_to_hex(primary_rgb))
+    accent = colors.HexColor(rgb_to_hex(accent_rgb))
+    navy = primary
+    red = accent
+    gray_text = colors.HexColor("#6D7480")
 
-    # Header
-    draw_logo(c, logo_bytes, margin, top - logo_h + 0.02 * inch, logo_w, logo_h)
-    draw_centered_text(c, report_title.upper(), page_w / 2, top - 0.15 * inch, "Helvetica-Bold", 21, primary)
-    draw_right_text(c, report_date.strftime("%b %d, %Y"), page_w - margin, top - 0.14 * inch, "Helvetica-Bold", 8.5, primary)
+    logo_path = save_logo_temp(logo_file)
 
-    line_y = top - 0.48 * inch
-    c.setStrokeColor(reportlab_color(secondary))
-    c.setLineWidth(2.2)
-    c.line(margin + 0.9 * inch, line_y, page_w / 2 - 1.05 * inch, line_y)
-    c.line(page_w / 2 + 1.05 * inch, line_y, page_w - margin, line_y)
-    draw_centered_text(c, "OPTIMIZED LINEUPS FOR EVERY SITUATION", page_w / 2, line_y - 3, "Helvetica-Bold", 8.5, "#808895")
+    # Margins
+    left = 24
+    right = 24
+    top = 22
+    bottom = 24
+
+    # Header logo
+    draw_logo(c, logo_path, left, page_h - 80, 70, 56)
+
+    # Header title
+    c.setFillColor(navy)
+    c.setFont("Helvetica-Bold", 24)
+    c.drawCentredString(page_w / 2, page_h - 41, report_title.upper())
+
+    # Date
+    c.setFillColor(navy)
+    c.setFont("Helvetica-Bold", 9)
+    c.drawRightString(page_w - right, page_h - 38, report_date.strftime("%b %d, %Y"))
+
+    # Subtitle with shorter lines so text never gets cut off
+    subtitle = "OPTIMIZED LINEUPS FOR EVERY SITUATION"
+    subtitle_y = page_h - 64
+    c.setFillColor(gray_text)
+    c.setFont("Helvetica-Bold", 9.5)
+    c.drawCentredString(page_w / 2, subtitle_y, subtitle)
+
+    text_width = c.stringWidth(subtitle, "Helvetica-Bold", 9.5)
+    gap = 15
+    line_y = subtitle_y + 2
+    line_h = 2.3
+    line_left_start = left + 75
+    line_left_end = page_w / 2 - text_width / 2 - gap
+    line_right_start = page_w / 2 + text_width / 2 + gap
+    line_right_end = page_w - right - 22
+
+    c.setFillColor(red)
+    if line_left_end > line_left_start:
+        c.rect(line_left_start, line_y, line_left_end - line_left_start, line_h, fill=1, stroke=0)
+    if line_right_end > line_right_start:
+        c.rect(line_right_start, line_y, line_right_end - line_right_start, line_h, fill=1, stroke=0)
+
+    # Team summary moved taller/wider
+    summary_y = page_h - 150
+    summary_h = 56
+    summary_x = left
+    summary_w = page_w - left - right - 140
+    legend_x = summary_x + summary_w + 14
+    legend_w = page_w - right - legend_x
+
+    draw_rounded_rect(c, summary_x, summary_y, summary_w, summary_h, radius=2, fill=colors.white, stroke=colors.HexColor("#D1D1D1"))
+
+    # Team summary label block
+    label_w = 112
+    c.setFillColor(navy)
+    c.rect(summary_x, summary_y, label_w, summary_h, fill=1, stroke=0)
+    c.setFillColor(colors.white)
+    c.setFont("Helvetica-Bold", 13)
+    c.drawCentredString(summary_x + label_w / 2, summary_y + 32, "TEAM")
+    c.drawCentredString(summary_x + label_w / 2, summary_y + 15, "SUMMARY")
 
     overall_summary = lineup_summary(lineups["Overall"])
-    summary_y = top - 1.20 * inch
-    summary_h = 0.56 * inch
-    summary_w = page_w - (2 * margin) - 1.95 * inch
-    draw_summary_strip(c, margin, summary_y, summary_w, summary_h, primary, secondary, overall_summary)
-    draw_hand_legend(c, margin + summary_w + 0.18 * inch, summary_y, 1.77 * inch, summary_h)
+    summary_metrics = [
+        ("Team AVG", format_decimal(overall_summary["AVG"])),
+        ("Team OBP", format_decimal(overall_summary["OBP"])),
+        ("Team SLG", format_decimal(overall_summary["SLG"])),
+        ("Projected Lineup Score", f"{overall_summary['Score']:.2f}"),
+    ]
 
-    # Three side-by-side panels
-    panel_top = summary_y - 0.16 * inch
-    panel_h = 4.50 * inch
-    gap = 0.16 * inch
-    panel_w = (page_w - 2 * margin - 2 * gap) / 3
-    panel_y = panel_top - panel_h
+    metric_area_x = summary_x + label_w
+    metric_area_w = summary_w - label_w
+    metric_w = metric_area_w / 4
+    for i, (lab, val) in enumerate(summary_metrics):
+        value_color = red if i == 3 else navy
+        draw_metric_block(c, metric_area_x + i * metric_w, summary_y + 5, metric_w, summary_h - 10, lab, val, colors.black, value_color)
 
-    overall_color = primary
-    vs_rhp_color = secondary
-    vs_lhp_color = darken(primary, 0.90)
-    draw_lineup_panel(c, lineups["Overall"], "OVERALL OPTIMAL LINEUP", margin, panel_y, panel_w, panel_h, overall_color, secondary)
-    draw_lineup_panel(c, lineups["Vs RHP"], "VS RIGHT-HANDED PITCHER", margin + panel_w + gap, panel_y, panel_w, panel_h, vs_rhp_color, secondary)
-    draw_lineup_panel(c, lineups["Vs LHP"], "VS LEFT-HANDED PITCHER", margin + 2 * (panel_w + gap), panel_y, panel_w, panel_h, vs_lhp_color, secondary)
+    # Larger legend box
+    draw_rounded_rect(c, legend_x, summary_y, legend_w, summary_h, radius=2, fill=colors.white, stroke=colors.HexColor("#D1D1D1"))
+    c.setFillColor(navy)
+    c.setFont("Helvetica-Bold", 9.3)
+    c.drawString(legend_x + 12, summary_y + summary_h - 17, "BATTING HAND LEGEND")
+
+    c.setFont("Helvetica-Bold", 7.8)
+    c.setFillColor(colors.HexColor("#111111"))
+    c.drawString(legend_x + 12, summary_y + 31, "R = Right-Handed")
+    c.setFillColor(colors.HexColor("#BA0C2F"))
+    c.drawString(legend_x + 12, summary_y + 20, "L = Left-Handed")
+    c.setFillColor(colors.HexColor("#002D72"))
+    c.drawString(legend_x + 12, summary_y + 9, "S = Switch-Hitter")
+
+    # Lineup panels: moved down to use white space and give top boxes room
+    panel_y = 92
+    panel_h = 322
+    panel_gap = 14
+    panel_w = (page_w - left - right - (panel_gap * 2)) / 3
+
+    header_colors = {
+        "Overall": navy,
+        "Vs RHP": red,
+        "Vs LHP": navy,
+    }
+    titles = {
+        "Overall": "OVERALL OPTIMAL LINEUP",
+        "Vs RHP": "VS RIGHT-HANDED PITCHER",
+        "Vs LHP": "VS LEFT-HANDED PITCHER",
+    }
+
+    for i, key in enumerate(["Overall", "Vs RHP", "Vs LHP"]):
+        draw_lineup_panel(
+            c,
+            lineups[key],
+            left + i * (panel_w + panel_gap),
+            panel_y,
+            panel_w,
+            panel_h,
+            titles[key],
+            header_colors[key],
+        )
 
     # Footer
-    footer_h = 0.50 * inch
-    footer_y = margin - 0.05 * inch
-    c.setFillColor(reportlab_color(primary))
-    c.rect(margin, footer_y, page_w - 2 * margin, footer_h, fill=1, stroke=0)
-    draw_logo(c, logo_bytes, margin + 0.10 * inch, footer_y + 0.08 * inch, 0.34 * inch, 0.34 * inch)
+    footer_h = 40
+    footer_y = 24
+    c.setFillColor(navy)
+    c.rect(left, footer_y, page_w - left - right, footer_h, fill=1, stroke=0)
+
+    # accent diagonal stripes
+    c.setFillColor(red)
+    c.saveState()
+    p = c.beginPath()
+    p.moveTo(page_w - 88, footer_y)
+    p.lineTo(page_w - 77, footer_y)
+    p.lineTo(page_w - 52, footer_y + footer_h)
+    p.lineTo(page_w - 63, footer_y + footer_h)
+    p.close()
+    c.drawPath(p, fill=1, stroke=0)
+    c.restoreState()
+
+    draw_logo(c, logo_path, left + 10, footer_y + 5, 40, 30)
+
     c.setFillColor(colors.white)
-    c.setFont("Helvetica-Bold", 9)
-    c.drawString(margin + 0.55 * inch, footer_y + 0.28 * inch, team_name.upper() if team_name else "BASEBALL OPERATIONS")
-    c.setFont("Helvetica", 6.8)
-    c.drawString(margin + 0.55 * inch, footer_y + 0.15 * inch, "BASEBALL OPERATIONS")
-    c.setFont("Helvetica-Bold", 8)
-    c.drawRightString(page_w - margin - 0.35 * inch, footer_y + 0.22 * inch, "Data-Driven Decisions. Better Results.")
-    c.setStrokeColor(reportlab_color(secondary))
-    c.setLineWidth(3)
-    c.line(page_w - margin - 0.20 * inch, footer_y, page_w - margin - 0.02 * inch, footer_y + footer_h)
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(left + 58, footer_y + 24, team_name.upper())
+    c.setFont("Helvetica", 7.5)
+    c.drawString(left + 58, footer_y + 12, "BASEBALL OPERATIONS")
+
+    c.setFont("Helvetica-Bold", 9.5)
+    c.drawRightString(page_w - right - 75, footer_y + 16, "Data-Driven Decisions. Better Results.")
 
     c.showPage()
     c.save()
+
+    if logo_path and os.path.exists(logo_path):
+        try:
+            os.remove(logo_path)
+        except Exception:
+            pass
+
     buffer.seek(0)
-    return buffer.getvalue()
+    return buffer
 
 
 # =====================================================
@@ -684,24 +869,16 @@ st.title("Lineup Optimization")
 st.caption("Upload CSV files and optimize lineups overall, vs right-handed pitchers, and vs left-handed pitchers.")
 
 st.sidebar.header("Report Branding")
-team_logo_file = st.sidebar.file_uploader("Team Logo", type=["png", "jpg", "jpeg"], help="Optional. The PDF will use this logo and pull team colors from it.")
 team_name = st.sidebar.text_input("Team Name", value="Texas Rangers")
 report_title = st.sidebar.text_input("Report Title", value="Lineup Optimization Report")
 report_date = st.sidebar.date_input("Report Date", value=date.today())
-logo_bytes = team_logo_file.getvalue() if team_logo_file else None
-primary_color, secondary_color = extract_logo_colors(logo_bytes)
-st.sidebar.caption(f"Detected colors: {primary_color} / {secondary_color}")
+team_logo = st.sidebar.file_uploader("Team Logo", type=["png", "jpg", "jpeg"], key="team_logo")
 
-st.markdown(
-    """
-    **Bats color key:**  
-    <span style="color:#BA0C2F;font-weight:800;">Left-handed hitters</span> = red &nbsp; | &nbsp;
-    <span style="color:#002D72;font-weight:800;">Switch hitters</span> = blue &nbsp; | &nbsp;
-    <span style="color:#111111;font-weight:800;">Right-handed hitters</span> = black
-    """,
-    unsafe_allow_html=True,
-)
+primary_rgb, accent_rgb = extract_team_colors(team_logo)
+st.sidebar.caption(f"Detected primary color: {rgb_to_hex(primary_rgb)}")
+st.sidebar.caption(f"Detected accent color: {rgb_to_hex(accent_rgb)}")
 
+st.sidebar.divider()
 st.sidebar.header("Stat Weights")
 avg_weight = st.sidebar.slider("AVG Weight", 0.0, 5.0, 1.0, 0.1)
 obp_weight = st.sidebar.slider("OBP Weight", 0.0, 5.0, 2.0, 0.1)
@@ -721,7 +898,17 @@ st.sidebar.divider()
 lineup_mode = st.sidebar.radio(
     "Lineup Type",
     ["Overall", "Vs RHP", "Vs LHP"],
-    help="Choose which uploaded CSV to show on screen.",
+    help="Choose which uploaded CSV to use for the optimized lineup.",
+)
+
+st.markdown(
+    """
+    **Bats color key:**  
+    <span style="color:#BA0C2F;font-weight:800;">Left-handed hitters</span> = red &nbsp; | &nbsp;
+    <span style="color:#002D72;font-weight:800;">Switch hitters</span> = blue &nbsp; | &nbsp;
+    <span style="color:#111111;font-weight:800;">Right-handed hitters</span> = black
+    """,
+    unsafe_allow_html=True,
 )
 
 col1, col2, col3 = st.columns(3)
@@ -732,64 +919,79 @@ with col2:
 with col3:
     vs_lhp_file = st.file_uploader("Vs LHP CSV", type=["csv"], key="vs_lhp_csv")
 
-files = {"Overall": overall_file, "Vs RHP": vs_rhp_file, "Vs LHP": vs_lhp_file}
+files = {
+    "Overall": overall_file,
+    "Vs RHP": vs_rhp_file,
+    "Vs LHP": vs_lhp_file,
+}
 
 prepared = {}
-scored = {}
 lineups = {}
-for label, file in files.items():
+scored = {}
+
+for key, file in files.items():
     if file is not None:
-        df = prepare_dataframe(file, label)
+        df = prepare_dataframe(file, key)
         if df is not None:
-            lineup, scored_df = build_lineup(df, weights, enforce_positions, label)
+            lineup, scored_df = build_lineup(df, weights, enforce_positions, key)
             if lineup is not None:
-                prepared[label] = df
-                scored[label] = scored_df
-                lineups[label] = lineup
+                prepared[key] = df
+                lineups[key] = lineup
+                scored[key] = scored_df
 
 selected_file = files[lineup_mode]
 if selected_file is None:
     st.info(f"Upload the {lineup_mode} CSV to generate that lineup.")
-else:
-    if lineup_mode in lineups:
-        st.subheader(f"Uploaded Player Pool — {lineup_mode}")
-        show_player_pool(scored[lineup_mode])
-        st.subheader(f"Optimized Lineup — {lineup_mode}")
-        render_lineup_table(lineups[lineup_mode])
-        csv = lineups[lineup_mode].to_csv(index=False).encode("utf-8")
-        st.download_button(
-            label=f"Download {lineup_mode} Optimized Lineup CSV",
-            data=csv,
-            file_name=f"optimized_lineup_{lineup_mode.lower().replace(' ', '_')}.csv",
-            mime="text/csv",
-        )
+    st.stop()
+
+if lineup_mode not in lineups:
+    st.stop()
+
+st.subheader(f"Uploaded Player Pool — {lineup_mode}")
+show_player_pool(scored[lineup_mode])
+
+st.subheader(f"Optimized Lineup — {lineup_mode}")
+render_lineup_table(lineups[lineup_mode])
+
+csv = lineups[lineup_mode].to_csv(index=False).encode("utf-8")
+st.download_button(
+    label=f"Download {lineup_mode} Optimized Lineup CSV",
+    data=csv,
+    file_name=f"optimized_lineup_{lineup_mode.lower().replace(' ', '_')}.csv",
+    mime="text/csv",
+)
 
 st.divider()
-st.subheader("PDF Export")
-missing_for_pdf = [label for label in ["Overall", "Vs RHP", "Vs LHP"] if label not in lineups]
-if missing_for_pdf:
-    st.info("Upload all three CSVs to export the full one-page PDF: " + ", ".join(missing_for_pdf))
+
+if all(k in lineups for k in ["Overall", "Vs RHP", "Vs LHP"]):
+    pdf_buffer = generate_all_lineups_pdf(
+        lineups=lineups,
+        report_title=report_title,
+        team_name=team_name,
+        report_date=report_date,
+        logo_file=team_logo,
+        primary_rgb=primary_rgb,
+        accent_rgb=accent_rgb,
+    )
+
+    st.download_button(
+        label="Export All 3 Lineups as PDF",
+        data=pdf_buffer,
+        file_name="lineup_optimization_report.pdf",
+        mime="application/pdf",
+        type="primary",
+    )
 else:
-    try:
-        pdf_bytes = create_professional_pdf(lineups, logo_bytes, report_title, report_date, team_name, primary_color, secondary_color)
-        st.download_button(
-            label="Export All 3 Lineups as PDF",
-            data=pdf_bytes,
-            file_name="lineup_optimization_report.pdf",
-            mime="application/pdf",
-            type="primary",
-        )
-    except Exception as e:
-        st.error(f"Could not generate PDF: {e}")
-        st.caption("If this says ReportLab is missing, add `reportlab` to requirements.txt and push again.")
+    st.info("Upload all 3 CSVs to export the one-page PDF with Overall, Vs RHP, and Vs LHP.")
 
 st.markdown("### Lineup Notes")
 st.write(
     """
-    - Use the sidebar to choose which lineup appears on screen.
-    - Upload all three CSVs to export the full PDF with Overall, Vs RHP, and Vs LHP on one page.
-    - The PDF uses your uploaded logo and automatically pulls team colors from it.
+    - Use the sidebar to choose between Overall, Vs RHP, and Vs LHP.
+    - Upload all three CSVs to activate the PDF export.
+    - The PDF uses your uploaded team logo and automatically detects team colors for the report theme.
     - Batting hand colors stay fixed: LHH red, switch hitters blue, RHH black.
     - Position requirements are optional.
+    - The batting order uses both your selected stat weights and spot-specific logic.
     """
 )
