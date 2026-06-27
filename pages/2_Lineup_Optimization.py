@@ -346,8 +346,8 @@ def lineup_summary(lineup):
 def total_avg_row(lineup):
     s = lineup_summary(lineup)
     return [
-        "TOTAL/AVG",
         "",
+        "TOTAL/AVG",
         "—",
         "—",
         str(s["PA"]),
@@ -377,7 +377,7 @@ def render_lineup_table(lineup):
     </style>
     <table class="lineup-table"><thead><tr>
     """
-    pretty_cols = {"Lineup Spot": "#", "playerFullName": "Player", "Position": "Pos"}
+    pretty_cols = {"Lineup Spot": "#", "playerFullName": "Player", "Position": "P", "Bats": "B"}
     for col in cols:
         table_html += f"<th>{html.escape(pretty_cols.get(str(col), str(col)))}</th>"
     table_html += "</tr></thead><tbody>"
@@ -398,8 +398,8 @@ def render_lineup_table(lineup):
     # Total / average row
     s = lineup_summary(lineup)
     total_values = {
-        "Lineup Spot": "TOTAL/AVG",
-        "playerFullName": "",
+        "Lineup Spot": "",
+        "playerFullName": "TOTAL/AVG",
         "Position": "—",
         "Bats": "—",
         "PA": s["PA"],
@@ -535,17 +535,17 @@ def draw_rounded_rect(c, x, y, w, h, radius=6, fill=colors.white, stroke=colors.
     c.roundRect(x, y, w, h, radius, fill=1, stroke=1)
 
 
-def draw_metric_block(c, x, y, w, h, label, value, label_color, value_color):
+def draw_metric_block(c, x, y, w, h, label, value, label_color, value_color, label_size=7.0, value_size=15.0):
     c.setStrokeColor(colors.HexColor("#E2E2E2"))
     c.setLineWidth(0.6)
     c.line(x + w, y + 5, x + w, y + h - 5)
 
     c.setFillColor(label_color)
-    c.setFont("Helvetica-Bold", 7.5)
-    c.drawCentredString(x + w / 2, y + h - 16, label)
+    c.setFont("Helvetica-Bold", label_size)
+    c.drawCentredString(x + w / 2, y + h - 15, label)
 
     c.setFillColor(value_color)
-    c.setFont("Helvetica-Bold", 17)
+    c.setFont("Helvetica-Bold", value_size)
     c.drawCentredString(x + w / 2, y + 9, value)
 
 
@@ -564,7 +564,7 @@ def draw_logo(c, logo_path, x, y, max_w, max_h):
 
 
 def pdf_table_data(lineup):
-    rows = [["#", "PLAYER", "POS", "BATS", "PA", "AVG", "OBP", "SLG", "ISO", "SB"]]
+    rows = [["#", "PLAYER", "P", "B", "PA", "AVG", "OBP", "SLG", "ISO", "SB"]]
     for _, row in lineup.iterrows():
         rows.append([
             format_cell(row.get("Lineup Spot", ""), "Lineup Spot"),
@@ -629,6 +629,8 @@ def draw_lineup_panel(c, lineup, x, y, w, h, title, header_color):
             val,
             colors.HexColor("#111111"),
             value_color,
+            label_size=6.2,
+            value_size=13.0,
         )
 
     # Table
@@ -774,21 +776,21 @@ def generate_all_lineups_pdf(lineups, report_title, team_name, report_date, logo
     metric_w = metric_area_w / 4
     for i, (lab, val) in enumerate(summary_metrics):
         value_color = red if i == 3 else navy
-        draw_metric_block(c, metric_area_x + i * metric_w, summary_y + 5, metric_w, summary_h - 10, lab, val, colors.black, value_color)
+        draw_metric_block(c, metric_area_x + i * metric_w, summary_y + 5, metric_w, summary_h - 10, lab, val, colors.black, value_color, label_size=7.0, value_size=15.0)
 
     # Larger legend box
     draw_rounded_rect(c, legend_x, summary_y, legend_w, summary_h, radius=2, fill=colors.white, stroke=colors.HexColor("#D1D1D1"))
     c.setFillColor(navy)
-    c.setFont("Helvetica-Bold", 9.3)
-    c.drawString(legend_x + 12, summary_y + summary_h - 17, "BATTING HAND LEGEND")
+    c.setFont("Helvetica-Bold", 8.3)
+    c.drawString(legend_x + 10, summary_y + summary_h - 16, "BATTING HAND LEGEND")
 
-    c.setFont("Helvetica-Bold", 7.8)
+    c.setFont("Helvetica-Bold", 6.6)
     c.setFillColor(colors.HexColor("#111111"))
-    c.drawString(legend_x + 12, summary_y + 31, "R = Right-Handed")
+    c.drawString(legend_x + 10, summary_y + 31, "R = Right-Handed")
     c.setFillColor(colors.HexColor("#BA0C2F"))
-    c.drawString(legend_x + 12, summary_y + 20, "L = Left-Handed")
+    c.drawString(legend_x + 10, summary_y + 20, "L = Left-Handed")
     c.setFillColor(colors.HexColor("#002D72"))
-    c.drawString(legend_x + 12, summary_y + 9, "S = Switch-Hitter")
+    c.drawString(legend_x + 10, summary_y + 9, "S = Switch-Hitter")
 
     # Lineup panels: moved down to use white space and give top boxes room
     panel_y = 92
