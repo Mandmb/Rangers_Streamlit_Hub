@@ -201,8 +201,8 @@ def optimize_order(selected_df, user_weights):
     lineup = pd.DataFrame(lineup_rows)
     display_cols = ["Lineup Spot", "playerFullName"]
 
-    if "Position" in lineup.columns:
-        display_cols.append("Position")
+    # Keep Position available internally for optional defensive requirements,
+    # but do not display it in optimized lineup tables.
     if "Bats" in lineup.columns:
         display_cols.append("Bats")
     if "PA" in lineup.columns:
@@ -349,7 +349,6 @@ def total_avg_row(lineup):
         "",
         "TOTAL/AVG",
         "—",
-        "—",
         str(s["PA"]),
         format_decimal(s["AVG"]),
         format_decimal(s["OBP"]),
@@ -377,7 +376,7 @@ def render_lineup_table(lineup):
     </style>
     <table class="lineup-table"><thead><tr>
     """
-    pretty_cols = {"Lineup Spot": "#", "playerFullName": "Player", "Position": "P", "Bats": "B"}
+    pretty_cols = {"Lineup Spot": "#", "playerFullName": "Player", "Bats": "B"}
     for col in cols:
         table_html += f"<th>{html.escape(pretty_cols.get(str(col), str(col)))}</th>"
     table_html += "</tr></thead><tbody>"
@@ -400,7 +399,6 @@ def render_lineup_table(lineup):
     total_values = {
         "Lineup Spot": "",
         "playerFullName": "TOTAL/AVG",
-        "Position": "—",
         "Bats": "—",
         "PA": s["PA"],
         "AVG": s["AVG"],
@@ -564,12 +562,11 @@ def draw_logo(c, logo_path, x, y, max_w, max_h):
 
 
 def pdf_table_data(lineup):
-    rows = [["#", "PLAYER", "P", "B", "PA", "AVG", "OBP", "SLG", "ISO", "SB"]]
+    rows = [["#", "PLAYER", "B", "PA", "AVG", "OBP", "SLG", "ISO", "SB"]]
     for _, row in lineup.iterrows():
         rows.append([
             format_cell(row.get("Lineup Spot", ""), "Lineup Spot"),
             str(row.get("playerFullName", "")),
-            str(row.get("Position", "")),
             str(row.get("Bats", "")),
             format_cell(row.get("PA", 0), "PA"),
             format_cell(row.get("AVG", 0), "AVG"),
@@ -637,15 +634,14 @@ def draw_lineup_panel(c, lineup, x, y, w, h, title, header_color):
     rows = pdf_table_data(lineup)
     col_widths = [
         w * 0.055,  # #
-        w * 0.295,  # Player
-        w * 0.075,  # Pos
-        w * 0.075,  # Bats
-        w * 0.080,  # PA
+        w * 0.390,  # Player
+        w * 0.070,  # Bats
+        w * 0.085,  # PA
         w * 0.085,  # AVG
         w * 0.085,  # OBP
         w * 0.085,  # SLG
         w * 0.085,  # ISO
-        w * 0.080,  # SB
+        w * 0.060,  # SB
     ]
 
     table_h = h - header_h - metrics_h - table_top_gap - 8
@@ -675,7 +671,7 @@ def draw_lineup_panel(c, lineup, x, y, w, h, title, header_color):
         else:
             style.add("BACKGROUND", (0, r), (-1, r), colors.white)
 
-        bats = rows[r][3]
+        bats = rows[r][2]
         if bats == "L":
             style.add("TEXTCOLOR", (1, r), (1, r), colors.HexColor("#BA0C2F"))
             style.add("FONTNAME", (1, r), (1, r), "Helvetica-Bold")
