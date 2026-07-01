@@ -175,6 +175,17 @@ pitching_df = clean_df(
     ["Player", "BF", "IP", "FPS%", "FB/SI Zone%", "SWM%", "K%", "BB%", "TX Barrell"],
 )
 
+# Remove pitching summary rows such as TOTAL / AVERAGE / RANK and blank-player rows.
+# This prevents the team-total row, for example the row with 869 BF, from appearing in leaderboards.
+if pitching_df is not None and "Player" in pitching_df.columns:
+    pitching_df = pitching_df.copy()
+    pitching_df["Player"] = pitching_df["Player"].astype(str).str.strip()
+    pitching_df = pitching_df[
+        (pitching_df["Player"] != "")
+        & (~pitching_df["Player"].str.upper().isin(["TOTAL", "AVERAGE", "RANK", "NAN"]))
+        & (~pitching_df["Player"].str.upper().str.contains("TOTAL|AVERAGE|RANK", na=False))
+    ]
+
 
 def short_name(name, max_len=18):
     name = str(name)
