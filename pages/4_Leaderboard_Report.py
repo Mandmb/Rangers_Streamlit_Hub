@@ -92,6 +92,17 @@ def clean_df(df, rename_map, keep_cols):
 
     df = df.rename(columns=rename_map)
 
+    # Remove summary/header/blank rows after renaming.
+    # This is especially important for pitching exports, where a blank Player
+    # row can still contain team totals like 869 BF.
+    if "Player" in df.columns:
+        player_clean = df["Player"].astype(str).str.strip()
+        df = df[
+            df["Player"].notna()
+            & (player_clean != "")
+            & (~player_clean.str.upper().isin(["TOTAL", "AVERAGE", "RANK", "NAN", "NONE"]))
+        ]
+
     keep_cols = [c for c in keep_cols if c in df.columns]
     df = df[keep_cols]
 
@@ -174,17 +185,6 @@ pitching_df = clean_df(
     {"playerFullName": "Player", "FPStk%": "FPS%"},
     ["Player", "BF", "IP", "FPS%", "FB/SI Zone%", "SWM%", "K%", "BB%", "TX Barrell"],
 )
-
-# Remove pitching summary rows such as TOTAL / AVERAGE / RANK and blank-player rows.
-# This prevents the team-total row, for example the row with 869 BF, from appearing in leaderboards.
-if pitching_df is not None and "Player" in pitching_df.columns:
-    pitching_df = pitching_df.copy()
-    pitching_df["Player"] = pitching_df["Player"].astype(str).str.strip()
-    pitching_df = pitching_df[
-        (pitching_df["Player"] != "")
-        & (~pitching_df["Player"].str.upper().isin(["TOTAL", "AVERAGE", "RANK", "NAN"]))
-        & (~pitching_df["Player"].str.upper().str.contains("TOTAL|AVERAGE|RANK", na=False))
-    ]
 
 
 def short_name(name, max_len=18):
