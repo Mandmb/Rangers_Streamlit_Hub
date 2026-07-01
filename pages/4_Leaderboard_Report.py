@@ -39,12 +39,14 @@ min_inn_if = st.sidebar.number_input("Minimum InnIF", min_value=0, value=40)
 min_inn_of = st.sidebar.number_input("Minimum InnOF", min_value=0, value=40)
 min_catcher_p = st.sidebar.number_input("Minimum Catcher P", min_value=0, value=100)
 min_sba = st.sidebar.number_input("Minimum SBA for CS%", min_value=0, value=5)
+min_pitch_bf = st.sidebar.number_input("Minimum BF for pitchers", min_value=0, value=30)
 
 hitting_file = None
 baserunning_file = None
 infield_file = None
 outfield_file = None
 catching_file = None
+pitching_file = None
 
 if uploaded_files:
     for file in uploaded_files:
@@ -60,6 +62,8 @@ if uploaded_files:
             outfield_file = file
         elif "game review" in name or "catch" in name:
             catching_file = file
+        elif "pitch" in name or "pitcher" in name:
+            pitching_file = file
 
     st.sidebar.success("Files detected")
     st.sidebar.write("Hitting:", hitting_file.name if hitting_file else "Missing")
@@ -67,6 +71,7 @@ if uploaded_files:
     st.sidebar.write("Infield:", infield_file.name if infield_file else "Missing")
     st.sidebar.write("Outfield:", outfield_file.name if outfield_file else "Missing")
     st.sidebar.write("Catching:", catching_file.name if catching_file else "Missing")
+    st.sidebar.write("Pitching:", pitching_file.name if pitching_file else "Missing")
 
 
 def load_csv(file):
@@ -164,6 +169,12 @@ catching_df = clean_df(
     ["Player", "CS%", "SBA", "SL+", "FrmdB50%+", "P", "StrkFrmd", "BallFrmd"],
 )
 
+pitching_df = clean_df(
+    load_csv(pitching_file),
+    {"playerFullName": "Player", "FPStk%": "FPS%"},
+    ["Player", "BF", "IP", "FPS%", "FB/SI Zone%", "SWM%", "K%", "BB%", "TX Barrell"],
+)
+
 
 def short_name(name, max_len=18):
     name = str(name)
@@ -239,6 +250,67 @@ def draw_section_banner(c, text, x, y, w, h=18):
     c.setFillColor(colors.white)
     c.setFont("Helvetica-Bold", 10)
     c.drawCentredString(x + w / 2, y + 5, text)
+
+
+def draw_page_header(c, page_title, subtitle_text):
+    width, height = landscape(letter)
+    navy = colors.HexColor("#001F45")
+    red = colors.HexColor("#C0111F")
+
+    c.setFillColor(colors.white)
+    c.rect(0, 0, width, height, fill=1, stroke=0)
+
+    draw_crossed_bats(c, 70, 562)
+    draw_crossed_bats(c, width - 70, 562)
+
+    c.setFillColor(navy)
+    c.setFont("Helvetica-Bold", 34)
+    c.drawCentredString(width / 2, 555, page_title)
+
+    c.setFillColor(colors.HexColor("#334155"))
+    c.setFont("Helvetica", 9)
+    c.drawCentredString(width / 2, 538, subtitle_text)
+
+    c.setStrokeColor(red)
+    c.setLineWidth(1.4)
+    c.line(90, 524, 335, 524)
+    c.line(457, 524, 702, 524)
+
+    c.setFillColor(red)
+    c.setFont("Helvetica-Bold", 14)
+    center_x = width / 2
+    star_spacing = 23
+    for i in range(-2, 3):
+        c.drawCentredString(center_x + (i * star_spacing), 517, "★")
+
+
+def draw_page_footer(c, footer_left):
+    width, height = landscape(letter)
+    navy = colors.HexColor("#001F45")
+    red = colors.HexColor("#C0111F")
+    center_x = width / 2
+    star_spacing = 23
+
+    c.setStrokeColor(navy)
+    c.setLineWidth(1)
+
+    footer_left_line_start = 25
+    footer_left_line_end = (width / 2) - 66
+    footer_right_line_start = (width / 2) + 66
+    footer_right_line_end = width - 25
+
+    c.line(footer_left_line_start, 25, footer_left_line_end, 25)
+    c.line(footer_right_line_start, 25, footer_right_line_end, 25)
+
+    c.setFillColor(red)
+    c.setFont("Helvetica-Bold", 14)
+    for i in range(-2, 3):
+        c.drawCentredString(center_x + (i * star_spacing), 19, "★")
+
+    c.setFillColor(navy)
+    c.setFont("Helvetica-Oblique", 7)
+    c.drawString(25, 12, footer_left)
+    c.drawRightString(width - 25, 12, "GENERATED FROM UPLOADED CSV FILES")
 
 
 def draw_table(c, title, df, x, y, w, col_weights, icon_path):
@@ -342,47 +414,17 @@ def draw_table(c, title, df, x, y, w, col_weights, icon_path):
     c.rect(x, y - h, w, h, stroke=1, fill=0)
 
 
-def build_pdf():
-    buffer = BytesIO()
-    c = canvas.Canvas(buffer, pagesize=landscape(letter))
-
+def draw_player_page(c):
     width, height = landscape(letter)
-
-    navy = colors.HexColor("#001F45")
-    red = colors.HexColor("#C0111F")
     panel = colors.HexColor("#F4F6F9")
+
+    subtitle = f"{team_name} | Through {report_date.strftime('%B %d, %Y')} | {ranking_label} by Category"
+    draw_page_header(c, "PLAYER LEADERBOARD REPORT", subtitle)
 
     hitting_icon = "Hitting.png"
     baserunning_icon = "baserunning.png"
     defense_icon = "Defense.png"
     catching_icon = "Catching.png"
-
-    c.setFillColor(colors.white)
-    c.rect(0, 0, width, height, fill=1, stroke=0)
-
-    draw_crossed_bats(c, 70, 562)
-    draw_crossed_bats(c, width - 70, 562)
-
-    c.setFillColor(navy)
-    c.setFont("Helvetica-Bold", 34)
-    c.drawCentredString(width / 2, 555, "PLAYER LEADERBOARD REPORT")
-
-    c.setFillColor(colors.HexColor("#334155"))
-    c.setFont("Helvetica", 9)
-    subtitle = f"{team_name} | Through {report_date.strftime('%B %d, %Y')} | {ranking_label} by Category"
-    c.drawCentredString(width / 2, 538, subtitle)
-
-    c.setStrokeColor(red)
-    c.setLineWidth(1.4)
-    c.line(90, 524, 335, 524)
-    c.line(457, 524, 702, 524)
-
-    c.setFillColor(red)
-    c.setFont("Helvetica-Bold", 14)
-    center_x = width / 2
-    star_spacing = 23
-    for i in range(-2, 3):
-        c.drawCentredString(center_x + (i * star_spacing), 517, "★")
 
     c.setFillColor(panel)
     c.roundRect(10, 377, width - 20, 123, 6, stroke=0, fill=1)
@@ -404,16 +446,7 @@ def build_pdf():
     hitting_y = 472
 
     for i, (title, df) in enumerate(hitting_tables):
-        draw_table(
-            c,
-            title,
-            df,
-            hitting_start_x + i * (hitting_table_w + hitting_gap),
-            hitting_y,
-            hitting_table_w,
-            [0.12, 0.51, 0.17, 0.20],
-            hitting_icon,
-        )
+        draw_table(c, title, df, hitting_start_x + i * (hitting_table_w + hitting_gap), hitting_y, hitting_table_w, [0.12, 0.51, 0.17, 0.20], hitting_icon)
 
     c.setFillColor(panel)
     c.roundRect(10, 229, width - 20, 123, 6, stroke=0, fill=1)
@@ -455,31 +488,64 @@ def build_pdf():
     ]
 
     catch_y = 176
-
     draw_table(c, catching_tables[0][0], catching_tables[0][1], catch_start_x, catch_y, catching_tables[0][2], catching_tables[0][3], catching_tables[0][4])
     draw_table(c, catching_tables[1][0], catching_tables[1][1], catch_start_x + catch_left_w + catch_gap, catch_y, catching_tables[1][2], catching_tables[1][3], catching_tables[1][4])
 
-    c.setStrokeColor(navy)
-    c.setLineWidth(1)
+    draw_page_footer(c, f"{ranking_label.upper()} | MIN PA {min_pa} | MIN INF {min_inn_if} | MIN OF {min_inn_of} | MIN C P {min_catcher_p}")
 
-    footer_left_line_start = 25
-    footer_left_line_end = (width / 2) - 66
-    footer_right_line_start = (width / 2) + 66
-    footer_right_line_end = width - 25
 
-    c.line(footer_left_line_start, 25, footer_left_line_end, 25)
-    c.line(footer_right_line_start, 25, footer_right_line_end, 25)
+def draw_pitching_page(c):
+    width, height = landscape(letter)
+    panel = colors.HexColor("#F4F6F9")
+    pitching_icon = "Defense.png"
 
-    c.setFillColor(red)
-    c.setFont("Helvetica-Bold", 14)
-    for i in range(-2, 3):
-        c.drawCentredString(center_x + (i * star_spacing), 19, "★")
+    subtitle = f"{team_name} | Through {report_date.strftime('%B %d, %Y')} | Pitching {ranking_label} by Category"
+    draw_page_header(c, "PITCHING LEADERBOARD REPORT", subtitle)
 
-    c.setFillColor(navy)
-    c.setFont("Helvetica-Oblique", 7)
-    c.drawString(25, 12, f"{ranking_label.upper()} | MIN PA {min_pa} | MIN INF {min_inn_if} | MIN OF {min_inn_of} | MIN C P {min_catcher_p}")
-    c.drawRightString(width - 25, 12, "GENERATED FROM UPLOADED CSV FILES")
+    c.setFillColor(panel)
+    c.roundRect(10, 315, width - 20, 185, 6, stroke=0, fill=1)
+    draw_section_banner(c, "PITCHING", (width - 262) / 2, 488, 262)
 
+    # Higher is better: FPS%, FB/SI Zone%, SWM%, K%.
+    # Lower is better: BB%, TX Barrell.
+    pitching_tables_top = [
+        ("FPS%", top_leaders_with_context(pitching_df, "FPS%", "BF", ascending=show_bottom, min_col="BF", minimum=min_pitch_bf)),
+        ("FB/SI ZONE%", top_leaders_with_context(pitching_df, "FB/SI Zone%", "BF", ascending=show_bottom, min_col="BF", minimum=min_pitch_bf)),
+        ("SWM%", top_leaders_with_context(pitching_df, "SWM%", "BF", ascending=show_bottom, min_col="BF", minimum=min_pitch_bf)),
+    ]
+
+    pitching_tables_bottom = [
+        ("K%", top_leaders_with_context(pitching_df, "K%", "BF", ascending=show_bottom, min_col="BF", minimum=min_pitch_bf)),
+        ("BB%", top_leaders_with_context(pitching_df, "BB%", "BF", ascending=not show_bottom, min_col="BF", minimum=min_pitch_bf)),
+        ("TX BARRELL", top_leaders_with_context(pitching_df, "TX Barrell", "IP", ascending=not show_bottom, min_col="BF", minimum=min_pitch_bf)),
+    ]
+
+    table_w = 220
+    gap = 22
+    total_w = (3 * table_w) + (2 * gap)
+    start_x = (width - total_w) / 2
+
+    y_top = 472
+    for i, (title, df) in enumerate(pitching_tables_top):
+        draw_table(c, title, df, start_x + i * (table_w + gap), y_top, table_w, [0.12, 0.54, 0.16, 0.18], pitching_icon)
+
+    c.setFillColor(panel)
+    c.roundRect(10, 125, width - 20, 160, 6, stroke=0, fill=1)
+
+    y_bottom = 282
+    for i, (title, df) in enumerate(pitching_tables_bottom):
+        draw_table(c, title, df, start_x + i * (table_w + gap), y_bottom, table_w, [0.12, 0.54, 0.16, 0.18], pitching_icon)
+
+    draw_page_footer(c, f"{ranking_label.upper()} | MIN BF {min_pitch_bf} | PITCHING PAGE")
+
+
+def build_pdf():
+    buffer = BytesIO()
+    c = canvas.Canvas(buffer, pagesize=landscape(letter))
+
+    draw_player_page(c)
+    c.showPage()
+    draw_pitching_page(c)
     c.showPage()
     c.save()
 
@@ -489,7 +555,7 @@ def build_pdf():
 
 st.header("Cleaned CSV Preview")
 
-tabs = st.tabs(["Hitting", "Baserunning", "Infield Defense", "Outfield Defense", "Catching"])
+tabs = st.tabs(["Hitting", "Baserunning", "Infield Defense", "Outfield Defense", "Catching", "Pitching"])
 
 with tabs[0]:
     if hitting_df is not None:
@@ -521,6 +587,12 @@ with tabs[4]:
     else:
         st.info("Upload Catching CSV")
 
+with tabs[5]:
+    if pitching_df is not None:
+        st.dataframe(pitching_df, hide_index=True)
+    else:
+        st.info("Upload Pitching CSV")
+
 
 all_uploaded = all([
     hitting_df is not None,
@@ -528,6 +600,7 @@ all_uploaded = all([
     infield_df is not None,
     outfield_df is not None,
     catching_df is not None,
+    pitching_df is not None,
 ])
 
 if all_uploaded:
@@ -540,4 +613,4 @@ if all_uploaded:
         mime="application/pdf",
     )
 else:
-    st.info("Upload all 5 CSVs to enable PDF export.")
+    st.info("Upload all 6 CSVs to enable PDF export.")
