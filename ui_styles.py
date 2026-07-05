@@ -244,3 +244,16 @@ def app_header(title, subtitle="Baseball operations tool"):
         <p>{subtitle}</p>
     </div>
     """, unsafe_allow_html=True)
+\n\n# Number input contrast fix\n\nst.markdown("""<style>
+        div[data-testid="stNumberInput"] button {
+            color: #0f172a !important;
+            background: #ffffff !important;
+            opacity: 1 !important;
+            font-weight: 900 !important;
+        }
+
+        div[data-testid="stNumberInput"] button svg {
+            fill: #0f172a !important;
+            color: #0f172a !important;
+        }
+    </style>""", unsafe_allow_html=True)\n
