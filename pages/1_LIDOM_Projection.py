@@ -1,4 +1,6 @@
 import streamlit as st
+from ui_styles import apply_page_style
+apply_page_style()
 import pandas as pd
 import numpy as np
 from io import BytesIO

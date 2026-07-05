@@ -7,6 +7,8 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 import streamlit as st
+from ui_styles import apply_page_style
+apply_page_style()
 
 
 st.set_page_config(page_title="Pitcher Similarity Finder", layout="wide")

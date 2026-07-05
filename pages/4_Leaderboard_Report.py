@@ -4,6 +4,8 @@ from datetime import date
 
 import pandas as pd
 import streamlit as st
+from ui_styles import apply_page_style
+apply_page_style()
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import landscape, letter
 from reportlab.lib.utils import ImageReader
