@@ -8,32 +8,24 @@ st.set_page_config(
     layout="wide",
 )
 
-# ------------------------------------------------------------
-# Shared theme support
-# ------------------------------------------------------------
+# Safe fallback theme values. This version avoids experimental CSS features.
+THEME = {
+    "primary": "#0f172a",
+    "secondary": "#2563eb",
+    "accent": "#f97316",
+    "soft": "#eff6ff",
+}
+
+# Shared styling, if available
 try:
     from ui_styles import apply_page_style, theme_picker
-    theme = theme_picker()
-    apply_page_style(theme)
+    selected_theme = theme_picker()
+    apply_page_style(selected_theme)
+    THEME.update(selected_theme)
 except Exception:
-    theme = None
-    st.markdown("""
-    <style>
-        :root {
-            --hub-primary: #0f172a;
-            --hub-secondary: #2563eb;
-            --hub-accent: #f97316;
-            --hub-soft: #eff6ff;
-            --hub-card: #ffffff;
-            --hub-border: #e5e7eb;
-            --hub-muted: #64748b;
-        }
-    </style>
-    """, unsafe_allow_html=True)
-
+    pass
 
 PAGES_DIR = Path("pages")
-
 
 APP_LIBRARY = [
     {
@@ -108,13 +100,11 @@ APP_LIBRARY = [
     },
 ]
 
-
 RECENT_REPORTS = [
     {"title": "Pregame Report", "meta": "Opponent prep workflow", "icon": "📋"},
     {"title": "Pitch Similarity", "meta": "Pitcher profile comparison", "icon": "⚾"},
     {"title": "Leaderboard PDF", "meta": "Player ranking export", "icon": "🏆"},
 ]
-
 
 LATEST_UPDATES = [
     "Command Center homepage added",
@@ -125,7 +115,6 @@ LATEST_UPDATES = [
 
 
 def find_available_pages():
-    """Match homepage app cards to real Streamlit page files."""
     if not PAGES_DIR.exists():
         return {}
 
@@ -133,9 +122,9 @@ def find_available_pages():
     mapping = {}
 
     for app in APP_LIBRARY:
+        aliases = app.get("aliases") or app["title"].lower().split()
         best_file = None
         best_score = 0
-        aliases = app.get("aliases") or app["title"].lower().split()
 
         for file in files:
             normalized = file.stem.lower().replace("_", " ").replace("-", " ")
@@ -145,7 +134,7 @@ def find_available_pages():
                 best_score = score
                 best_file = file
 
-        if best_file and best_score >= max(1, len(aliases) // 2):
+        if best_file and best_score >= 1:
             mapping[app["title"]] = str(best_file)
 
     return mapping
@@ -157,65 +146,32 @@ total_apps = len(APP_LIBRARY)
 categories = sorted(set(app["category"] for app in APP_LIBRARY))
 today = datetime.now().strftime("%b %d, %Y")
 
+primary = THEME.get("primary", "#0f172a")
+secondary = THEME.get("secondary", "#2563eb")
+accent = THEME.get("accent", "#f97316")
+soft = THEME.get("soft", "#eff6ff")
 
-# ------------------------------------------------------------
-# Homepage CSS
-# ------------------------------------------------------------
-st.markdown("""
+st.markdown(f"""
 <style>
-    .main .block-container {
+    .main .block-container {{
         padding-top: 2rem;
-    }
+    }}
 
-    .cmd-shell {
-        position: relative;
-    }
-
-    .cmd-shell:before {
-        content: "";
-        position: fixed;
-        right: -180px;
-        top: 130px;
-        width: 460px;
-        height: 460px;
-        border-radius: 999px;
-        background: color-mix(in srgb, var(--hub-secondary, #2563eb) 10%, transparent);
-        filter: blur(2px);
-        z-index: 0;
-        pointer-events: none;
-    }
-
-    .cmd-shell:after {
-        content: "";
-        position: fixed;
-        left: -220px;
-        bottom: -180px;
-        width: 520px;
-        height: 520px;
-        border-radius: 999px;
-        background: color-mix(in srgb, var(--hub-accent, #f97316) 8%, transparent);
-        z-index: 0;
-        pointer-events: none;
-    }
-
-    .cmd-hero {
-        position: relative;
-        z-index: 1;
+    .cmd-hero {{
         display: grid;
         grid-template-columns: 1.45fr .55fr;
         gap: 26px;
         padding: 44px;
         border-radius: 34px;
-        background:
-            linear-gradient(135deg, var(--hub-primary, #0f172a), var(--hub-secondary, #2563eb)),
-            radial-gradient(circle at 85% 15%, color-mix(in srgb, var(--hub-accent, #f97316) 44%, transparent), transparent 30%);
+        background: linear-gradient(135deg, {primary}, {secondary});
         color: white;
-        box-shadow: 0 24px 60px rgba(15,23,42,.28);
+        box-shadow: 0 24px 55px rgba(15,23,42,.26);
         overflow: hidden;
         margin-bottom: 24px;
-    }
+        position: relative;
+    }}
 
-    .cmd-hero:before {
+    .cmd-hero:before {{
         content: "";
         position: absolute;
         inset: 0;
@@ -223,10 +179,10 @@ st.markdown("""
             linear-gradient(rgba(255,255,255,.055) 1px, transparent 1px),
             linear-gradient(90deg, rgba(255,255,255,.055) 1px, transparent 1px);
         background-size: 42px 42px;
-        opacity: .42;
-    }
+        opacity: .38;
+    }}
 
-    .cmd-hero:after {
+    .cmd-hero:after {{
         content: "⚾";
         position: absolute;
         right: 34px;
@@ -234,17 +190,15 @@ st.markdown("""
         font-size: 9rem;
         opacity: .12;
         transform: rotate(-13deg);
-    }
+    }}
 
-    .hero-left, .hero-right {
+    .hero-left, .hero-right {{
         position: relative;
         z-index: 2;
-    }
+    }}
 
-    .hero-kicker {
+    .hero-kicker {{
         display: inline-flex;
-        align-items: center;
-        gap: 8px;
         padding: 8px 13px;
         border-radius: 999px;
         background: rgba(255,255,255,.13);
@@ -255,42 +209,41 @@ st.markdown("""
         letter-spacing: .12em;
         text-transform: uppercase;
         margin-bottom: 16px;
-    }
+    }}
 
-    .cmd-hero h1 {
+    .cmd-hero h1 {{
         color: white !important;
-        font-size: 4.1rem !important;
+        font-size: 4rem !important;
         line-height: .96;
         margin: 0 0 16px 0;
         letter-spacing: -2.4px;
         font-weight: 950 !important;
-    }
+    }}
 
-    .cmd-hero p {
+    .cmd-hero p {{
         color: #e0f2fe;
         font-size: 1.16rem;
         line-height: 1.55;
         max-width: 800px;
         margin: 0;
-    }
+    }}
 
-    .hero-panel {
+    .hero-panel {{
         background: rgba(255,255,255,.12);
         border: 1px solid rgba(255,255,255,.18);
         border-radius: 26px;
         padding: 22px;
-        backdrop-filter: blur(10px);
         min-height: 100%;
-    }
+    }}
 
-    .hero-panel-title {
+    .hero-panel-title {{
         color: white;
         font-weight: 950;
         font-size: 1.05rem;
         margin-bottom: 14px;
-    }
+    }}
 
-    .hero-panel-item {
+    .hero-panel-item {{
         display: flex;
         align-items: center;
         justify-content: space-between;
@@ -299,97 +252,74 @@ st.markdown("""
         border-bottom: 1px solid rgba(255,255,255,.15);
         color: #e0f2fe;
         font-weight: 800;
-    }
+    }}
 
-    .hero-panel-item:last-child {
+    .hero-panel-item:last-child {{
         border-bottom: none;
-    }
+    }}
 
-    .hero-panel-badge {
+    .hero-panel-badge {{
         padding: 5px 9px;
         border-radius: 999px;
         background: rgba(255,255,255,.15);
         color: white;
         font-size: .75rem;
         font-weight: 950;
-    }
+    }}
 
-    .stat-grid {
-        position: relative;
-        z-index: 1;
+    .stat-grid {{
         display: grid;
         grid-template-columns: repeat(4, 1fr);
         gap: 15px;
         margin: 0 0 24px 0;
-    }
+    }}
 
-    .stat-card {
-        background: rgba(255,255,255,.94);
+    .stat-card {{
+        background: rgba(255,255,255,.96);
         border: 1px solid #e5e7eb;
         border-radius: 22px;
         padding: 19px;
         box-shadow: 0 10px 26px rgba(15,23,42,.08);
-        overflow: hidden;
-        position: relative;
-    }
+    }}
 
-    .stat-card:after {
-        content: "";
-        position: absolute;
-        right: -32px;
-        top: -32px;
-        width: 95px;
-        height: 95px;
-        border-radius: 999px;
-        background: color-mix(in srgb, var(--hub-secondary, #2563eb) 10%, transparent);
-    }
-
-    .stat-label {
+    .stat-label {{
         color: #64748b;
         font-size: .74rem;
         font-weight: 950;
         letter-spacing: .08em;
         text-transform: uppercase;
-        position: relative;
-        z-index: 1;
-    }
+    }}
 
-    .stat-value {
+    .stat-value {{
         color: #0f172a;
         font-size: 1.65rem;
         font-weight: 950;
         margin-top: 4px;
-        position: relative;
-        z-index: 1;
-    }
+    }}
 
-    .section-head {
-        position: relative;
-        z-index: 1;
+    .section-head {{
         display: flex;
         justify-content: space-between;
         align-items: end;
         gap: 16px;
         margin: 28px 0 14px 0;
-    }
+    }}
 
-    .section-title {
+    .section-title {{
         color: #0f172a;
         font-size: 1.48rem;
         font-weight: 950;
         letter-spacing: -.5px;
-    }
+    }}
 
-    .section-subtitle {
+    .section-subtitle {{
         color: #64748b;
         margin-top: 4px;
         font-size: .96rem;
-    }
+    }}
 
-    .pill {
+    .pill {{
         display: inline-flex;
-        align-items: center;
-        gap: 7px;
         padding: 8px 12px;
         border-radius: 999px;
         background: white;
@@ -399,108 +329,97 @@ st.markdown("""
         font-size: .84rem;
         box-shadow: 0 6px 18px rgba(15,23,42,.06);
         white-space: nowrap;
-    }
+    }}
 
-    .quick-card, .app-card, .panel, .category-wrap {
-        position: relative;
-        z-index: 1;
+    .quick-card, .app-card, .panel, .category-wrap {{
         background: white;
         border: 1px solid #e5e7eb;
         box-shadow: 0 10px 28px rgba(15,23,42,.08);
-    }
+    }}
 
-    .quick-card {
+    .quick-card {{
         border-radius: 24px;
         padding: 22px;
         min-height: 190px;
-        border-top: 5px solid var(--hub-secondary, #2563eb);
+        border-top: 5px solid {secondary};
         transition: all .16s ease;
-    }
+    }}
 
-    .quick-card:hover, .app-card:hover {
+    .quick-card:hover, .app-card:hover {{
         transform: translateY(-3px);
         box-shadow: 0 16px 38px rgba(15,23,42,.14);
-    }
+    }}
 
-    .quick-icon, .app-icon {
+    .quick-icon, .app-icon, .recent-icon, .step-num {{
+        background: linear-gradient(135deg, {soft}, #ffffff);
+    }}
+
+    .quick-icon, .app-icon {{
         width: 56px;
         height: 56px;
         border-radius: 18px;
         display: flex;
         align-items: center;
         justify-content: center;
-        background: linear-gradient(135deg, var(--hub-soft, #eff6ff), #ffffff);
         font-size: 1.9rem;
         margin-bottom: 14px;
-    }
+    }}
 
-    .quick-title, .app-title {
+    .quick-title, .app-title {{
         color: #0f172a;
         font-weight: 950;
         font-size: 1.08rem;
         margin-bottom: 7px;
-    }
+    }}
 
-    .quick-desc, .app-desc {
+    .quick-desc, .app-desc {{
         color: #475569;
         font-size: .92rem;
         line-height: 1.45;
-    }
+    }}
 
-    .category-wrap {
+    .category-wrap {{
         border-radius: 28px;
         padding: 22px;
         margin-bottom: 22px;
-    }
+    }}
 
-    .category-top {
+    .category-top {{
         display: flex;
         justify-content: space-between;
         align-items: center;
         padding-bottom: 14px;
         margin-bottom: 16px;
         border-bottom: 1px solid #e5e7eb;
-    }
+    }}
 
-    .category-name {
+    .category-name {{
         color: #0f172a;
         font-weight: 950;
         font-size: 1.14rem;
-    }
+    }}
 
-    .category-count {
+    .category-count {{
         color: #64748b;
         font-weight: 900;
         font-size: .82rem;
-    }
+    }}
 
-    .app-card {
+    .app-card {{
         border-radius: 24px;
         padding: 22px;
         min-height: 235px;
-        overflow: hidden;
         transition: all .16s ease;
-    }
+    }}
 
-    .app-card:after {
-        content: "";
-        position: absolute;
-        right: -48px;
-        top: -48px;
-        width: 124px;
-        height: 124px;
-        border-radius: 999px;
-        background: color-mix(in srgb, var(--hub-secondary, #2563eb) 10%, transparent);
-    }
-
-    .app-top {
+    .app-top {{
         display: flex;
         justify-content: space-between;
         align-items: flex-start;
         gap: 12px;
-    }
+    }}
 
-    .status-badge {
+    .status-badge {{
         padding: 5px 9px;
         border-radius: 999px;
         background: #ecfdf5;
@@ -508,134 +427,115 @@ st.markdown("""
         font-size: .72rem;
         font-weight: 950;
         text-transform: uppercase;
-        position: relative;
-        z-index: 1;
-    }
+    }}
 
-    .app-title, .app-desc, .app-icon {
-        position: relative;
-        z-index: 1;
-    }
-
-    .lower-grid {
-        position: relative;
-        z-index: 1;
+    .lower-grid {{
         display: grid;
         grid-template-columns: 1.15fr .85fr;
         gap: 22px;
         margin-top: 6px;
-    }
+    }}
 
-    .panel {
+    .panel {{
         border-radius: 28px;
         padding: 24px;
-    }
+    }}
 
-    .recent-item {
+    .recent-item {{
         display: grid;
         grid-template-columns: 42px 1fr;
         gap: 12px;
         padding: 13px 0;
         border-bottom: 1px solid #e5e7eb;
-    }
+    }}
 
-    .recent-item:last-child {
+    .recent-item:last-child {{
         border-bottom: none;
-    }
+    }}
 
-    .recent-icon {
+    .recent-icon {{
         width: 42px;
         height: 42px;
         border-radius: 14px;
-        background: linear-gradient(135deg, var(--hub-soft, #eff6ff), #ffffff);
         display: flex;
         align-items: center;
         justify-content: center;
         font-size: 1.35rem;
-    }
+    }}
 
-    .recent-title {
+    .recent-title {{
         color: #0f172a;
         font-weight: 950;
         line-height: 1.2;
-    }
+    }}
 
-    .recent-meta {
+    .recent-meta {{
         color: #64748b;
         font-size: .88rem;
         margin-top: 2px;
-    }
+    }}
 
-    .workflow-step {
+    .workflow-step {{
         display: grid;
         grid-template-columns: 38px 1fr;
         gap: 12px;
         align-items: start;
         margin-bottom: 14px;
-    }
+    }}
 
-    .step-num {
+    .step-num {{
         width: 38px;
         height: 38px;
         border-radius: 13px;
-        background: linear-gradient(135deg, var(--hub-soft, #eff6ff), #ffffff);
-        color: var(--hub-secondary, #2563eb);
+        color: {secondary};
         display: flex;
         align-items: center;
         justify-content: center;
         font-weight: 950;
-    }
+    }}
 
-    .step-text {
+    .step-text {{
         color: #334155;
         font-weight: 750;
         padding-top: 6px;
         line-height: 1.35;
-    }
+    }}
 
-    .update-item {
+    .update-item {{
         padding: 11px 0;
         border-bottom: 1px solid #e5e7eb;
         color: #334155;
         font-weight: 760;
-    }
+    }}
 
-    .update-item:last-child {
+    .update-item:last-child {{
         border-bottom: none;
-    }
+    }}
 
-    .footer-line {
-        position: relative;
-        z-index: 1;
+    .footer-line {{
         text-align: center;
         color: #64748b;
         margin-top: 34px;
         padding-top: 18px;
         border-top: 1px solid #e5e7eb;
         font-size: .92rem;
-    }
+    }}
 
-    @media (max-width: 1150px) {
-        .cmd-hero { grid-template-columns: 1fr; }
-        .stat-grid { grid-template-columns: repeat(2, 1fr); }
-        .lower-grid { grid-template-columns: 1fr; }
-        .cmd-hero h1 { font-size: 3.1rem !important; }
-    }
+    @media (max-width: 1150px) {{
+        .cmd-hero {{ grid-template-columns: 1fr; }}
+        .stat-grid {{ grid-template-columns: repeat(2, 1fr); }}
+        .lower-grid {{ grid-template-columns: 1fr; }}
+        .cmd-hero h1 {{ font-size: 3.1rem !important; }}
+    }}
 
-    @media (max-width: 760px) {
-        .stat-grid { grid-template-columns: 1fr; }
-        .section-head { align-items: flex-start; flex-direction: column; }
-        .cmd-hero { padding: 30px 24px; }
-        .cmd-hero h1 { font-size: 2.35rem !important; }
-    }
+    @media (max-width: 760px) {{
+        .stat-grid {{ grid-template-columns: 1fr; }}
+        .section-head {{ align-items: flex-start; flex-direction: column; }}
+        .cmd-hero {{ padding: 30px 24px; }}
+        .cmd-hero h1 {{ font-size: 2.35rem !important; }}
+    }}
 </style>
 """, unsafe_allow_html=True)
-
-
-# ------------------------------------------------------------
-# Page body
-# ------------------------------------------------------------
-st.markdown('<div class="cmd-shell">', unsafe_allow_html=True)
 
 st.markdown(f"""
 <div class="cmd-hero">
@@ -757,7 +657,6 @@ for category in categories:
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-
 st.markdown("""
 <div class="lower-grid">
     <div class="panel">
@@ -825,6 +724,5 @@ st.markdown("""
 
 <div class="footer-line">
     Baseball Operations Portal • Analytics, reports, projections, and game-planning tools
-</div>
 </div>
 """, unsafe_allow_html=True)
