@@ -6,22 +6,79 @@ st.set_page_config(
     page_title="Baseball Operations Portal",
     page_icon="⚾",
     layout="wide",
+    initial_sidebar_state="expanded",
 )
 
-# Safe fallback theme values. This version avoids experimental CSS features.
-THEME = {
-    "primary": "#0f172a",
-    "secondary": "#2563eb",
-    "accent": "#f97316",
-    "soft": "#eff6ff",
+# -----------------------------
+# Team / brand selector
+# -----------------------------
+TEAM_THEMES = {
+    "Neutral Baseball": {
+        "primary": "#0f172a",
+        "secondary": "#2563eb",
+        "accent": "#f97316",
+        "soft": "#eff6ff",
+        "label": "Team-Neutral",
+    },
+    "Texas Rangers": {
+        "primary": "#002D72",
+        "secondary": "#003B8E",
+        "accent": "#BA0C2F",
+        "soft": "#eaf2ff",
+        "label": "Texas Rangers",
+    },
+    "Escogido": {
+        "primary": "#111827",
+        "secondary": "#b91c1c",
+        "accent": "#ef4444",
+        "soft": "#fee2e2",
+        "label": "Escogido",
+    },
+    "Licey": {
+        "primary": "#0b1f3a",
+        "secondary": "#1d4ed8",
+        "accent": "#60a5fa",
+        "soft": "#dbeafe",
+        "label": "Licey",
+    },
+    "Aguilas": {
+        "primary": "#111827",
+        "secondary": "#d97706",
+        "accent": "#facc15",
+        "soft": "#fef3c7",
+        "label": "Aguilas",
+    },
+    "Estrellas": {
+        "primary": "#052e24",
+        "secondary": "#059669",
+        "accent": "#84cc16",
+        "soft": "#dcfce7",
+        "label": "Estrellas",
+    },
 }
 
-# Shared styling, if available
+with st.sidebar:
+    st.markdown("### ⚾ Baseball Ops")
+    selected_team = st.selectbox(
+        "Organization",
+        list(TEAM_THEMES.keys()),
+        index=0,
+        key="portal_team_selector",
+    )
+
+THEME = TEAM_THEMES[selected_team]
+
+# Shared styling, if available. We still apply the local V6 CSS below.
 try:
-    from ui_styles import apply_page_style, theme_picker
-    selected_theme = theme_picker()
-    apply_page_style(selected_theme)
-    THEME.update(selected_theme)
+    from ui_styles import apply_page_style
+    apply_page_style({
+        "primary": THEME["primary"],
+        "secondary": THEME["secondary"],
+        "accent": THEME["accent"],
+        "soft": THEME["soft"],
+        "sidebar_1": THEME["primary"],
+        "sidebar_2": THEME["secondary"],
+    })
 except Exception:
     pass
 
@@ -101,16 +158,17 @@ APP_LIBRARY = [
 ]
 
 RECENT_REPORTS = [
-    {"title": "Pregame Report", "meta": "Opponent prep workflow", "icon": "📋"},
-    {"title": "Pitch Similarity", "meta": "Pitcher profile comparison", "icon": "⚾"},
-    {"title": "Leaderboard PDF", "meta": "Player ranking export", "icon": "🏆"},
+    {"title": "Blue Team Pregame", "meta": "Pregame Visual Report • PDF workflow", "icon": "📋", "tag": "Report"},
+    {"title": "Pitcher Similarity Review", "meta": "Pitch Characteristics • Player profile", "icon": "⚾", "tag": "Analysis"},
+    {"title": "Monthly Leaderboard", "meta": "Leaderboard Report • Staff-ready PDF", "icon": "🏆", "tag": "Export"},
+    {"title": "Lineup Scenario", "meta": "Lineup Optimization • Game planning", "icon": "🧢", "tag": "Planning"},
 ]
 
 LATEST_UPDATES = [
-    "Command Center homepage added",
-    "Theme system improved for team-neutral branding",
-    "Professional page styling added across app pages",
-    "Input contrast and sidebar readability improved",
+    "V6 homepage with team selector",
+    "Recent Reports workspace panel added",
+    "Background strike-zone graphic added",
+    "Streamlit native header/footer/menu hidden",
 ]
 
 
@@ -146,29 +204,136 @@ total_apps = len(APP_LIBRARY)
 categories = sorted(set(app["category"] for app in APP_LIBRARY))
 today = datetime.now().strftime("%b %d, %Y")
 
-primary = THEME.get("primary", "#0f172a")
-secondary = THEME.get("secondary", "#2563eb")
-accent = THEME.get("accent", "#f97316")
-soft = THEME.get("soft", "#eff6ff")
+primary = THEME["primary"]
+secondary = THEME["secondary"]
+accent = THEME["accent"]
+soft = THEME["soft"]
+team_label = THEME["label"]
 
+# -----------------------------
+# V6 CSS
+# -----------------------------
 st.markdown(f"""
 <style>
-    .main .block-container {{
-        padding-top: 2rem;
+    /* Remove as much native Streamlit feel as possible */
+    #MainMenu {{visibility: hidden;}}
+    footer {{visibility: hidden;}}
+    header[data-testid="stHeader"] {{
+        background: transparent;
+        height: 0rem;
+    }}
+    div[data-testid="stToolbar"] {{
+        visibility: hidden;
+        height: 0%;
+        position: fixed;
+    }}
+    div[data-testid="stDecoration"] {{
+        visibility: hidden;
+        height: 0%;
+    }}
+    .stDeployButton {{
+        display: none !important;
+    }}
+
+    .stApp {{
+        background:
+            radial-gradient(circle at 92% 10%, {soft} 0%, transparent 24%),
+            radial-gradient(circle at 3% 88%, rgba(249,115,22,.10) 0%, transparent 28%),
+            linear-gradient(135deg, #f8fafc 0%, #eef2f7 100%) !important;
+    }}
+
+    .block-container {{
+        padding-top: 1.8rem !important;
+        padding-bottom: 3rem !important;
+        max-width: 1360px !important;
+    }}
+
+    /* Baseball background graphic */
+    .bg-graphic {{
+        position: fixed;
+        right: 32px;
+        bottom: 20px;
+        width: 360px;
+        height: 360px;
+        opacity: .055;
+        pointer-events: none;
+        z-index: 0;
+        border: 5px solid {primary};
+        border-radius: 26px;
+        transform: rotate(-4deg);
+    }}
+
+    .bg-graphic:before {{
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: -25px;
+        width: 4px;
+        height: 410px;
+        background: {primary};
+        transform: translateX(-50%);
+    }}
+
+    .bg-graphic:after {{
+        content: "";
+        position: absolute;
+        left: -25px;
+        top: 50%;
+        width: 410px;
+        height: 4px;
+        background: {primary};
+        transform: translateY(-50%);
+    }}
+
+    .strike-zone {{
+        position: fixed;
+        right: 92px;
+        bottom: 88px;
+        width: 240px;
+        height: 210px;
+        border: 4px solid {primary};
+        opacity: .06;
+        pointer-events: none;
+        z-index: 0;
+    }}
+
+    .strike-zone:before {{
+        content: "";
+        position: absolute;
+        left: 33.33%;
+        top: 0;
+        height: 100%;
+        width: 3px;
+        background: {primary};
+        box-shadow: 80px 0 0 {primary};
+    }}
+
+    .strike-zone:after {{
+        content: "";
+        position: absolute;
+        top: 33.33%;
+        left: 0;
+        width: 100%;
+        height: 3px;
+        background: {primary};
+        box-shadow: 0 70px 0 {primary};
     }}
 
     .cmd-hero {{
         display: grid;
-        grid-template-columns: 1.45fr .55fr;
+        grid-template-columns: 1.42fr .58fr;
         gap: 26px;
         padding: 44px;
         border-radius: 34px;
-        background: linear-gradient(135deg, {primary}, {secondary});
+        background:
+            linear-gradient(135deg, {primary}, {secondary}),
+            radial-gradient(circle at 86% 18%, {accent} 0%, transparent 31%);
         color: white;
-        box-shadow: 0 24px 55px rgba(15,23,42,.26);
+        box-shadow: 0 24px 55px rgba(15,23,42,.27);
         overflow: hidden;
         margin-bottom: 24px;
         position: relative;
+        z-index: 1;
     }}
 
     .cmd-hero:before {{
@@ -185,8 +350,8 @@ st.markdown(f"""
     .cmd-hero:after {{
         content: "⚾";
         position: absolute;
-        right: 34px;
-        top: 16px;
+        right: 36px;
+        top: 18px;
         font-size: 9rem;
         opacity: .12;
         transform: rotate(-13deg);
@@ -234,6 +399,7 @@ st.markdown(f"""
         border-radius: 26px;
         padding: 22px;
         min-height: 100%;
+        backdrop-filter: blur(8px);
     }}
 
     .hero-panel-title {{
@@ -272,6 +438,8 @@ st.markdown(f"""
         grid-template-columns: repeat(4, 1fr);
         gap: 15px;
         margin: 0 0 24px 0;
+        position: relative;
+        z-index: 1;
     }}
 
     .stat-card {{
@@ -303,6 +471,8 @@ st.markdown(f"""
         align-items: end;
         gap: 16px;
         margin: 28px 0 14px 0;
+        position: relative;
+        z-index: 1;
     }}
 
     .section-title {{
@@ -335,6 +505,8 @@ st.markdown(f"""
         background: white;
         border: 1px solid #e5e7eb;
         box-shadow: 0 10px 28px rgba(15,23,42,.08);
+        position: relative;
+        z-index: 1;
     }}
 
     .quick-card {{
@@ -434,6 +606,8 @@ st.markdown(f"""
         grid-template-columns: 1.15fr .85fr;
         gap: 22px;
         margin-top: 6px;
+        position: relative;
+        z-index: 1;
     }}
 
     .panel {{
@@ -443,8 +617,9 @@ st.markdown(f"""
 
     .recent-item {{
         display: grid;
-        grid-template-columns: 42px 1fr;
+        grid-template-columns: 42px 1fr auto;
         gap: 12px;
+        align-items: center;
         padding: 13px 0;
         border-bottom: 1px solid #e5e7eb;
     }}
@@ -473,6 +648,16 @@ st.markdown(f"""
         color: #64748b;
         font-size: .88rem;
         margin-top: 2px;
+    }}
+
+    .recent-tag {{
+        color: {secondary};
+        background: {soft};
+        border: 1px solid rgba(15,23,42,.06);
+        border-radius: 999px;
+        padding: 5px 9px;
+        font-size: .72rem;
+        font-weight: 950;
     }}
 
     .workflow-step {{
@@ -519,6 +704,8 @@ st.markdown(f"""
         padding-top: 18px;
         border-top: 1px solid #e5e7eb;
         font-size: .92rem;
+        position: relative;
+        z-index: 1;
     }}
 
     @media (max-width: 1150px) {{
@@ -535,8 +722,14 @@ st.markdown(f"""
         .cmd-hero h1 {{ font-size: 2.35rem !important; }}
     }}
 </style>
+
+<div class="bg-graphic"></div>
+<div class="strike-zone"></div>
 """, unsafe_allow_html=True)
 
+# -----------------------------
+# Body
+# -----------------------------
 st.markdown(f"""
 <div class="cmd-hero">
     <div class="hero-left">
@@ -547,10 +740,10 @@ st.markdown(f"""
     <div class="hero-right">
         <div class="hero-panel">
             <div class="hero-panel-title">Platform Snapshot</div>
+            <div class="hero-panel-item"><span>Organization</span><span class="hero-panel-badge">{team_label}</span></div>
             <div class="hero-panel-item"><span>Apps Online</span><span class="hero-panel-badge">{available_apps}/{total_apps}</span></div>
             <div class="hero-panel-item"><span>Workflows</span><span class="hero-panel-badge">{len(categories)}</span></div>
             <div class="hero-panel-item"><span>Last Updated</span><span class="hero-panel-badge">{today}</span></div>
-            <div class="hero-panel-item"><span>Branding</span><span class="hero-panel-badge">Team-Neutral</span></div>
         </div>
     </div>
 </div>
@@ -560,7 +753,7 @@ st.markdown(f"""
 <div class="stat-grid">
     <div class="stat-card"><div class="stat-label">Applications</div><div class="stat-value">{available_apps}/{total_apps}</div></div>
     <div class="stat-card"><div class="stat-label">Categories</div><div class="stat-value">{len(categories)}</div></div>
-    <div class="stat-card"><div class="stat-label">Primary Use</div><div class="stat-value">Reports</div></div>
+    <div class="stat-card"><div class="stat-label">Organization</div><div class="stat-value">{team_label}</div></div>
     <div class="stat-card"><div class="stat-label">Audience</div><div class="stat-value">Ops / PD</div></div>
 </div>
 """, unsafe_allow_html=True)
@@ -660,28 +853,8 @@ for category in categories:
 st.markdown("""
 <div class="lower-grid">
     <div class="panel">
-        <div class="section-title">Recommended Workflow</div>
-        <div class="section-subtitle">A clean path from raw data to decision-ready output.</div>
-        <div class="workflow-step">
-            <div class="step-num">1</div>
-            <div class="step-text">Choose the tool that matches the baseball question: report, matchup, projection, leaderboard, or player analysis.</div>
-        </div>
-        <div class="workflow-step">
-            <div class="step-num">2</div>
-            <div class="step-text">Upload the source file and confirm filters, minimums, league context, or team settings.</div>
-        </div>
-        <div class="workflow-step">
-            <div class="step-num">3</div>
-            <div class="step-text">Generate tables, visuals, summaries, or PDF-ready outputs for staff review.</div>
-        </div>
-        <div class="workflow-step">
-            <div class="step-num">4</div>
-            <div class="step-text">Share results with coaches, analysts, scouts, front office, or game-planning staff.</div>
-        </div>
-    </div>
-    <div class="panel">
         <div class="section-title">Recent Reports</div>
-        <div class="section-subtitle">Placeholder workspace items for future report history.</div>
+        <div class="section-subtitle">Workspace history placeholder. Later this can connect to real generated reports.</div>
 """, unsafe_allow_html=True)
 
 for report in RECENT_REPORTS:
@@ -692,10 +865,31 @@ for report in RECENT_REPORTS:
             <div class="recent-title">{report["title"]}</div>
             <div class="recent-meta">{report["meta"]}</div>
         </div>
+        <div class="recent-tag">{report["tag"]}</div>
     </div>
     """, unsafe_allow_html=True)
 
 st.markdown("""
+    </div>
+    <div class="panel">
+        <div class="section-title">Recommended Workflow</div>
+        <div class="section-subtitle">A clean path from raw data to decision-ready output.</div>
+        <div class="workflow-step">
+            <div class="step-num">1</div>
+            <div class="step-text">Choose the tool that matches the baseball question.</div>
+        </div>
+        <div class="workflow-step">
+            <div class="step-num">2</div>
+            <div class="step-text">Upload the source file and confirm filters or team settings.</div>
+        </div>
+        <div class="workflow-step">
+            <div class="step-num">3</div>
+            <div class="step-text">Generate tables, visuals, summaries, or PDF-ready outputs.</div>
+        </div>
+        <div class="workflow-step">
+            <div class="step-num">4</div>
+            <div class="step-text">Share results with staff and decision-makers.</div>
+        </div>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -715,10 +909,10 @@ st.markdown("""
     <div class="panel">
         <div class="section-title">Platform Direction</div>
         <div class="section-subtitle">Built to support multiple teams, leagues, and workflows.</div>
-        <div class="update-item">✓ Team-neutral branding</div>
-        <div class="update-item">✓ Modular app structure</div>
-        <div class="update-item">✓ PDF/report-oriented workflow</div>
-        <div class="update-item">✓ Scalable for future tools</div>
+        <div class="update-item">✓ Team selector and flexible branding</div>
+        <div class="update-item">✓ Streamlit-native elements visually reduced</div>
+        <div class="update-item">✓ Subtle strike-zone background graphic</div>
+        <div class="update-item">✓ Recent Reports workspace panel</div>
     </div>
 </div>
 
