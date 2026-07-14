@@ -1557,7 +1557,7 @@ def _rank_text(value, population, higher_is_better=True):
 
 def _strength_label(percentile):
     if percentile is None:
-        return "VS LG AVG"
+        return "AVERAGE"
     if percentile >= 0.85:
         return "ELITE"
     if percentile >= 0.65:
@@ -1720,10 +1720,20 @@ def build_executive_intelligence(
     run_strength = league_context.get("running", {}).get("strength", "VS LG AVG")
     catch_strength = league_context.get("catching", {}).get("strength", "VS LG AVG")
 
+    profile_map = {
+        "ELITE": "elite",
+        "ABOVE AVG": "above-average",
+        "AVERAGE": "average",
+        "BELOW AVG": "below-average",
+        "WEAK": "weak",
+    }
+
     lines.append(
-        f"Overall profile: hitting {hit_strength.lower()}, command prevention "
-        f"{pitch_strength.lower()}, running {run_strength.lower()}, catching "
-        f"{catch_strength.lower()}."
+        f"Overall profile: "
+        f"{profile_map.get(hit_strength, 'average')} offense, "
+        f"{profile_map.get(pitch_strength, 'average')} command prevention, "
+        f"{profile_map.get(run_strength, 'average')} baserunning, "
+        f"{profile_map.get(catch_strength, 'average')} catching."
     )
 
     pitch_lines = _pitch_usage_intelligence(
@@ -2219,7 +2229,7 @@ def find_logo_path():
 # Streamlit UI
 # -----------------------------
 st.title("Advanced Pregame Report")
-st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: Page 2 insight and attack plan spacing.")
+st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: Page 1 league comparison labels.")
 
 with st.sidebar:
     st.header("Report Setup")
