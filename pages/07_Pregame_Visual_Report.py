@@ -1495,7 +1495,7 @@ def find_logo_path():
 # Streamlit UI
 # -----------------------------
 st.title("Advanced Pregame Report")
-st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: Catching inning-end fix.")
+st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: Official catching override warning.")
 
 with st.sidebar:
     st.header("Report Setup")
@@ -1553,14 +1553,43 @@ with st.sidebar:
         disabled=not use_official_catching,
     )
 
+raw_catching_team = dict(catch_team)
+
 if use_official_catching:
-    official_catching_cs = min(int(official_catching_cs), int(official_catching_sba))
+    official_catching_sba = int(official_catching_sba)
+    official_catching_cs = min(int(official_catching_cs), official_catching_sba)
+
+    raw_sba = int(raw_catching_team.get('SBA', 0))
+    raw_cs = int(raw_catching_team.get('CS', 0))
+    official_sb = official_catching_sba - official_catching_cs
+
     catch_team = {
-        'SBA': int(official_catching_sba),
-        'CS': int(official_catching_cs),
-        'SB': int(official_catching_sba) - int(official_catching_cs),
+        'SBA': official_catching_sba,
+        'CS': official_catching_cs,
+        'SB': official_sb,
         'CS%': safe_div(official_catching_cs, official_catching_sba),
+        'ExplicitCS': int(raw_catching_team.get('ExplicitCS', 0)),
+        'InferredCS': int(raw_catching_team.get('InferredCS', 0)),
+        'RawSBA': raw_sba,
+        'RawCS': raw_cs,
+        'OfficialOverride': True,
     }
+
+    if raw_sba != official_catching_sba or raw_cs != official_catching_cs:
+        st.warning(
+            "Catching totals adjusted from "
+            f"{raw_sba} SBA / {raw_cs} CS "
+            "to official totals of "
+            f"{official_catching_sba} SBA / {official_catching_cs} CS. "
+            "The PDF will use the official team totals while preserving "
+            "the catcher-level table from the uploaded CSV."
+        )
+    else:
+        st.info(
+            "Official catching totals match the uploaded Catching PreGame CSV."
+        )
+else:
+    catch_team['OfficialOverride'] = False
 
 run_team, run_counts, runners = build_running(stolen, sba_count)
 lg_hit = league_hitting_baseline(league_hitting)
@@ -1602,14 +1631,21 @@ c2.metric("Opponent BB%", pct(pitch_team.get("BB%", 0)))
 c3.metric("SB Success", pct(run_team.get("SB%", 0)), delta=(f"LG {pct(lg_run.get('SB%'))}" if lg_run.get('SB%') is not None else None))
 c4.metric("Catcher CS%", pct(catch_team.get("CS%", 0)), delta=(f"LG {pct(lg_catch.get('CS%'))}" if lg_catch.get('CS%') is not None else None))
 with st.expander("Catching calculation check"):
-    st.write({
-        "SBA": int(catch_team.get("SBA", 0)),
-        "CS": int(catch_team.get("CS", 0)),
-        "SB": int(catch_team.get("SB", 0)),
-        "CS%": pct(catch_team.get("CS%", 0)),
-        "Explicit CS": int(catch_team.get("ExplicitCS", 0)),
-        "Inferred CS": int(catch_team.get("InferredCS", 0)),
-    })
+    diagnostic = {
+        "PDF SBA": int(catch_team.get("SBA", 0)),
+        "PDF CS": int(catch_team.get("CS", 0)),
+        "PDF SB": int(catch_team.get("SB", 0)),
+        "PDF CS%": pct(catch_team.get("CS%", 0)),
+        "CSV explicit CS": int(catch_team.get("ExplicitCS", 0)),
+        "CSV inferred CS": int(catch_team.get("InferredCS", 0)),
+        "Official override active": bool(catch_team.get("OfficialOverride", False)),
+    }
+    if catch_team.get("OfficialOverride", False):
+        diagnostic.update({
+            "Raw CSV SBA": int(catch_team.get("RawSBA", 0)),
+            "Raw CSV CS": int(catch_team.get("RawCS", 0)),
+        })
+    st.write(diagnostic)
 
 st.caption(f"Leaderboard qualifiers: hitters min {min_hitter_pa} PA; pitchers min {min_pitcher_pa} PA faced.")
 
