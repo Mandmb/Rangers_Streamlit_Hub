@@ -1903,7 +1903,7 @@ def draw_plan_box(c, x, y, w, h, title, lines):
     c.drawCentredString(x + w / 2, y + h - 14, title)
 
     # Keep text close enough to the header without touching it.
-    start_y = y + h - header_h - 14
+    start_y = y + h - header_h - 12
     draw_bullet_lines(
         c,
         lines[:4],
@@ -2132,8 +2132,27 @@ def build_visual_pdf(context):
 
     # Long key insight and action plan boxes underneath the tables.
     key = build_pitching_key_insight(pitch_team, lg_pitch, usage_overall, lg_usage, pitch_leaders, min_pitcher_pa, usage_count)
-    draw_key_box(c, 22, 46, 500, 84, "KEY INSIGHT", key, icon="")
-    draw_plan_box(c, 535, 46, 245, 84, "ATTACK PLAN", build_advanced_pitching_plan(pitch_team, lg_pitch, usage_count, usage_overall, lg_usage, pitch_leaders, min_pitcher_pa))
+    # Page 2 lower boxes: raised slightly and made taller.
+    # Their top edge remains below the three tables, while the added height
+    # gives the longer scouting text enough room above the footer.
+    draw_key_box(c, 22, 48, 500, 94, "KEY INSIGHT", key, icon="")
+    draw_plan_box(
+        c,
+        535,
+        48,
+        245,
+        94,
+        "ATTACK PLAN",
+        build_advanced_pitching_plan(
+            pitch_team,
+            lg_pitch,
+            usage_count,
+            usage_overall,
+            lg_usage,
+            pitch_leaders,
+            min_pitcher_pa,
+        ),
+    )
     c.showPage()
 
     # PAGE 3 Hitting
@@ -2200,7 +2219,7 @@ def find_logo_path():
 # Streamlit UI
 # -----------------------------
 st.title("Advanced Pregame Report")
-st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: Scouting Intelligence V5.")
+st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: Page 2 insight and attack plan spacing.")
 
 with st.sidebar:
     st.header("Report Setup")
