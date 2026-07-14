@@ -189,59 +189,80 @@ def parse_rate_value(v):
         return None
 
 def final_pa_rows(df):
-    """Return one legitimate terminal row per completed plate appearance."""
+    """Return legitimate completed plate appearances/batters faced.
+
+    The BATS exports place baserunning-only events in atbatDesc. Those rows
+    must be removed before calculating PA, BF, BB%, K%, AVG, OBP, SLG or OPS.
+    """
     if df is None or df.empty:
         return pd.DataFrame()
 
     out = df.copy()
     desc_col = find_col(out, ['atbatDesc', 'AtBatDesc', 'paDescription'])
-    result_col = find_col(out, ['pitchResult', 'PitchResult', 'playResult', 'PlayResult', 'result'])
+    result_col = find_col(
+        out,
+        ['pitchResult', 'PitchResult', 'playResult', 'PlayResult', 'result']
+    )
 
+    baserunning_pattern = (
+        r'caught stealing|caught steal|picked off|pickoff|'
+        r'stole second|stole third|stole home|steals second|steals third|'
+        r'steals home|runner out|out advancing|wild pitch'
+    )
+
+    # Primary source: atbatDesc is populated on terminal event rows.
     if desc_col:
         pa = out[out[desc_col].notna()].copy()
         if not pa.empty:
-            desc = pa[desc_col].astype(str).str.lower().str.strip()
-
-            # Baserunning-only events can have an at-bat description even though
-            # no plate appearance ended. Exclude those rows from PA totals.
-            baserunning_only = desc.str.contains(
-                r'caught stealing|pickoff|picked off|stolen base|steals home|steals second|steals third',
-                regex=True,
-                na=False,
-            )
-            batting_result = desc.str.contains(
-                r'walk|strikeout|single|double(?! play)|triple|home run|ground out|fly out|line out|pop out|fielder|error|hit by pitch|sac bunt|sac fly|sacrifice',
-                regex=True,
-                na=False,
-            )
-            pa = pa[~(baserunning_only & ~batting_result)].copy()
+            desc = pa[desc_col].fillna('').astype(str).str.lower().str.strip()
+            pa = pa[
+                ~desc.str.contains(baserunning_pattern, regex=True, na=False)
+            ].copy()
             if not pa.empty:
                 return pa
 
-    # Fallback: use terminal result language when no PA description is available.
+    # Fallback when atbatDesc is unavailable.
     if result_col:
-        res = out[result_col].astype(str).str.lower()
+        res = out[result_col].fillna('').astype(str).str.lower().str.strip()
         terminal = res.str.contains(
-            r'walk|strikeout|single|double|triple|home run|ground out|fly out|line out|pop out|fielder|error|hit by pitch|sac bunt|sac fly|double play',
+            r'walk|strikeout|single on|double on|triple on|home run on|'
+            r'ground out|fly out|line out|pop out|bunt ground out|'
+            r'bunt pop out|fielder.?s choice|reached on|error|'
+            r'hit by pitch|sac bunt|sac fly|double play|triple play|'
+            r'in play out',
             regex=True,
             na=False,
         )
         pa = out[terminal].copy()
+        if desc_col:
+            desc = pa[desc_col].fillna('').astype(str).str.lower()
+            pa = pa[
+                ~desc.str.contains(baserunning_pattern, regex=True, na=False)
+            ].copy()
         if not pa.empty:
             return pa
 
-    # Last fallback: use the final row before the batter changes.
-    batter_col = find_col(out, ['batter', 'batterFullName', 'batterAbbrevName'])
+    # Last fallback: final row before a batter change.
+    batter_col = find_col(
+        out,
+        ['batter', 'batterFullName', 'batterAbbrevName', 'playerFullName']
+    )
     if batter_col:
-        return out[out[batter_col].astype(str).ne(out[batter_col].astype(str).shift(-1))].copy()
+        return out[
+            out[batter_col].astype(str).ne(
+                out[batter_col].astype(str).shift(-1)
+            )
+        ].copy()
+
     return pd.DataFrame()
 
 
 def classify_pa(pa, result_col):
-    """Classify PA outcomes from official pitchResult categories."""
+    """Classify BATS terminal pitchResult values without text collisions."""
     res = (
-        pa[result_col].astype(str).str.strip().str.lower().fillna('')
-        if result_col else pd.Series([''] * len(pa), index=pa.index)
+        pa[result_col].fillna('').astype(str).str.strip().str.lower()
+        if result_col
+        else pd.Series('', index=pa.index, dtype='object')
     )
     pa = pa.copy()
 
@@ -251,8 +272,15 @@ def classify_pa(pa, result_col):
     pa['SF'] = res.isin(['sac fly', 'sacrifice fly']).astype(int)
     pa['SH'] = res.isin(['sac bunt', 'sacrifice bunt']).astype(int)
 
-    pa['1B'] = res.str.startswith('single on ', na=False).astype(int)
-    pa['2B'] = res.str.startswith('double on ', na=False).astype(int)
+    # Exact hit families prevent "Double Play" from becoming a double.
+    pa['1B'] = (
+        res.str.startswith('single on ', na=False)
+        | res.str.startswith('single,', na=False)
+    ).astype(int)
+    pa['2B'] = (
+        res.str.startswith('double on ', na=False)
+        | res.eq('ground rule double')
+    ).astype(int)
     pa['3B'] = res.str.startswith('triple on ', na=False).astype(int)
     pa['HR'] = (
         res.str.startswith('home run on ', na=False)
@@ -260,10 +288,15 @@ def classify_pa(pa, result_col):
     ).astype(int)
 
     pa['H'] = pa[['1B', '2B', '3B', 'HR']].sum(axis=1)
-    pa['TB'] = pa['1B'] + 2*pa['2B'] + 3*pa['3B'] + 4*pa['HR']
+    pa['TB'] = (
+        pa['1B'] + 2 * pa['2B'] + 3 * pa['3B'] + 4 * pa['HR']
+    )
+
     pa['AB'] = (~(
-        (pa['BB'] == 1) | (pa['HBP'] == 1) |
-        (pa['SF'] == 1) | (pa['SH'] == 1)
+        (pa['BB'] == 1)
+        | (pa['HBP'] == 1)
+        | (pa['SF'] == 1)
+        | (pa['SH'] == 1)
     )).astype(int)
     return pa
 
@@ -334,8 +367,18 @@ def build_hitting(pregame):
     g = g.sort_values('OPS', ascending=False)
     totals = g[['PA', 'AB', 'H', 'OneB', 'TwoB', 'ThreeB', 'HR', 'BB', 'K', 'TB', 'HBP', 'SF']].sum()
     team = {
-        'OPS': safe_div(totals.H + totals.BB + totals.HBP, totals.AB + totals.BB + totals.HBP + totals.SF) + safe_div(totals.TB, totals.AB),
+        'OBP': safe_div(
+            totals.H + totals.BB + totals.HBP,
+            totals.AB + totals.BB + totals.HBP + totals.SF
+        ),
+        'SLG': safe_div(totals.TB, totals.AB),
+        'OPS': safe_div(
+            totals.H + totals.BB + totals.HBP,
+            totals.AB + totals.BB + totals.HBP + totals.SF
+        ) + safe_div(totals.TB, totals.AB),
         'AVG': safe_div(totals.H, totals.AB),
+        'BB%': safe_div(totals.BB, totals.PA),
+        'K%': safe_div(totals.K, totals.PA),
         'Swing%': float(df['Swing'].mean()) if len(df) else 0,
         'PA': int(totals.PA),
         'AB': int(totals.AB), 'H': int(totals.H),
@@ -501,60 +544,187 @@ def build_catching(catching):
 
 
 def build_running(stolen_bases, sba_count):
+    """Build team baserunning using Option B.
+
+    1. Calculate from available individual/count rows as a fallback.
+    2. If Stolen Bases.csv contains a TOTAL row, use its official SBA, SB,
+       CS and SB% values for the team summary.
+    3. If SBA Count.csv contains a TOTAL row, use it for the by-count grid.
+    """
     team_counts = pd.DataFrame(columns=['Count', 'SBA'])
-    runners = pd.DataFrame(columns=['Runner', 'SBA', 'SB', 'SB%'])
-    # Best source for by-count is SBA Count TOTAL row.
+    runners = pd.DataFrame(columns=['Runner', 'SBA', 'SB', 'CS', 'SB%'])
+
+    calculated_sba = 0
+    calculated_sb = 0
+    calculated_cs = 0
+
+    # ---------------------------------------------------------------
+    # Individual runner table and count grid from SBA Count.csv
+    # ---------------------------------------------------------------
     if sba_count is not None and not sba_count.empty:
         df = sba_count.copy()
-        total_mask = df.astype(str).apply(lambda row: row.str.upper().eq('TOTAL').any(), axis=1)
-        total = df[total_mask].head(1)
-        if not total.empty:
+
+        total_mask = df.astype(str).apply(
+            lambda row: row.str.strip().str.upper().eq('TOTAL').any(),
+            axis=1,
+        )
+        total_row = df[total_mask].head(1)
+
+        if not total_row.empty:
             vals = []
+            row = total_row.iloc[0]
             for cnt in COUNTS:
-                col = find_col(df, [f'SBA{cnt}'])
-                vals.append({'Count': cnt, 'SBA': int(pd.to_numeric(total.iloc[0][col], errors='coerce') if col else 0)})
+                col = find_col(df, [f'SBA{cnt}', cnt])
+                value = pd.to_numeric(row[col], errors='coerce') if col else 0
+                vals.append({
+                    'Count': cnt,
+                    'SBA': int(value) if pd.notna(value) else 0,
+                })
             team_counts = pd.DataFrame(vals)
-        runner_col = find_col(df, ['playerFullName', 'Runner', 'Player', 'runner'])
-        sba_col = find_col(df, ['SBA', 'Total SBA', 'Attempts', 'Total'])
+
+        runner_col = find_col(
+            df,
+            ['playerFullName', 'Runner', 'Player', 'runner']
+        )
+        sba_col = find_col(df, ['SBA', 'Total SBA', 'Attempts'])
         sb_col = find_col(df, ['SB', 'StolenBase', 'Successful'])
+        cs_col = find_col(df, ['CS', 'CaughtStealing'])
         sbpct_col = find_col(df, ['SB%', 'SBPct'])
+
         if runner_col and sba_col:
-            tmp = df.copy()
-            tmp = tmp[tmp[runner_col].notna()]
-            tmp = tmp[~tmp[runner_col].astype(str).str.lower().isin(['nan', 'playerfullname', 'total'])]
+            tmp = df[df[runner_col].notna()].copy()
+            tmp = tmp[
+                ~tmp[runner_col].astype(str).str.strip().str.lower().isin(
+                    ['', 'nan', 'playerfullname', 'runner', 'total']
+                )
+            ]
+
             runners = pd.DataFrame()
             runners['Runner'] = tmp[runner_col].astype(str)
-            runners['SBA'] = pd.to_numeric(tmp[sba_col], errors='coerce').fillna(0)
-            runners['SB'] = pd.to_numeric(tmp[sb_col], errors='coerce').fillna(runners['SBA']) if sb_col else runners['SBA']
-            if sbpct_col:
-                runners['SB%'] = tmp[sbpct_col].apply(parse_rate_value).fillna(runners.apply(lambda r: safe_div(r.SB, r.SBA), axis=1))
+            runners['SBA'] = pd.to_numeric(
+                tmp[sba_col], errors='coerce'
+            ).fillna(0)
+
+            if sb_col:
+                runners['SB'] = pd.to_numeric(
+                    tmp[sb_col], errors='coerce'
+                ).fillna(0)
+            elif cs_col:
+                cs_values = pd.to_numeric(
+                    tmp[cs_col], errors='coerce'
+                ).fillna(0)
+                runners['SB'] = runners['SBA'] - cs_values
             else:
-                runners['SB%'] = runners.apply(lambda r: safe_div(r.SB, r.SBA), axis=1)
-            runners = runners[runners['SBA'] > 0].sort_values(['SBA', 'SB%'], ascending=[False, False])
-    # Team totals from Stolen Bases TOTAL row if available.
-    team_sba = team_counts['SBA'].sum() if not team_counts.empty else 0
-    team_sb = runners['SB'].sum() if not runners.empty else 0
-    team_sbp = safe_div(team_sb, team_sba)
+                runners['SB'] = runners['SBA']
+
+            if cs_col:
+                runners['CS'] = pd.to_numeric(
+                    tmp[cs_col], errors='coerce'
+                ).fillna(runners['SBA'] - runners['SB'])
+            else:
+                runners['CS'] = runners['SBA'] - runners['SB']
+
+            if sbpct_col:
+                parsed = tmp[sbpct_col].apply(parse_rate_value)
+                runners['SB%'] = parsed.where(
+                    parsed.notna(),
+                    runners.apply(
+                        lambda r: safe_div(r.SB, r.SBA), axis=1
+                    ),
+                )
+            else:
+                runners['SB%'] = runners.apply(
+                    lambda r: safe_div(r.SB, r.SBA), axis=1
+                )
+
+            runners = runners[runners['SBA'] > 0].sort_values(
+                ['SBA', 'SB%'], ascending=[False, False]
+            )
+
+            calculated_sba = int(runners['SBA'].sum())
+            calculated_sb = int(runners['SB'].sum())
+            calculated_cs = int(runners['CS'].sum())
+
+    # Count-grid fallback if there was no TOTAL row.
+    if team_counts.empty and not runners.empty:
+        calculated_sba = int(runners['SBA'].sum())
+
+    if calculated_sba == 0 and not team_counts.empty:
+        calculated_sba = int(team_counts['SBA'].sum())
+
+    # ---------------------------------------------------------------
+    # Official TOTAL row from Stolen Bases.csv takes priority.
+    # ---------------------------------------------------------------
+    team_sba = calculated_sba
+    team_sb = calculated_sb
+    team_cs = calculated_cs
+    source = 'CALCULATED'
+
     if stolen_bases is not None and not stolen_bases.empty:
-        sb = stolen_bases.copy()
-        total_rows = sb[sb.astype(str).apply(lambda row: row.str.upper().eq('TOTAL').any(), axis=1)]
+        sb_df = stolen_bases.copy()
+        total_mask = sb_df.astype(str).apply(
+            lambda row: row.str.strip().str.upper().eq('TOTAL').any(),
+            axis=1,
+        )
+        total_rows = sb_df[total_mask].head(1)
+
         if not total_rows.empty:
             row = total_rows.iloc[0]
-            sba_col = find_col(sb, ['SBA'])
-            sb_col = find_col(sb, ['SB'])
-            sbp_col = find_col(sb, ['SB%'])
+            sba_col = find_col(sb_df, ['SBA'])
+            sb_col = find_col(sb_df, ['SB'])
+            cs_col = find_col(sb_df, ['CS'])
+            sbpct_col = find_col(sb_df, ['SB%', 'SBPct'])
+
             if sba_col:
-                
-                v = pd.to_numeric(row[sba_col], errors='coerce')
-                team_sba = int(v) if pd.notna(v) else int(team_sba)
+                value = pd.to_numeric(row[sba_col], errors='coerce')
+                if pd.notna(value):
+                    team_sba = int(value)
+
             if sb_col:
-                
-                v = pd.to_numeric(row[sb_col], errors='coerce')
-                team_sb = int(v) if pd.notna(v) else int(team_sb)
-            if sbp_col:
-                team_sbp = parse_rate_value(row[sbp_col]) or safe_div(team_sb, team_sba)
-    team = {'SBA': int(team_sba), 'SB': int(team_sb), 'SB%': team_sbp}
+                value = pd.to_numeric(row[sb_col], errors='coerce')
+                if pd.notna(value):
+                    team_sb = int(value)
+
+            if cs_col:
+                value = pd.to_numeric(row[cs_col], errors='coerce')
+                if pd.notna(value):
+                    team_cs = int(value)
+            else:
+                team_cs = max(team_sba - team_sb, 0)
+
+            official_rate = (
+                parse_rate_value(row[sbpct_col])
+                if sbpct_col else None
+            )
+            team_sbp = (
+                official_rate
+                if official_rate is not None
+                else safe_div(team_sb, team_sba)
+            )
+            source = 'TOTAL ROW'
+        else:
+            team_cs = (
+                team_cs
+                if team_cs
+                else max(team_sba - team_sb, 0)
+            )
+            team_sbp = safe_div(team_sb, team_sba)
+    else:
+        team_cs = team_cs if team_cs else max(team_sba - team_sb, 0)
+        team_sbp = safe_div(team_sb, team_sba)
+
+    team = {
+        'SBA': int(team_sba),
+        'SB': int(team_sb),
+        'CS': int(team_cs),
+        'SB%': team_sbp,
+        'Source': source,
+        'CalculatedSBA': int(calculated_sba),
+        'CalculatedSB': int(calculated_sb),
+        'CalculatedCS': int(calculated_cs),
+    }
     return team, team_counts, runners
+
 
 def league_hitting_baseline(df):
     if df is None or df.empty:
@@ -1505,7 +1675,7 @@ def find_logo_path():
 # Streamlit UI
 # -----------------------------
 st.title("Advanced Pregame Report")
-st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: Hitting Version 2.")
+st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: Stats Alignment Option B.")
 
 with st.sidebar:
     st.header("Report Setup")
@@ -1630,6 +1800,24 @@ else:
     catch_team['OfficialOverride'] = False
 
 run_team, run_counts, runners = build_running(stolen, sba_count)
+
+with st.expander("Pitching and running calculation check"):
+    st.write({
+        "Pitching BF": int(pitch_team.get("PA", 0)),
+        "Pitching BB": int(pitch_leaders["BB"].sum()) if not pitch_leaders.empty else 0,
+        "Pitching K": int(pitch_leaders["K"].sum()) if not pitch_leaders.empty else 0,
+        "Pitching BB%": pct(pitch_team.get("BB%", 0)),
+        "Pitching K%": pct(pitch_team.get("K%", 0)),
+        "Running SBA": int(run_team.get("SBA", 0)),
+        "Running SB": int(run_team.get("SB", 0)),
+        "Running CS": int(run_team.get("CS", 0)),
+        "Running SB%": pct(run_team.get("SB%", 0)),
+        "Running source": run_team.get("Source", "CALCULATED"),
+        "Fallback calculated SBA": int(run_team.get("CalculatedSBA", 0)),
+        "Fallback calculated SB": int(run_team.get("CalculatedSB", 0)),
+        "Fallback calculated CS": int(run_team.get("CalculatedCS", 0)),
+    })
+
 lg_hit = league_hitting_baseline(league_hitting)
 lg_pitch = league_pitching_baseline(league_pitching)
 lg_usage = league_pitch_usage_baseline(league_pitch_usage)
@@ -1682,7 +1870,11 @@ with st.expander("Hitting calculation check"):
         "K": int(hit_team.get("K", 0)),
         "TB": int(hit_team.get("TB", 0)),
         "AVG": num(hit_team.get("AVG", 0)),
+        "OBP": num(hit_team.get("OBP", 0)),
+        "SLG": num(hit_team.get("SLG", 0)),
         "OPS": num(hit_team.get("OPS", 0)),
+        "BB%": pct(hit_team.get("BB%", 0)),
+        "K%": pct(hit_team.get("K%", 0)),
         "PDF Swing%": pct(hit_team.get("Swing%", 0)),
         "Raw pitch Swing%": pct(hit_team.get("RawSwing%", 0)),
         "Official Swing% override active": bool(hit_team.get("OfficialSwingOverride", False)),
