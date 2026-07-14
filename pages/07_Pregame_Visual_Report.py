@@ -283,8 +283,11 @@ def classify_pa(pa, result_col):
     ).astype(int)
     pa['3B'] = res.str.startswith('triple on ', na=False).astype(int)
     pa['HR'] = (
-        res.str.startswith('home run on ', na=False)
-        | res.str.startswith('in-the-park home run on ', na=False)
+        res.str.match(
+            r'^(?:in-the-park\s+)?home run(?:\s+on\b|\b)',
+            case=False,
+            na=False,
+        )
     ).astype(int)
 
     pa['H'] = pa[['1B', '2B', '3B', 'HR']].sum(axis=1)
@@ -390,51 +393,153 @@ def build_hitting(pregame):
     return team, swing_by_count, hitter_swing, g
 
 def build_pitching(standard):
+    """Build pitching stats and usage from Standard.csv.
+
+    Pitch usage uses the official BATS PitchType/pitchType field and excludes
+    UN, blank and null pitch classifications from the denominator.
+    """
     if standard is None or standard.empty:
         return {'BB%': 0, 'K%': 0}, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
     df = standard.copy()
-    pitcher_col = find_col(df, ['pitcher', 'pitcherFullName', 'pitcherAbbrevName', 'Player'])
-    pitch_col = find_col(df, ['PitchType', 'pitchType', 'TaggedPitchType', 'AutoPitchType'])
-    result_col = find_col(df, ['pitchResult', 'PitchResult', 'playResult', 'PlayResult', 'KorBB', 'result'])
+
+    pitcher_col = find_col(
+        df,
+        ['pitcher', 'pitcherFullName', 'pitcherAbbrevName', 'Player']
+    )
+
+    # Prefer the exact BATS pitch classification columns.
+    pitch_col = None
+    for candidate in ['PitchType', 'pitchType', 'TaggedPitchType', 'AutoPitchType']:
+        if candidate in df.columns:
+            pitch_col = candidate
+            break
+    if pitch_col is None:
+        pitch_col = find_col(
+            df,
+            ['PitchType', 'pitchType', 'TaggedPitchType', 'AutoPitchType']
+        )
+
+    result_col = find_col(
+        df,
+        ['pitchResult', 'PitchResult', 'playResult', 'PlayResult', 'KorBB', 'result']
+    )
     count_col = find_col(df, ['count', 'Count'])
     balls_col = find_col(df, ['balls', 'Balls', 'B'])
     strikes_col = find_col(df, ['strikes', 'Strikes', 'S'])
+
     if count_col:
         df['Count'] = df[count_col].astype(str).str.strip()
     elif balls_col and strikes_col:
-        df['Count'] = df[balls_col].astype(str).str.replace('.0', '', regex=False) + '-' + df[strikes_col].astype(str).str.replace('.0', '', regex=False)
+        df['Count'] = (
+            df[balls_col].astype(str).str.replace('.0', '', regex=False)
+            + '-'
+            + df[strikes_col].astype(str).str.replace('.0', '', regex=False)
+        )
     else:
         df['Count'] = '0-0'
-    df['Pitch'] = df[pitch_col].apply(norm_pitch) if pitch_col else 'OTHER'
+
+    df['Pitch'] = df[pitch_col].apply(norm_pitch) if pitch_col else None
+
+    # Official usage denominator: only classified pitches.
     pitch_df = df[df['Pitch'].notna()].copy()
-    usage_count = pd.crosstab(pitch_df['Count'], pitch_df['Pitch'], normalize='index').reset_index()
+    pitch_df = pitch_df[
+        ~pitch_df['Pitch'].astype(str).str.upper().isin(['UN', 'UNKNOWN', 'NONE', 'NAN', ''])
+    ]
+
+    usage_count = pd.crosstab(
+        pitch_df['Count'],
+        pitch_df['Pitch'],
+        normalize='index'
+    ).reset_index()
     usage_count = usage_count[usage_count['Count'].isin(COUNTS)]
-    usage_count['Count'] = pd.Categorical(usage_count['Count'], categories=COUNTS, ordered=True)
+    usage_count['Count'] = pd.Categorical(
+        usage_count['Count'],
+        categories=COUNTS,
+        ordered=True
+    )
     usage_count = usage_count.sort_values('Count')
-    usage_overall = pitch_df['Pitch'].value_counts(normalize=True).rename_axis('Pitch').reset_index(name='Usage')
+
+    usage_overall = (
+        pitch_df['Pitch']
+        .value_counts(normalize=True)
+        .rename_axis('Pitch')
+        .reset_index(name='Usage')
+    )
 
     if pitcher_col:
-        pitcher_usage = pd.crosstab(pitch_df[pitcher_col], pitch_df['Pitch'], normalize='index') * 100
+        pitcher_usage = (
+            pd.crosstab(
+                pitch_df[pitcher_col],
+                pitch_df['Pitch'],
+                normalize='index'
+            ) * 100
+        )
         pitcher_counts = pitch_df.groupby(pitcher_col).size().rename('Pitches')
-        pitcher_usage = pitcher_usage.join(pitcher_counts).reset_index().rename(columns={pitcher_col: 'Pitcher'})
+        pitcher_usage = (
+            pitcher_usage
+            .join(pitcher_counts)
+            .reset_index()
+            .rename(columns={pitcher_col: 'Pitcher'})
+        )
         pitcher_usage = pitcher_usage[pitcher_usage['Pitcher'].notna()]
-        cols = ['Pitcher', 'Pitches'] + [c for c in PITCH_ORDER if c in pitcher_usage.columns]
-        pitcher_usage = pitcher_usage[cols].sort_values('Pitches', ascending=False)
+        cols = ['Pitcher', 'Pitches'] + [
+            c for c in PITCH_ORDER if c in pitcher_usage.columns
+        ]
+        pitcher_usage = pitcher_usage[cols].sort_values(
+            'Pitches',
+            ascending=False
+        )
     else:
         pitcher_usage = pd.DataFrame()
 
     pa = final_pa_rows(df)
     if pa.empty or not pitcher_col:
-        leaders = pd.DataFrame(columns=['Pitcher', 'PA', 'BB', 'K', 'BB%', 'K%'])
-        return {'BB%': 0, 'K%': 0}, usage_count, usage_overall, pitcher_usage, leaders
+        leaders = pd.DataFrame(
+            columns=['Pitcher', 'PA', 'BB', 'K', 'BB%', 'K%']
+        )
+        return (
+            {'BB%': 0, 'K%': 0},
+            usage_count,
+            usage_overall,
+            pitcher_usage,
+            leaders,
+        )
+
     pa['Pitcher'] = pa[pitcher_col].astype(str)
-    pa = pa[pa['Pitcher'].notna() & ~pa['Pitcher'].str.lower().isin(['nan', 'playerfullname', 'total'])]
+    pa = pa[
+        pa['Pitcher'].notna()
+        & ~pa['Pitcher'].str.lower().isin(
+            ['nan', 'playerfullname', 'total']
+        )
+    ]
     pa = classify_pa(pa, result_col)
-    leaders = pa.groupby('Pitcher', as_index=False).agg(PA=('Pitcher', 'size'), BB=('BB', 'sum'), K=('K', 'sum'))
-    leaders['BB%'] = leaders.apply(lambda r: safe_div(r.BB, r.PA), axis=1)
-    leaders['K%'] = leaders.apply(lambda r: safe_div(r.K, r.PA), axis=1)
-    team = {'BB%': safe_div(leaders['BB'].sum(), leaders['PA'].sum()), 'K%': safe_div(leaders['K'].sum(), leaders['PA'].sum()), 'PA': int(leaders['PA'].sum())}
+
+    leaders = pa.groupby('Pitcher', as_index=False).agg(
+        PA=('Pitcher', 'size'),
+        BB=('BB', 'sum'),
+        K=('K', 'sum'),
+    )
+    leaders['BB%'] = leaders.apply(
+        lambda r: safe_div(r.BB, r.PA),
+        axis=1
+    )
+    leaders['K%'] = leaders.apply(
+        lambda r: safe_div(r.K, r.PA),
+        axis=1
+    )
+
+    team = {
+        'BB%': safe_div(leaders['BB'].sum(), leaders['PA'].sum()),
+        'K%': safe_div(leaders['K'].sum(), leaders['PA'].sum()),
+        'PA': int(leaders['PA'].sum()),
+        'BB': int(leaders['BB'].sum()),
+        'K': int(leaders['K'].sum()),
+        'ClassifiedPitches': int(len(pitch_df)),
+    }
+
     return team, usage_count, usage_overall, pitcher_usage, leaders
+
 
 def build_catching(catching):
     """Calculate team and catcher CS statistics from Catching PreGame.csv."""
@@ -1675,7 +1780,7 @@ def find_logo_path():
 # Streamlit UI
 # -----------------------------
 st.title("Advanced Pregame Report")
-st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: Stats Alignment Option B.")
+st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: Version 4 HR and pitch usage.")
 
 with st.sidebar:
     st.header("Report Setup")
@@ -1734,6 +1839,81 @@ if use_official_swing:
         )
 
 pitch_team, usage_count, usage_overall, pitcher_usage, pitch_leaders = build_pitching(standard)
+
+with st.sidebar:
+    st.markdown("### Pitch usage")
+    use_official_pitch_usage = st.checkbox(
+        "Override team pitch usage",
+        value=False,
+        help=(
+            "Use validated leaderboard pitch-usage percentages when the "
+            "leaderboard applies a different pitch classification denominator."
+        ),
+    )
+
+    usage_defaults = {
+        row['Pitch']: float(row['Usage']) * 100
+        for _, row in usage_overall.iterrows()
+    } if not usage_overall.empty else {}
+
+    official_fa = st.number_input(
+        "Official FA%", 0.0, 100.0,
+        value=round(usage_defaults.get('FA', 0.0), 1),
+        step=0.1,
+        disabled=not use_official_pitch_usage,
+    )
+    official_ch = st.number_input(
+        "Official CH%", 0.0, 100.0,
+        value=round(usage_defaults.get('CH', 0.0), 1),
+        step=0.1,
+        disabled=not use_official_pitch_usage,
+    )
+    official_cu = st.number_input(
+        "Official CU%", 0.0, 100.0,
+        value=round(usage_defaults.get('CU', 0.0), 1),
+        step=0.1,
+        disabled=not use_official_pitch_usage,
+    )
+    official_sl = st.number_input(
+        "Official SL%", 0.0, 100.0,
+        value=round(usage_defaults.get('SL', 0.0), 1),
+        step=0.1,
+        disabled=not use_official_pitch_usage,
+    )
+    official_si = st.number_input(
+        "Official SI%", 0.0, 100.0,
+        value=round(usage_defaults.get('SI', 0.0), 1),
+        step=0.1,
+        disabled=not use_official_pitch_usage,
+    )
+
+raw_usage_overall = usage_overall.copy()
+
+if use_official_pitch_usage:
+    override_values = {
+        'FA': official_fa / 100.0,
+        'CH': official_ch / 100.0,
+        'CU': official_cu / 100.0,
+        'SL': official_sl / 100.0,
+        'SI': official_si / 100.0,
+    }
+
+    existing = {
+        row['Pitch']: float(row['Usage'])
+        for _, row in usage_overall.iterrows()
+    } if not usage_overall.empty else {}
+
+    existing.update(override_values)
+
+    usage_overall = pd.DataFrame(
+        [{'Pitch': p, 'Usage': u} for p, u in existing.items()]
+    ).sort_values('Usage', ascending=False)
+
+    st.warning(
+        "The PDF pitch-usage table is using the official override values. "
+        "The by-count chart remains calculated from the Standard.csv pitches."
+    )
+
 catch_team, catchers = build_catching(catching)
 
 # Catching PreGame exports can omit a small number of team steal events.
@@ -1800,6 +1980,35 @@ else:
     catch_team['OfficialOverride'] = False
 
 run_team, run_counts, runners = build_running(stolen, sba_count)
+
+with st.expander("Version 4 calculation check"):
+    raw_usage_dict = {
+        row['Pitch']: float(row['Usage'])
+        for _, row in raw_usage_overall.iterrows()
+    } if not raw_usage_overall.empty else {}
+
+    pdf_usage_dict = {
+        row['Pitch']: float(row['Usage'])
+        for _, row in usage_overall.iterrows()
+    } if not usage_overall.empty else {}
+
+    st.write({
+        "Hitting HR": int(hit_team.get("HR", 0)),
+        "Pitching BF": int(pitch_team.get("PA", 0)),
+        "Classified pitches": int(pitch_team.get("ClassifiedPitches", 0)),
+        "Raw FA%": pct(raw_usage_dict.get("FA")),
+        "Raw CH%": pct(raw_usage_dict.get("CH")),
+        "Raw CU%": pct(raw_usage_dict.get("CU")),
+        "Raw SL%": pct(raw_usage_dict.get("SL")),
+        "Raw SI%": pct(raw_usage_dict.get("SI")),
+        "PDF FA%": pct(pdf_usage_dict.get("FA")),
+        "PDF CH%": pct(pdf_usage_dict.get("CH")),
+        "PDF CU%": pct(pdf_usage_dict.get("CU")),
+        "PDF SL%": pct(pdf_usage_dict.get("SL")),
+        "PDF SI%": pct(pdf_usage_dict.get("SI")),
+        "Official pitch usage override active": bool(use_official_pitch_usage),
+    })
+
 
 with st.expander("Pitching and running calculation check"):
     st.write({
