@@ -384,22 +384,14 @@ def build_pitching(standard):
     return team, usage_count, usage_overall, pitcher_usage, leaders
 
 def build_catching(catching):
-    """Build catcher/team running-prevention stats from Catching PreGame.csv.
+    """Calculate team and catcher CS statistics from Catching PreGame.csv."""
+    empty_team = {'SBA': 0, 'CS': 0, 'SB': 0, 'CS%': 0}
+    empty_table = pd.DataFrame(columns=['Catcher', 'SBA', 'CS', 'SB', 'CS%'])
 
-    Every non-null BaseStealAtt row counts as one stolen-base attempt.
-
-    A caught stealing is identified by either:
-    1. An explicit "caught stealing" description, including inning-ending plays.
-    2. An outs increase on the next pitch in the same half-inning, provided the
-       batter did not also make the out on that pitch.
-
-    This prevents strikeouts, batted-ball outs, and inning transitions from
-    being incorrectly counted as caught stealings.
-    """
     if catching is None or catching.empty:
-        return {'SBA': 0, 'CS': 0, 'SB': 0, 'CS%': 0}, pd.DataFrame()
+        return empty_team, empty_table
 
-    df = catching.copy()
+    df = catching.copy().reset_index(drop=True)
 
     catcher_col = find_col(df, ['catcher', 'Catcher', 'catcherAbbrevName'])
     sba_col = find_col(df, ['BaseStealAtt', 'baseStealAtt', 'basestealatt', 'SBA'])
@@ -407,96 +399,77 @@ def build_catching(catching):
     inning_col = find_col(df, ['inn', 'inning', 'Inning'])
     game_col = find_col(df, ['gameId', 'GameId', 'game'])
     desc_col = find_col(df, ['atbatDesc', 'AtBatDesc', 'paDescription'])
-    result_col = find_col(
-        df,
-        ['pitchResult', 'PitchResult', 'playResult', 'PlayResult', 'result']
-    )
+    result_col = find_col(df, ['pitchResult', 'PitchResult', 'playResult', 'PlayResult', 'result'])
 
     if catcher_col is None or sba_col is None:
-        return {'SBA': 0, 'CS': 0, 'SB': 0, 'CS%': 0}, pd.DataFrame()
+        return empty_team, empty_table
 
-    steal_rows = df[df[sba_col].notna()].copy()
-    steal_rows = steal_rows[
-        ~steal_rows[catcher_col]
-        .astype(str)
-        .str.strip()
-        .str.lower()
-        .isin(['', 'nan', 'none', 'catcher', 'total'])
-    ]
+    desc = (
+        df[desc_col].fillna('').astype(str).str.lower()
+        if desc_col else pd.Series('', index=df.index, dtype='object')
+    )
+    result = (
+        df[result_col].fillna('').astype(str).str.lower()
+        if result_col else pd.Series('', index=df.index, dtype='object')
+    )
 
-    if steal_rows.empty:
-        return {'SBA': 0, 'CS': 0, 'SB': 0, 'CS%': 0}, pd.DataFrame(
-            columns=['Catcher', 'SBA', 'CS', 'SB', 'CS%']
-        )
-
-    # Descriptions/results used to distinguish a runner out from a batter out.
-    if desc_col:
-        desc = steal_rows[desc_col].fillna('').astype(str).str.lower()
-    else:
-        desc = pd.Series('', index=steal_rows.index, dtype='object')
-
-    if result_col:
-        result = steal_rows[result_col].fillna('').astype(str).str.lower()
-    else:
-        result = pd.Series('', index=steal_rows.index, dtype='object')
-
-    # Explicit descriptions are the most reliable signal and also capture
-    # inning-ending caught stealings where the next row resets to zero outs.
+    # These must count even when they end an inning and the next row resets outs.
     explicit_cs = desc.str.contains(
-        r'caught stealing|caught steal',
+        r'caught stealing|caught steal',
         regex=True,
         na=False,
     )
 
-    # Infer additional CS events when outs increase on the next pitch within
-    # the same game and half-inning.
-    inferred_cs = pd.Series(False, index=steal_rows.index)
-
+    inferred_cs = pd.Series(False, index=df.index)
     if outs_col:
-        current_outs = pd.to_numeric(steal_rows[outs_col], errors='coerce')
-        next_outs = pd.to_numeric(
-            df[outs_col].shift(-1).reindex(steal_rows.index),
-            errors='coerce',
-        )
+        current_outs = pd.to_numeric(df[outs_col], errors='coerce')
+        next_outs = pd.to_numeric(df[outs_col].shift(-1), errors='coerce')
 
-        same_context = pd.Series(True, index=steal_rows.index)
-
+        same_context = pd.Series(True, index=df.index)
         if game_col:
-            next_game = df[game_col].shift(-1).reindex(steal_rows.index)
-            same_context &= steal_rows[game_col].eq(next_game)
-
+            same_context &= df[game_col].eq(df[game_col].shift(-1))
         if inning_col:
-            next_inning = df[inning_col].shift(-1).reindex(steal_rows.index)
-            same_context &= steal_rows[inning_col].eq(next_inning)
+            same_context &= df[inning_col].eq(df[inning_col].shift(-1))
 
         outs_increased = same_context & next_outs.gt(current_outs)
 
-        # Do not credit a CS when the batter made the out on the same pitch.
         batter_out_pattern = (
-            r'strikeout|strike out|called out on strikes|'
-            r'ground out|grounds out|grounded out|'
-            r'fly out|flies out|flied out|'
-            r'line out|lines out|lined out|'
-            r'pop out|pops out|popped out|'
-            r'forceout|force out|'
-            r'double play|triple play|'
-            r'sacrifice|sac fly|sac bunt|'
+            r'strikeout|strike out|ground out|grounds out|grounded out|'
+            r'fly out|flies out|flied out|line out|lines out|lined out|'
+            r'pop out|pops out|popped out|forceout|force out|'
+            r'double play|triple play|sacrifice|sac fly|sac bunt|'
             r'fielder.?s choice'
         )
-
-        batter_made_out = (
+        batter_out = (
             result.str.contains(batter_out_pattern, regex=True, na=False)
             | desc.str.contains(batter_out_pattern, regex=True, na=False)
         )
+        inferred_cs = outs_increased & ~batter_out & ~explicit_cs
 
-        inferred_cs = outs_increased & ~batter_made_out
+    steal_mask = df[sba_col].notna()
+    valid_catcher = ~df[catcher_col].astype(str).str.strip().str.lower().isin(
+        ['', 'nan', 'none', 'catcher', 'total']
+    )
+    steal_rows = df.loc[steal_mask & valid_catcher].copy()
 
-    steal_rows['CS'] = (explicit_cs | inferred_cs).astype(int)
+    if steal_rows.empty:
+        return empty_team, empty_table
+
+    steal_rows['ExplicitCS'] = explicit_cs.loc[steal_rows.index].astype(int)
+    steal_rows['InferredCS'] = inferred_cs.loc[steal_rows.index].astype(int)
+    steal_rows['CS'] = (
+        steal_rows['ExplicitCS'] + steal_rows['InferredCS']
+    ).clip(upper=1)
     steal_rows['SBA'] = 1
 
     g = (
         steal_rows.groupby(catcher_col, as_index=False)
-        .agg(SBA=('SBA', 'sum'), CS=('CS', 'sum'))
+        .agg(
+            SBA=('SBA', 'sum'),
+            CS=('CS', 'sum'),
+            ExplicitCS=('ExplicitCS', 'sum'),
+            InferredCS=('InferredCS', 'sum'),
+        )
         .rename(columns={catcher_col: 'Catcher'})
     )
 
@@ -510,6 +483,8 @@ def build_catching(catching):
         'CS': team_cs,
         'SB': team_sba - team_cs,
         'CS%': safe_div(team_cs, team_sba),
+        'ExplicitCS': int(g['ExplicitCS'].sum()),
+        'InferredCS': int(g['InferredCS'].sum()),
     }
 
     return team, g.sort_values(['CS%', 'SBA'], ascending=[False, False])
@@ -1520,7 +1495,7 @@ def find_logo_path():
 # Streamlit UI
 # -----------------------------
 st.title("Advanced Pregame Report")
-st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: Mini cards text fit polish.")
+st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: Catching inning-end fix.")
 
 with st.sidebar:
     st.header("Report Setup")
@@ -1626,6 +1601,16 @@ c1.metric("Team OPS", num(hit_team.get("OPS", 0)))
 c2.metric("Opponent BB%", pct(pitch_team.get("BB%", 0)))
 c3.metric("SB Success", pct(run_team.get("SB%", 0)), delta=(f"LG {pct(lg_run.get('SB%'))}" if lg_run.get('SB%') is not None else None))
 c4.metric("Catcher CS%", pct(catch_team.get("CS%", 0)), delta=(f"LG {pct(lg_catch.get('CS%'))}" if lg_catch.get('CS%') is not None else None))
+with st.expander("Catching calculation check"):
+    st.write({
+        "SBA": int(catch_team.get("SBA", 0)),
+        "CS": int(catch_team.get("CS", 0)),
+        "SB": int(catch_team.get("SB", 0)),
+        "CS%": pct(catch_team.get("CS%", 0)),
+        "Explicit CS": int(catch_team.get("ExplicitCS", 0)),
+        "Inferred CS": int(catch_team.get("InferredCS", 0)),
+    })
+
 st.caption(f"Leaderboard qualifiers: hitters min {min_hitter_pa} PA; pitchers min {min_pitcher_pa} PA faced.")
 
 st.markdown("### Data Source Check")
