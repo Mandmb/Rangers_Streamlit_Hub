@@ -973,8 +973,8 @@ def concise(text, max_words=11):
     words = str(text).split()
     return " ".join(words[:max_words]) + ("." if len(words) > max_words else "")
 
-def build_insights(pitch_team, usage_overall, swing_by_count, run_counts, hitters):
-    """Executive-summary takeaways only. Keep them short so Page 1 stays clean."""
+def build_insights(pitch_team, usage_overall, swing_by_count, run_counts, hitters, min_hitter_pa=0):
+    """Executive-summary takeaways using the same hitter PA qualifier as the report tables."""
     insights = []
     if usage_overall is not None and not usage_overall.empty:
         top = usage_overall.iloc[0]
@@ -989,8 +989,14 @@ def build_insights(pitch_team, usage_overall, swing_by_count, run_counts, hitter
         top = rc.sort_values("SBA", ascending=False).iloc[0]
         insights.append(f"Running game peaks in {top['Count']} counts ({int(top['SBA'])} SBA).")
     if hitters is not None and not hitters.empty:
-        top = hitters.sort_values("OPS", ascending=False).iloc[0]
-        insights.append(f"Circle {top['Player']} as top OPS threat ({num(top['OPS'])}).")
+        qualified_hitters = hitters.copy()
+        qualified_hitters["PA"] = pd.to_numeric(qualified_hitters["PA"], errors="coerce").fillna(0)
+        qualified_hitters = qualified_hitters[qualified_hitters["PA"] >= int(min_hitter_pa or 0)]
+        if not qualified_hitters.empty:
+            top = qualified_hitters.sort_values("OPS", ascending=False).iloc[0]
+            insights.append(
+                f"Circle {top['Player']} as top qualified OPS threat ({num(top['OPS'])}, {int(top['PA'])} PA)."
+            )
     return [concise(i, 16) for i in insights[:4]]
 
 
@@ -1217,7 +1223,9 @@ def build_visual_pdf(context):
     usage_count = context["usage_count"]; usage_overall = context["usage_overall"]; pitcher_usage = context["pitcher_usage"]; pitch_leaders = context["pitch_leaders"]
     swing_by_count = context["swing_by_count"]; hitters = context["hitters"]
     catchers = context["catchers"]; run_counts = context["run_counts"]; runners = context["runners"]
-    insights = build_insights(pitch_team, usage_overall, swing_by_count, run_counts, hitters)
+    insights = build_insights(
+        pitch_team, usage_overall, swing_by_count, run_counts, hitters, min_hitter_pa
+    )
 
     # PAGE 1
     draw_header(c, "ADVANCED PREGAME REPORT", opponent, 1, logo_path)
