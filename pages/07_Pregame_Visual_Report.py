@@ -1573,53 +1573,60 @@ def build_league_context(
     league_running_df,
     league_catching_df,
 ):
-    """Create percentile, rank, and strength context for each report category."""
-    metrics = {
+    """Return direct ABOVE AVG / BELOW AVG labels from league averages.
+
+    This does not require multiple team rows. It compares the opponent's value
+    directly with the league TOTAL-row average:
+    - Higher is better: OPS, SB%, CS%
+    - Lower is better: pitching BB% allowed
+    """
+    lg_hit = league_hitting_baseline(league_hitting_df)
+    lg_pitch = league_pitching_baseline(league_pitching_df)
+    lg_run = league_baserunning_baseline(league_running_df)
+    lg_catch = league_catcher_baseline(league_catching_df)
+
+    comparisons = {
         "hitting": {
             "value": hit_team.get("OPS"),
-            "population": _valid_rate_values(league_hitting_df, ["OPS"]),
+            "league": lg_hit.get("OPS"),
             "higher_is_better": True,
         },
         "pitching": {
-            # Lower BB% allowed is better.
             "value": pitch_team.get("BB%"),
-            "population": _valid_rate_values(
-                league_pitching_df, ["BB%", "BBPct", "Walk%"]
-            ),
+            "league": lg_pitch.get("BB%"),
             "higher_is_better": False,
         },
         "running": {
             "value": run_team.get("SB%"),
-            "population": _valid_rate_values(
-                league_running_df, ["SB%", "SBPct"]
-            ),
+            "league": lg_run.get("SB%"),
             "higher_is_better": True,
         },
         "catching": {
             "value": catch_team.get("CS%"),
-            "population": _valid_rate_values(
-                league_catching_df, ["CS%", "CSPct"]
-            ),
+            "league": lg_catch.get("CS%"),
             "higher_is_better": True,
         },
     }
 
     context = {}
-    for key, item in metrics.items():
-        pctl = _percentile(
-            item["value"],
-            item["population"],
-            item["higher_is_better"],
-        )
+    for key, item in comparisons.items():
+        value = item["value"]
+        league = item["league"]
+
+        if value is None or league is None or pd.isna(value) or pd.isna(league):
+            label = "NO LG DATA"
+        elif item["higher_is_better"]:
+            label = "ABOVE AVG" if float(value) >= float(league) else "BELOW AVG"
+        else:
+            label = "ABOVE AVG" if float(value) <= float(league) else "BELOW AVG"
+
         context[key] = {
-            "percentile": pctl,
-            "strength": _strength_label(pctl),
-            "rank": _rank_text(
-                item["value"],
-                item["population"],
-                item["higher_is_better"],
-            ),
+            "percentile": None,
+            "strength": label,
+            "rank": None,
+            "league_value": league,
         }
+
     return context
 
 
@@ -1717,14 +1724,15 @@ def build_executive_intelligence(
     profile_map = {
         "ABOVE AVG": "above-average",
         "BELOW AVG": "below-average",
+        "NO LG DATA": "unrated",
     }
 
     lines.append(
         f"Overall profile: "
-        f"{profile_map.get(hit_strength, 'average')} offense, "
-        f"{profile_map.get(pitch_strength, 'average')} command prevention, "
-        f"{profile_map.get(run_strength, 'average')} baserunning, "
-        f"{profile_map.get(catch_strength, 'average')} catching."
+        f"{profile_map.get(hit_strength, 'unrated')} offense, "
+        f"{profile_map.get(pitch_strength, 'unrated')} command prevention, "
+        f"{profile_map.get(run_strength, 'unrated')} baserunning, "
+        f"{profile_map.get(catch_strength, 'unrated')} catching."
     )
 
     pitch_lines = _pitch_usage_intelligence(
@@ -2220,7 +2228,7 @@ def find_logo_path():
 # Streamlit UI
 # -----------------------------
 st.title("Advanced Pregame Report")
-st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: Above/Below Average Only.")
+st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: Direct League Comparison Fix.")
 
 with st.sidebar:
     st.header("Report Setup")
