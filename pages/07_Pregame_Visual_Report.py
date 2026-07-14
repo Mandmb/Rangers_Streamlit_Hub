@@ -972,7 +972,7 @@ def section_bar(c, y, text):
     round_rect(c, 22, y, PAGE_W - 44, 28, fill=NAVY, stroke=NAVY, radius=5)
     c.setFillColor(WHITE); c.setFont("Helvetica-Bold", 15); c.drawString(35, y + 8, text)
 
-def metric_card(c, x, y, w, h, title, value, subtitle="", lg=None, better=True, stat_label=None):
+def metric_card(c, x, y, w, h, title, value, subtitle="", lg=None, better=True, stat_label=None, strength=None, rank=None):
     round_rect(c, x, y, w, h, fill=WHITE, stroke=BORDER, radius=8)
     c.setFillColor(NAVY)
     c.setFont("Helvetica-Bold", 8.5)
@@ -993,10 +993,13 @@ def metric_card(c, x, y, w, h, title, value, subtitle="", lg=None, better=True, 
         c.drawCentredString(x + w/2, y + 25, f"LG AVG {lg}")
     bg = GREEN_BG if better else RED_BG
     col = GREEN if better else RED
-    round_rect(c, x + 16, y + 6, w - 32, 16, fill=bg, stroke=bg, radius=4)
+    round_rect(c, x + 12, y + 6, w - 24, 16, fill=bg, stroke=bg, radius=4)
     c.setFillColor(col)
-    c.setFont("Helvetica-Bold", 7.3)
-    c.drawCentredString(x + w/2, y + 10, ("▲ BETTER" if better else "▼ BELOW AVG"))
+    c.setFont("Helvetica-Bold", 6.8)
+    badge = strength or ("BETTER" if better else "BELOW AVG")
+    if rank:
+        badge = f"{badge} • {rank}"
+    c.drawCentredString(x + w/2, y + 10, badge[:30])
 
 def draw_table(c, x, y, w, h, title, rows, headers, font_size=6.4, max_rows=6, highlight_diff=False):
     round_rect(c, x, y, w, h, fill=WHITE, stroke=BORDER, radius=7)
@@ -1446,6 +1449,9 @@ def build_pitching_key_insight(pitch_team, lg_pitch, usage_overall, lg_usage, pi
         if not q.empty:
             bb_arm = q.sort_values("BB%", ascending=False).iloc[0]
             lines.append(f"Target {bb_arm.Pitcher}: highest qualified BB% ({pct(bb_arm['BB%'])}); make him prove command.")
+    for extra in _pitch_usage_intelligence(usage_count, usage_overall, lg_usage):
+        if extra not in lines:
+            lines.append(extra)
     return "\n".join(lines[:5])
 
 
@@ -1505,6 +1511,386 @@ def build_running_key_insight(run_counts, run_team, runners, catch_team, catcher
     cs = catch_team.get("CS%", 0)
     lines.append(f"Catcher CS% is {pct(cs)}; take extra bases only when jumps/timing are clean.")
     return "\n".join(lines[:5])
+
+
+
+def _valid_rate_values(df, candidates):
+    """Return valid numeric rates from a league dataframe, excluding TOTAL rows."""
+    if df is None or getattr(df, "empty", True):
+        return []
+    col = find_col(df, candidates)
+    if col is None:
+        return []
+
+    tmp = df.copy()
+    total_mask = tmp.astype(str).apply(
+        lambda row: row.str.strip().str.upper().eq("TOTAL").any(),
+        axis=1,
+    )
+    tmp = tmp[~total_mask]
+    values = tmp[col].apply(parse_rate_value).dropna()
+    return [float(v) for v in values if pd.notna(v)]
+
+
+def _percentile(value, population, higher_is_better=True):
+    if value is None or pd.isna(value) or not population:
+        return None
+    vals = np.array(population, dtype=float)
+    if len(vals) < 3:
+        return None
+    if higher_is_better:
+        return float((vals <= float(value)).mean())
+    return float((vals >= float(value)).mean())
+
+
+def _rank_text(value, population, higher_is_better=True):
+    if value is None or pd.isna(value) or not population:
+        return None
+    vals = [float(v) for v in population if pd.notna(v)]
+    if len(vals) < 3:
+        return None
+    combined = vals + [float(value)]
+    ordered = sorted(combined, reverse=higher_is_better)
+    rank = ordered.index(float(value)) + 1
+    return f"{rank} of {len(combined)}"
+
+
+def _strength_label(percentile):
+    if percentile is None:
+        return "VS LG AVG"
+    if percentile >= 0.85:
+        return "ELITE"
+    if percentile >= 0.65:
+        return "ABOVE AVG"
+    if percentile >= 0.35:
+        return "AVERAGE"
+    if percentile >= 0.15:
+        return "BELOW AVG"
+    return "WEAK"
+
+
+def build_league_context(
+    hit_team,
+    pitch_team,
+    run_team,
+    catch_team,
+    league_hitting_df,
+    league_pitching_df,
+    league_running_df,
+    league_catching_df,
+):
+    """Create percentile, rank, and strength context for each report category."""
+    metrics = {
+        "hitting": {
+            "value": hit_team.get("OPS"),
+            "population": _valid_rate_values(league_hitting_df, ["OPS"]),
+            "higher_is_better": True,
+        },
+        "pitching": {
+            # Lower BB% allowed is better.
+            "value": pitch_team.get("BB%"),
+            "population": _valid_rate_values(
+                league_pitching_df, ["BB%", "BBPct", "Walk%"]
+            ),
+            "higher_is_better": False,
+        },
+        "running": {
+            "value": run_team.get("SB%"),
+            "population": _valid_rate_values(
+                league_running_df, ["SB%", "SBPct"]
+            ),
+            "higher_is_better": True,
+        },
+        "catching": {
+            "value": catch_team.get("CS%"),
+            "population": _valid_rate_values(
+                league_catching_df, ["CS%", "CSPct"]
+            ),
+            "higher_is_better": True,
+        },
+    }
+
+    context = {}
+    for key, item in metrics.items():
+        pctl = _percentile(
+            item["value"],
+            item["population"],
+            item["higher_is_better"],
+        )
+        context[key] = {
+            "percentile": pctl,
+            "strength": _strength_label(pctl),
+            "rank": _rank_text(
+                item["value"],
+                item["population"],
+                item["higher_is_better"],
+            ),
+        }
+    return context
+
+
+def _pitch_usage_intelligence(usage_count, usage_overall, lg_usage):
+    """Generate actionable pitch-mix observations."""
+    lines = []
+    if usage_overall is None or usage_overall.empty:
+        return lines
+
+    ordered = usage_overall.sort_values("Usage", ascending=False)
+    primary = ordered.iloc[0]
+    primary_pitch = str(primary["Pitch"])
+    primary_usage = float(primary["Usage"])
+
+    lines.append(
+        f"{primary_pitch} drives the plan at {pct(primary_usage)} overall."
+    )
+
+    if usage_count is not None and not usage_count.empty:
+        count_rows = []
+        if primary_pitch in usage_count.columns:
+            for _, row in usage_count.iterrows():
+                val = pd.to_numeric(row.get(primary_pitch), errors="coerce")
+                if pd.notna(val):
+                    count_rows.append((str(row["Count"]), float(val)))
+        count_rows.sort(key=lambda x: x[1], reverse=True)
+        if count_rows:
+            top_count, top_rate = count_rows[0]
+            lines.append(
+                f"{primary_pitch} peaks in {top_count} counts at {pct(top_rate)}."
+            )
+
+        first_pitch = usage_count[
+            usage_count["Count"].astype(str).eq("0-0")
+        ]
+        if not first_pitch.empty:
+            fp = []
+            for pitch in ordered["Pitch"].astype(str).tolist():
+                if pitch in first_pitch.columns:
+                    value = pd.to_numeric(
+                        first_pitch.iloc[0][pitch], errors="coerce"
+                    )
+                    if pd.notna(value):
+                        fp.append((pitch, float(value)))
+            fp.sort(key=lambda x: x[1], reverse=True)
+            if fp:
+                lines.append(
+                    f"First-pitch tendency: {fp[0][0]} {pct(fp[0][1])}."
+                )
+
+    diffs = []
+    if isinstance(lg_usage, dict):
+        for _, row in ordered.iterrows():
+            pitch = str(row["Pitch"])
+            if pitch in lg_usage and lg_usage[pitch] is not None:
+                diffs.append(
+                    (
+                        pitch,
+                        float(row["Usage"]) - float(lg_usage[pitch]),
+                    )
+                )
+    diffs.sort(key=lambda x: abs(x[1]), reverse=True)
+    if diffs:
+        pitch, diff = diffs[0]
+        direction = "above" if diff >= 0 else "below"
+        lines.append(
+            f"Biggest league deviation: {pitch} {abs(diff)*100:.1f} pts {direction} average."
+        )
+    return lines
+
+
+def build_executive_intelligence(
+    hit_team,
+    pitch_team,
+    run_team,
+    catch_team,
+    league_context,
+    usage_count,
+    usage_overall,
+    lg_usage,
+    hitters,
+    pitch_leaders,
+    runners,
+    min_hitter_pa,
+    min_pitcher_pa,
+):
+    """Build concise, coach-ready executive takeaways."""
+    lines = []
+
+    hit_strength = league_context.get("hitting", {}).get("strength", "VS LG AVG")
+    pitch_strength = league_context.get("pitching", {}).get("strength", "VS LG AVG")
+    run_strength = league_context.get("running", {}).get("strength", "VS LG AVG")
+    catch_strength = league_context.get("catching", {}).get("strength", "VS LG AVG")
+
+    lines.append(
+        f"Overall profile: hitting {hit_strength.lower()}, command prevention "
+        f"{pitch_strength.lower()}, running {run_strength.lower()}, catching "
+        f"{catch_strength.lower()}."
+    )
+
+    pitch_lines = _pitch_usage_intelligence(
+        usage_count, usage_overall, lg_usage
+    )
+    if pitch_lines:
+        lines.append(pitch_lines[0])
+
+    if hitters is not None and not hitters.empty:
+        qualified = hitters[hitters["PA"] >= min_hitter_pa].copy()
+        if qualified.empty:
+            qualified = hitters.copy()
+        if not qualified.empty:
+            threat = qualified.sort_values("OPS", ascending=False).iloc[0]
+            lines.append(
+                f"Primary bat: {threat.Player} ({num(threat.OPS)} OPS, "
+                f"{int(threat.PA)} PA)."
+            )
+
+    if pitch_leaders is not None and not pitch_leaders.empty:
+        qualified = pitch_leaders[
+            pitch_leaders["PA"] >= min_pitcher_pa
+        ].copy()
+        if not qualified.empty:
+            arm = qualified.sort_values("BB%", ascending=False).iloc[0]
+            lines.append(
+                f"Best pressure point: {arm.Pitcher} at {pct(arm['BB%'])} BB%."
+            )
+
+    if runners is not None and not runners.empty:
+        runner = runners.sort_values("SBA", ascending=False).iloc[0]
+        lines.append(
+            f"Running priority: {runner.Runner} leads volume with "
+            f"{int(runner.SBA)} attempts."
+        )
+
+    return lines[:5]
+
+
+def build_advanced_pitching_plan(
+    pitch_team,
+    lg_pitch,
+    usage_count,
+    usage_overall,
+    lg_usage,
+    pitch_leaders,
+    min_pitcher_pa,
+):
+    """Create a data-driven offensive attack plan against the opponent staff."""
+    lines = []
+
+    intelligence = _pitch_usage_intelligence(
+        usage_count, usage_overall, lg_usage
+    )
+    if intelligence:
+        lines.extend(intelligence[:2])
+
+    bb = pitch_team.get("BB%", 0)
+    lg_bb = lg_pitch.get("BB%") if isinstance(lg_pitch, dict) else None
+    if lg_bb is not None:
+        if bb > lg_bb:
+            lines.append(
+                "Work deep counts early; their staff gives away more free bases than league average."
+            )
+        else:
+            lines.append(
+                "Do not rely on walks; hunt a pitch in the heart before two strikes."
+            )
+
+    if pitch_leaders is not None and not pitch_leaders.empty:
+        q = pitch_leaders[
+            pitch_leaders["PA"] >= min_pitcher_pa
+        ].copy()
+        if not q.empty:
+            high_bb = q.sort_values("BB%", ascending=False).iloc[0]
+            high_k = q.sort_values("K%", ascending=False).iloc[0]
+            lines.append(
+                f"Against {high_bb.Pitcher}, shrink the zone and force strikes."
+            )
+            if high_k.Pitcher != high_bb.Pitcher:
+                lines.append(
+                    f"Against {high_k.Pitcher}, shorten with two strikes and prioritize contact."
+                )
+    return lines[:4]
+
+
+def build_advanced_hitting_plan(
+    hit_team,
+    lg_hit,
+    swing_by_count,
+    hitters,
+    min_hitter_pa,
+):
+    """Create a data-driven pitching plan against the opponent lineup."""
+    lines = []
+
+    if swing_by_count is not None and not swing_by_count.empty:
+        top = swing_by_count.sort_values("SwingPct", ascending=False).iloc[0]
+        low = swing_by_count.sort_values("SwingPct", ascending=True).iloc[0]
+        lines.append(
+            f"Use chase/shape in {top['Count']} counts; swing rate is {pct(top['SwingPct'])}."
+        )
+        lines.append(
+            f"Steal a strike in {low['Count']} counts; swing rate falls to {pct(low['SwingPct'])}."
+        )
+
+    swing = hit_team.get("Swing%")
+    league_swing = lg_hit.get("Swing%") if isinstance(lg_hit, dict) else None
+    if league_swing is not None and swing is not None:
+        if swing > league_swing:
+            lines.append(
+                "Use quality strike-to-ball shapes; this lineup is more aggressive than league average."
+            )
+        else:
+            lines.append(
+                "Attack the zone early; this lineup takes more pitches than league average."
+            )
+
+    if hitters is not None and not hitters.empty:
+        q = hitters[hitters["PA"] >= min_hitter_pa].copy()
+        if q.empty:
+            q = hitters.copy()
+        if not q.empty:
+            top_ops = q.sort_values("OPS", ascending=False).head(2)
+            names = ", ".join(top_ops["Player"].astype(str).tolist())
+            lines.append(
+                f"Do not create RBI traffic for {names}; use the lower-damage bats to escape."
+            )
+    return lines[:4]
+
+
+def build_advanced_running_plan(run_counts, run_team, runners, catch_team):
+    """Create a data-driven running-game plan."""
+    lines = []
+    if run_counts is not None and not run_counts.empty:
+        rc = run_counts.copy()
+        rc["SBA"] = pd.to_numeric(rc["SBA"], errors="coerce").fillna(0)
+        top = rc.sort_values("SBA", ascending=False).iloc[0]
+        lines.append(
+            f"Prioritize tempo in {top['Count']} counts; that is their highest-attempt window."
+        )
+
+    if runners is not None and not runners.empty:
+        volume = runners.sort_values("SBA", ascending=False).head(2)
+        names = ", ".join(volume["Runner"].astype(str).tolist())
+        lines.append(
+            f"Use immediate hold/slide-step plans with {names} aboard."
+        )
+
+    if run_team.get("SB%", 0) >= 0.78:
+        lines.append(
+            "Their success rate is strong; require a clean jump rather than conceding the base."
+        )
+    else:
+        lines.append(
+            "Their success rate is manageable; vary timing and force lower-quality attempts."
+        )
+
+    if catch_team.get("CS%", 0) < 0.20:
+        lines.append(
+            "Catcher throw-out rate is limited; prevention must begin with pitcher tempo and holds."
+        )
+    else:
+        lines.append(
+            "Catcher arm can finish the play; give him time with controlled looks and quick delivery."
+        )
+    return lines[:4]
 
 
 def draw_plan_box(c, x, y, w, h, title, lines):
@@ -1618,7 +2004,31 @@ def build_visual_pdf(context):
     usage_count = context["usage_count"]; usage_overall = context["usage_overall"]; pitcher_usage = context["pitcher_usage"]; pitch_leaders = context["pitch_leaders"]
     swing_by_count = context["swing_by_count"]; hitters = context["hitters"]
     catchers = context["catchers"]; run_counts = context["run_counts"]; runners = context["runners"]
-    insights = build_insights(pitch_team, usage_overall, swing_by_count, run_counts, hitters)
+    league_context = build_league_context(
+        hit_team,
+        pitch_team,
+        run_team,
+        catch_team,
+        context.get("league_hitting_df"),
+        context.get("league_pitching_df"),
+        context.get("league_running_df"),
+        context.get("league_catching_df"),
+    )
+    insights = build_executive_intelligence(
+        hit_team,
+        pitch_team,
+        run_team,
+        catch_team,
+        league_context,
+        usage_count,
+        usage_overall,
+        lg_usage,
+        hitters,
+        pitch_leaders,
+        runners,
+        min_hitter_pa,
+        min_pitcher_pa,
+    )
 
     # PAGE 1
     draw_header(c, "ADVANCED PREGAME REPORT", opponent, 1, logo_path)
@@ -1626,13 +2036,13 @@ def build_visual_pdf(context):
     y = PAGE_H - 245
     card_w = 180; gap = 10; x0 = 22
     hit_lg = lg_hit.get("OPS")
-    metric_card(c, x0, y, card_w, 98, "TEAM HITTING", num(hit_team.get("OPS", 0)), "OPS", num(hit_lg) if hit_lg is not None else None, hit_team.get("OPS",0) >= (hit_lg or 0), "Team OPS")
+    metric_card(c, x0, y, card_w, 98, "TEAM HITTING", num(hit_team.get("OPS", 0)), "OPS", num(hit_lg) if hit_lg is not None else None, hit_team.get("OPS",0) >= (hit_lg or 0), "Team OPS", league_context["hitting"]["strength"], league_context["hitting"]["rank"])
     bb_lg = lg_pitch.get("BB%")
-    metric_card(c, x0 + (card_w+gap), y, card_w, 98, "TEAM PITCHING", pct(pitch_team.get("BB%", 0)), "BB% Allowed", pct(bb_lg) if bb_lg is not None else None, pitch_team.get("BB%",0) <= (bb_lg or 1), "Opponent BB%")
+    metric_card(c, x0 + (card_w+gap), y, card_w, 98, "TEAM PITCHING", pct(pitch_team.get("BB%", 0)), "BB% Allowed", pct(bb_lg) if bb_lg is not None else None, pitch_team.get("BB%",0) <= (bb_lg or 1), "Opponent BB%", league_context["pitching"]["strength"], league_context["pitching"]["rank"])
     run_lg = lg_run.get("SB%") if isinstance(lg_run, dict) else None
     catch_lg = lg_catch.get("CS%") if isinstance(lg_catch, dict) else None
-    metric_card(c, x0 + 2*(card_w+gap), y, card_w, 98, "TEAM BASERUNNING", pct(run_team.get("SB%",0)), "SB Success", pct(run_lg) if run_lg is not None else None, run_team.get("SB%",0) >= (run_lg or 0), "SB%")
-    metric_card(c, x0 + 3*(card_w+gap), y, card_w, 98, "TEAM CATCHING", pct(catch_team.get("CS%",0)), "Caught Stealing", pct(catch_lg) if catch_lg is not None else None, catch_team.get("CS%",0) >= (catch_lg or 0), "CS%")
+    metric_card(c, x0 + 2*(card_w+gap), y, card_w, 98, "TEAM BASERUNNING", pct(run_team.get("SB%",0)), "SB Success", pct(run_lg) if run_lg is not None else None, run_team.get("SB%",0) >= (run_lg or 0), "SB%", league_context["running"]["strength"], league_context["running"]["rank"])
+    metric_card(c, x0 + 3*(card_w+gap), y, card_w, 98, "TEAM CATCHING", pct(catch_team.get("CS%",0)), "Caught Stealing", pct(catch_lg) if catch_lg is not None else None, catch_team.get("CS%",0) >= (catch_lg or 0), "CS%", league_context["catching"]["strength"], league_context["catching"]["rank"])
 
     # Takeaways, Primary Threats, and Game Plan
     tx_y = 75; box_h = 220
@@ -1657,11 +2067,21 @@ def build_visual_pdf(context):
     round_rect(c, gx, tx_y, right_w, box_h, fill=WHITE, stroke=BORDER, radius=8)
     round_rect(c, gx, tx_y + box_h - 28, right_w, 28, fill=NAVY, stroke=NAVY, radius=8)
     c.setFillColor(WHITE); c.setFont("Helvetica-Bold", 12); c.drawCentredString(gx + right_w/2, tx_y + box_h - 19, "GAME PLAN")
+    hitting_plan = build_advanced_hitting_plan(
+        hit_team, lg_hit, swing_by_count, hitters, min_hitter_pa
+    )
+    offensive_plan = build_advanced_pitching_plan(
+        pitch_team, lg_pitch, usage_count, usage_overall,
+        lg_usage, pitch_leaders, min_pitcher_pa
+    )
+    running_plan = build_advanced_running_plan(
+        run_counts, run_team, runners, catch_team
+    )
     plan = [
-        ("PITCHING", "Attack early, then expand when counts favor us."),
-        ("DEFENSE", "Control steal counts with tempo, holds, and quick exchanges."),
-        ("OFFENSE", "Force their staff into the zone; target high-BB arms."),
-        ("BOTTOM LINE", "Win counts, control the run game, execute the plan."),
+        ("PITCHING", hitting_plan[0] if hitting_plan else "Win early counts and change eye level."),
+        ("DEFENSE", running_plan[0] if running_plan else "Control tempo and eliminate free advances."),
+        ("OFFENSE", offensive_plan[0] if offensive_plan else "Hunt the primary pitch in advantage counts."),
+        ("BOTTOM LINE", "Exploit predictable pitch usage, avoid free baserunners, and control the highest-volume runners."),
     ]
     yy = tx_y + box_h - 58
     for title, text in plan:
@@ -1713,7 +2133,7 @@ def build_visual_pdf(context):
     # Long key insight and action plan boxes underneath the tables.
     key = build_pitching_key_insight(pitch_team, lg_pitch, usage_overall, lg_usage, pitch_leaders, min_pitcher_pa, usage_count)
     draw_key_box(c, 22, 46, 500, 84, "KEY INSIGHT", key, icon="")
-    draw_plan_box(c, 535, 46, 245, 84, "ATTACK PLAN", build_pitching_plan_lines(usage_count, usage_overall, pitch_leaders, min_pitcher_pa))
+    draw_plan_box(c, 535, 46, 245, 84, "ATTACK PLAN", build_advanced_pitching_plan(pitch_team, lg_pitch, usage_count, usage_overall, lg_usage, pitch_leaders, min_pitcher_pa))
     c.showPage()
 
     # PAGE 3 Hitting
@@ -1759,7 +2179,7 @@ def build_visual_pdf(context):
     draw_sba_grid(c, 22, PAGE_H - 397, 370, 162, run_counts)
     c_rows = [[r.Catcher, int(r.SBA), int(r.CS), int(r.SB), pct(r["CS%"])] for _, r in catchers.head(5).iterrows()] if catchers is not None and not catchers.empty else []
     draw_table(c, 405, PAGE_H - 388, 180, 153, "CATCHER LEADERBOARD (BY CS%)", c_rows, ["Catcher", "SBA", "CS", "SB", "CS%"], font_size=5.6, max_rows=5)
-    draw_plan_box(c, 600, PAGE_H - 388, 180, 153, "RUNNING GAME PLAN", build_running_plan_lines(run_counts, runners))
+    draw_plan_box(c, 600, PAGE_H - 388, 180, 153, "RUNNING GAME PLAN", build_advanced_running_plan(run_counts, run_team, runners, catch_team))
     r_rows = [[r.Runner, int(r.SBA), int(r.SB), pct(r["SB%"])] for _, r in runners.head(7).iterrows()] if runners is not None and not runners.empty else []
     draw_table(c, 22, 80, 758, 135, "INDIVIDUAL RUNNER TENDENCIES (SB%)", r_rows, ["Runner", "SBA", "SB", "SB%"], font_size=6.5, max_rows=7)
     c.showPage()
@@ -1780,7 +2200,7 @@ def find_logo_path():
 # Streamlit UI
 # -----------------------------
 st.title("Advanced Pregame Report")
-st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: Version 4 HR and pitch usage.")
+st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: Scouting Intelligence V5.")
 
 with st.sidebar:
     st.header("Report Setup")
@@ -2058,6 +2478,10 @@ context = dict(
     lg_run=lg_run,
     min_hitter_pa=min_hitter_pa,
     min_pitcher_pa=min_pitcher_pa,
+    league_hitting_df=league_hitting,
+    league_pitching_df=league_pitching,
+    league_running_df=league_baserunning,
+    league_catching_df=league_catcher,
 )
 
 c1, c2, c3, c4 = st.columns(4)
@@ -2105,6 +2529,29 @@ with st.expander("Catching calculation check"):
             "Raw CSV CS": int(catch_team.get("RawCS", 0)),
         })
     st.write(diagnostic)
+
+league_context_ui = build_league_context(
+    hit_team,
+    pitch_team,
+    run_team,
+    catch_team,
+    league_hitting,
+    league_pitching,
+    league_baserunning,
+    league_catcher,
+)
+
+st.markdown("### Opponent Strength Profile")
+s1, s2, s3, s4 = st.columns(4)
+for col, label, key in [
+    (s1, "Hitting", "hitting"),
+    (s2, "Pitching Command", "pitching"),
+    (s3, "Baserunning", "running"),
+    (s4, "Catching", "catching"),
+]:
+    info = league_context_ui[key]
+    rank_text = f" • {info['rank']}" if info.get("rank") else ""
+    col.metric(label, f"{info['strength']}{rank_text}")
 
 st.caption(f"Leaderboard qualifiers: hitters min {min_hitter_pa} PA; pitchers min {min_pitcher_pa} PA faced.")
 
