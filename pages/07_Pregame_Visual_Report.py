@@ -384,30 +384,69 @@ def build_pitching(standard):
     return team, usage_count, usage_overall, pitcher_usage, leaders
 
 def build_catching(catching):
+    """Build catcher/team running-prevention stats from Catching PreGame.csv.
+
+    Automatic CS detection uses both the outs change and explicit
+    "caught stealing" descriptions. The latter is important for inning-ending
+    caught stealings, where the next row resets to 0 outs.
+    """
     if catching is None or catching.empty:
-        return {'SBA': 0, 'CS%': 0}, pd.DataFrame()
+        return {'SBA': 0, 'CS': 0, 'SB': 0, 'CS%': 0}, pd.DataFrame()
+
     df = catching.copy()
     catcher_col = find_col(df, ['catcher', 'Catcher', 'catcherAbbrevName'])
     sba_col = find_col(df, ['BaseStealAtt', 'baseStealAtt', 'basestealatt', 'SBA'])
     outs_col = find_col(df, ['outs', 'Outs'])
+    desc_col = find_col(df, ['atbatDesc', 'AtBatDesc', 'paDescription'])
+
     if catcher_col is None or sba_col is None:
-        return {'SBA': 0, 'CS%': 0}, pd.DataFrame()
+        return {'SBA': 0, 'CS': 0, 'SB': 0, 'CS%': 0}, pd.DataFrame()
+
     steal_rows = df[df[sba_col].notna()].copy()
-    steal_rows = steal_rows[~steal_rows[catcher_col].astype(str).str.lower().isin(['nan', 'catcher', 'total'])]
+    steal_rows = steal_rows[
+        ~steal_rows[catcher_col].astype(str).str.lower().isin(['nan', 'catcher', 'total'])
+    ]
     if steal_rows.empty:
-        return {'SBA': 0, 'CS%': 0}, pd.DataFrame(columns=['Catcher', 'SBA', 'CS', 'SB', 'CS%'])
+        return {'SBA': 0, 'CS': 0, 'SB': 0, 'CS%': 0}, pd.DataFrame(
+            columns=['Catcher', 'SBA', 'CS', 'SB', 'CS%']
+        )
+
+    # Normal caught stealing: outs increase on the next pitch row.
     if outs_col:
         next_outs = pd.to_numeric(df[outs_col].shift(-1).loc[steal_rows.index], errors='coerce')
         cur_outs = pd.to_numeric(steal_rows[outs_col], errors='coerce')
-        steal_rows['CS'] = (next_outs > cur_outs).astype(int)
+        outs_based_cs = next_outs > cur_outs
     else:
-        desc_col = find_col(steal_rows, ['atbatDesc'])
-        steal_rows['CS'] = steal_rows[desc_col].fillna('').astype(str).str.lower().str.contains('caught stealing').astype(int) if desc_col else 0
+        outs_based_cs = pd.Series(False, index=steal_rows.index)
+
+    # Inning-ending caught stealings are missed by outs comparison because
+    # the following row starts a new half-inning at 0 outs.
+    if desc_col:
+        desc = steal_rows[desc_col].fillna('').astype(str).str.lower()
+        explicit_cs = desc.str.contains(r'caught stealing|caught steal', regex=True, na=False)
+    else:
+        explicit_cs = pd.Series(False, index=steal_rows.index)
+
+    steal_rows['CS'] = (outs_based_cs | explicit_cs).astype(int)
     steal_rows['SBA'] = 1
-    g = steal_rows.groupby(catcher_col, as_index=False).agg(SBA=('SBA', 'sum'), CS=('CS', 'sum')).rename(columns={catcher_col: 'Catcher'})
+
+    g = (
+        steal_rows.groupby(catcher_col, as_index=False)
+        .agg(SBA=('SBA', 'sum'), CS=('CS', 'sum'))
+        .rename(columns={catcher_col: 'Catcher'})
+    )
     g['SB'] = g['SBA'] - g['CS']
     g['CS%'] = g.apply(lambda r: safe_div(r.CS, r.SBA), axis=1)
-    team = {'SBA': int(g['SBA'].sum()), 'CS%': safe_div(g['CS'].sum(), g['SBA'].sum())}
+
+    team_sba = int(g['SBA'].sum())
+    team_cs = int(g['CS'].sum())
+    team_sb = team_sba - team_cs
+    team = {
+        'SBA': team_sba,
+        'CS': team_cs,
+        'SB': team_sb,
+        'CS%': safe_div(team_cs, team_sba),
+    }
     return team, g.sort_values(['CS%', 'SBA'], ascending=[False, False])
 
 def build_running(stolen_bases, sba_count):
@@ -1447,6 +1486,41 @@ league_baserunning = read_csv_file(files["league_baserunning"]) if "league_baser
 hit_team, swing_by_count, hitter_swing, hitters = build_hitting(pregame)
 pitch_team, usage_count, usage_overall, pitcher_usage, pitch_leaders = build_pitching(standard)
 catch_team, catchers = build_catching(catching)
+
+# Catching PreGame exports can omit a small number of team steal events.
+# These optional official-total fields let the PDF match the validated
+# leaderboard while preserving the catcher-level table from the CSV.
+with st.sidebar:
+    st.markdown("### Catching totals")
+    use_official_catching = st.checkbox(
+        "Override team catching totals",
+        value=False,
+        help="Use this when the official leaderboard differs from the raw Catching PreGame export.",
+    )
+    official_catching_sba = st.number_input(
+        "Official SBA allowed",
+        min_value=0,
+        value=int(catch_team.get('SBA', 0)),
+        step=1,
+        disabled=not use_official_catching,
+    )
+    official_catching_cs = st.number_input(
+        "Official caught stealing",
+        min_value=0,
+        value=int(catch_team.get('CS', 0)),
+        step=1,
+        disabled=not use_official_catching,
+    )
+
+if use_official_catching:
+    official_catching_cs = min(int(official_catching_cs), int(official_catching_sba))
+    catch_team = {
+        'SBA': int(official_catching_sba),
+        'CS': int(official_catching_cs),
+        'SB': int(official_catching_sba) - int(official_catching_cs),
+        'CS%': safe_div(official_catching_cs, official_catching_sba),
+    }
+
 run_team, run_counts, runners = build_running(stolen, sba_count)
 lg_hit = league_hitting_baseline(league_hitting)
 lg_pitch = league_pitching_baseline(league_pitching)
