@@ -189,43 +189,79 @@ def parse_rate_value(v):
         return None
 
 def final_pa_rows(df):
-    """Return final pitch rows for PA-level stat calculations."""
+    """Return one legitimate terminal row per completed plate appearance."""
     if df is None or df.empty:
         return pd.DataFrame()
+
     out = df.copy()
     desc_col = find_col(out, ['atbatDesc', 'AtBatDesc', 'paDescription'])
+    result_col = find_col(out, ['pitchResult', 'PitchResult', 'playResult', 'PlayResult', 'result'])
+
     if desc_col:
         pa = out[out[desc_col].notna()].copy()
         if not pa.empty:
-            return pa
-    # fallback: use terminal pitchResult language
-    result_col = find_col(out, ['pitchResult', 'PitchResult', 'playResult', 'PlayResult', 'result'])
+            desc = pa[desc_col].astype(str).str.lower().str.strip()
+
+            # Baserunning-only events can have an at-bat description even though
+            # no plate appearance ended. Exclude those rows from PA totals.
+            baserunning_only = desc.str.contains(
+                r'caught stealing|pickoff|picked off|stolen base|steals home|steals second|steals third',
+                regex=True,
+                na=False,
+            )
+            batting_result = desc.str.contains(
+                r'walk|strikeout|single|double(?! play)|triple|home run|ground out|fly out|line out|pop out|fielder|error|hit by pitch|sac bunt|sac fly|sacrifice',
+                regex=True,
+                na=False,
+            )
+            pa = pa[~(baserunning_only & ~batting_result)].copy()
+            if not pa.empty:
+                return pa
+
+    # Fallback: use terminal result language when no PA description is available.
     if result_col:
         res = out[result_col].astype(str).str.lower()
-        terminal = res.str.contains('walk|strikeout|single|double|triple|home run|ground out|fly out|line out|pop out|fielder|error|hit by pitch|sac bunt|sac fly|double play', regex=True, na=False)
+        terminal = res.str.contains(
+            r'walk|strikeout|single|double|triple|home run|ground out|fly out|line out|pop out|fielder|error|hit by pitch|sac bunt|sac fly|double play',
+            regex=True,
+            na=False,
+        )
         pa = out[terminal].copy()
         if not pa.empty:
             return pa
-    # last fallback: batter changes
+
+    # Last fallback: use the final row before the batter changes.
     batter_col = find_col(out, ['batter', 'batterFullName', 'batterAbbrevName'])
     if batter_col:
         return out[out[batter_col].astype(str).ne(out[batter_col].astype(str).shift(-1))].copy()
     return pd.DataFrame()
 
+
 def classify_pa(pa, result_col):
-    res = pa[result_col].astype(str).str.lower().fillna('') if result_col else pd.Series([''] * len(pa), index=pa.index)
-    pa = pa.copy()
-    pa['BB'] = res.str.fullmatch(r'.*\bwalk\b.*|.*\bbb\b.*', case=False).astype(int)
-    pa['K'] = res.str.contains('strikeout', regex=False).astype(int)
-    pa['HBP'] = res.str.contains('hit by pitch|hbp', regex=True).astype(int)
-    pa['SF'] = res.str.contains('sac fly|sacrifice fly', regex=True).astype(int)
-    pa['SH'] = res.str.contains('sac bunt|sacrifice bunt', regex=True).astype(int)
-    # Hits: home run must be checked before generic out text.
-    pa['H'] = res.str.contains('single|double|triple|home run|homers', regex=True).astype(int)
-    pa['TB'] = np.select(
-        [res.str.contains('home run|homers', regex=True), res.str.contains('triple', regex=True), res.str.contains('double', regex=True), res.str.contains('single', regex=True)],
-        [4, 3, 2, 1], default=0
+    """Classify PA outcomes without treating 'double play' as a double."""
+    res = (
+        pa[result_col].astype(str).str.lower().fillna('')
+        if result_col
+        else pd.Series([''] * len(pa), index=pa.index)
     )
+    pa = pa.copy()
+
+    pa['BB'] = res.str.contains(r'\bwalk\b|\bbb\b', regex=True, na=False).astype(int)
+    pa['K'] = res.str.contains(r'\bstrikeout\b', regex=True, na=False).astype(int)
+    pa['HBP'] = res.str.contains(r'hit by pitch|\bhbp\b', regex=True, na=False).astype(int)
+    pa['SF'] = res.str.contains(r'sac fly|sacrifice fly', regex=True, na=False).astype(int)
+    pa['SH'] = res.str.contains(r'sac bunt|sacrifice bunt', regex=True, na=False).astype(int)
+
+    # Explicit hit patterns prevent "double play" from being counted as a hit.
+    is_hr = res.str.contains(r'home run|homers|homered', regex=True, na=False)
+    is_3b = res.str.contains(r'\btriple(?:s|d)?\b', regex=True, na=False)
+    is_2b = res.str.contains(r'\bdouble(?:s|d)?\b', regex=True, na=False) & ~res.str.contains(
+        r'double play', regex=True, na=False
+    )
+    is_1b = res.str.contains(r'\bsingle(?:s|d)?\b', regex=True, na=False)
+
+    pa['H'] = (is_hr | is_3b | is_2b | is_1b).astype(int)
+    pa['TB'] = np.select([is_hr, is_3b, is_2b, is_1b], [4, 3, 2, 1], default=0)
     pa['AB'] = (~((pa['BB'] == 1) | (pa['HBP'] == 1) | (pa['SF'] == 1) | (pa['SH'] == 1))).astype(int)
     return pa
 
@@ -973,8 +1009,8 @@ def concise(text, max_words=11):
     words = str(text).split()
     return " ".join(words[:max_words]) + ("." if len(words) > max_words else "")
 
-def build_insights(pitch_team, usage_overall, swing_by_count, run_counts, hitters, min_hitter_pa=0):
-    """Executive-summary takeaways using the same hitter PA qualifier as the report tables."""
+def build_insights(pitch_team, usage_overall, swing_by_count, run_counts, hitters):
+    """Executive-summary takeaways only. Keep them short so Page 1 stays clean."""
     insights = []
     if usage_overall is not None and not usage_overall.empty:
         top = usage_overall.iloc[0]
@@ -989,14 +1025,8 @@ def build_insights(pitch_team, usage_overall, swing_by_count, run_counts, hitter
         top = rc.sort_values("SBA", ascending=False).iloc[0]
         insights.append(f"Running game peaks in {top['Count']} counts ({int(top['SBA'])} SBA).")
     if hitters is not None and not hitters.empty:
-        qualified_hitters = hitters.copy()
-        qualified_hitters["PA"] = pd.to_numeric(qualified_hitters["PA"], errors="coerce").fillna(0)
-        qualified_hitters = qualified_hitters[qualified_hitters["PA"] >= int(min_hitter_pa or 0)]
-        if not qualified_hitters.empty:
-            top = qualified_hitters.sort_values("OPS", ascending=False).iloc[0]
-            insights.append(
-                f"Circle {top['Player']} as top qualified OPS threat ({num(top['OPS'])}, {int(top['PA'])} PA)."
-            )
+        top = hitters.sort_values("OPS", ascending=False).iloc[0]
+        insights.append(f"Circle {top['Player']} as top OPS threat ({num(top['OPS'])}).")
     return [concise(i, 16) for i in insights[:4]]
 
 
@@ -1223,9 +1253,7 @@ def build_visual_pdf(context):
     usage_count = context["usage_count"]; usage_overall = context["usage_overall"]; pitcher_usage = context["pitcher_usage"]; pitch_leaders = context["pitch_leaders"]
     swing_by_count = context["swing_by_count"]; hitters = context["hitters"]
     catchers = context["catchers"]; run_counts = context["run_counts"]; runners = context["runners"]
-    insights = build_insights(
-        pitch_team, usage_overall, swing_by_count, run_counts, hitters, min_hitter_pa
-    )
+    insights = build_insights(pitch_team, usage_overall, swing_by_count, run_counts, hitters)
 
     # PAGE 1
     draw_header(c, "ADVANCED PREGAME REPORT", opponent, 1, logo_path)
