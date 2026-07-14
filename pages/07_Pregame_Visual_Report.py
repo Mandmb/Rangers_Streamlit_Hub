@@ -238,32 +238,35 @@ def final_pa_rows(df):
 
 
 def classify_pa(pa, result_col):
-    """Classify PA outcomes without treating 'double play' as a double."""
+    """Classify PA outcomes from official pitchResult categories."""
     res = (
-        pa[result_col].astype(str).str.lower().fillna('')
-        if result_col
-        else pd.Series([''] * len(pa), index=pa.index)
+        pa[result_col].astype(str).str.strip().str.lower().fillna('')
+        if result_col else pd.Series([''] * len(pa), index=pa.index)
     )
     pa = pa.copy()
 
-    pa['BB'] = res.str.contains(r'\bwalk\b|\bbb\b', regex=True, na=False).astype(int)
-    pa['K'] = res.str.contains(r'\bstrikeout\b', regex=True, na=False).astype(int)
-    pa['HBP'] = res.str.contains(r'hit by pitch|\bhbp\b', regex=True, na=False).astype(int)
-    pa['SF'] = res.str.contains(r'sac fly|sacrifice fly', regex=True, na=False).astype(int)
-    pa['SH'] = res.str.contains(r'sac bunt|sacrifice bunt', regex=True, na=False).astype(int)
+    pa['BB'] = res.isin(['walk', 'intentional walk']).astype(int)
+    pa['K'] = res.str.startswith('strikeout', na=False).astype(int)
+    pa['HBP'] = res.eq('hit by pitch').astype(int)
+    pa['SF'] = res.isin(['sac fly', 'sacrifice fly']).astype(int)
+    pa['SH'] = res.isin(['sac bunt', 'sacrifice bunt']).astype(int)
 
-    # Explicit hit patterns prevent "double play" from being counted as a hit.
-    is_hr = res.str.contains(r'home run|homers|homered', regex=True, na=False)
-    is_3b = res.str.contains(r'\btriple(?:s|d)?\b', regex=True, na=False)
-    is_2b = res.str.contains(r'\bdouble(?:s|d)?\b', regex=True, na=False) & ~res.str.contains(
-        r'double play', regex=True, na=False
-    )
-    is_1b = res.str.contains(r'\bsingle(?:s|d)?\b', regex=True, na=False)
+    pa['1B'] = res.str.startswith('single on ', na=False).astype(int)
+    pa['2B'] = res.str.startswith('double on ', na=False).astype(int)
+    pa['3B'] = res.str.startswith('triple on ', na=False).astype(int)
+    pa['HR'] = (
+        res.str.startswith('home run on ', na=False)
+        | res.str.startswith('in-the-park home run on ', na=False)
+    ).astype(int)
 
-    pa['H'] = (is_hr | is_3b | is_2b | is_1b).astype(int)
-    pa['TB'] = np.select([is_hr, is_3b, is_2b, is_1b], [4, 3, 2, 1], default=0)
-    pa['AB'] = (~((pa['BB'] == 1) | (pa['HBP'] == 1) | (pa['SF'] == 1) | (pa['SH'] == 1))).astype(int)
+    pa['H'] = pa[['1B', '2B', '3B', 'HR']].sum(axis=1)
+    pa['TB'] = pa['1B'] + 2*pa['2B'] + 3*pa['3B'] + 4*pa['HR']
+    pa['AB'] = (~(
+        (pa['BB'] == 1) | (pa['HBP'] == 1) |
+        (pa['SF'] == 1) | (pa['SH'] == 1)
+    )).astype(int)
     return pa
+
 
 def is_swing_row(df):
     # User rule: Ball or called strike = take. Everything else = swing.
@@ -315,10 +318,12 @@ def build_hitting(pregame):
     pa = pa[pa['Player'].notna() & ~pa['Player'].str.lower().isin(['nan', 'playerfullname', 'total'])]
     pa = classify_pa(pa, result_col)
     g = pa.groupby('Player', as_index=False).agg(
-        PA=('Player', 'size'), AB=('AB', 'sum'), H=('H', 'sum'), BB=('BB', 'sum'), K=('K', 'sum'),
-        TB=('TB', 'sum'), HBP=('HBP', 'sum'), SF=('SF', 'sum')
+        PA=('Player', 'size'), AB=('AB', 'sum'), H=('H', 'sum'),
+        OneB=('1B', 'sum'), TwoB=('2B', 'sum'), ThreeB=('3B', 'sum'), HR=('HR', 'sum'),
+        BB=('BB', 'sum'), K=('K', 'sum'), TB=('TB', 'sum'),
+        HBP=('HBP', 'sum'), SF=('SF', 'sum')
     )
-    for c in ['PA', 'AB', 'H', 'BB', 'K', 'TB', 'HBP', 'SF']:
+    for c in ['PA', 'AB', 'H', 'OneB', 'TwoB', 'ThreeB', 'HR', 'BB', 'K', 'TB', 'HBP', 'SF']:
         g[c] = pd.to_numeric(g[c], errors='coerce').fillna(0)
     g['AVG'] = g.apply(lambda r: safe_div(r.H, r.AB), axis=1)
     g['OBP'] = g.apply(lambda r: safe_div(r.H + r.BB + r.HBP, r.AB + r.BB + r.HBP + r.SF), axis=1)
@@ -327,12 +332,17 @@ def build_hitting(pregame):
     g['BB%'] = g.apply(lambda r: safe_div(r.BB, r.PA), axis=1)
     g['K%'] = g.apply(lambda r: safe_div(r.K, r.PA), axis=1)
     g = g.sort_values('OPS', ascending=False)
-    totals = g[['PA', 'AB', 'H', 'BB', 'K', 'TB', 'HBP', 'SF']].sum()
+    totals = g[['PA', 'AB', 'H', 'OneB', 'TwoB', 'ThreeB', 'HR', 'BB', 'K', 'TB', 'HBP', 'SF']].sum()
     team = {
         'OPS': safe_div(totals.H + totals.BB + totals.HBP, totals.AB + totals.BB + totals.HBP + totals.SF) + safe_div(totals.TB, totals.AB),
         'AVG': safe_div(totals.H, totals.AB),
         'Swing%': float(df['Swing'].mean()) if len(df) else 0,
         'PA': int(totals.PA),
+        'AB': int(totals.AB), 'H': int(totals.H),
+        '1B': int(totals.OneB), '2B': int(totals.TwoB),
+        '3B': int(totals.ThreeB), 'HR': int(totals.HR),
+        'BB': int(totals.BB), 'K': int(totals.K),
+        'TB': int(totals.TB), 'HBP': int(totals.HBP), 'SF': int(totals.SF),
     }
     return team, swing_by_count, hitter_swing, g
 
@@ -1495,7 +1505,7 @@ def find_logo_path():
 # Streamlit UI
 # -----------------------------
 st.title("Advanced Pregame Report")
-st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: Official catching override warning.")
+st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: Hitting Version 2.")
 
 with st.sidebar:
     st.header("Report Setup")
@@ -1525,6 +1535,34 @@ league_catcher = read_csv_file(files["league_catcher"]) if "league_catcher" in f
 league_baserunning = read_csv_file(files["league_baserunning"]) if "league_baserunning" in files else pd.DataFrame()
 
 hit_team, swing_by_count, hitter_swing, hitters = build_hitting(pregame)
+
+with st.sidebar:
+    st.markdown("### Hitting totals")
+    use_official_swing = st.checkbox(
+        "Override team Swing%",
+        value=False,
+        help="Use the validated leaderboard Swing% when it differs from the raw pitch calculation.",
+    )
+    official_swing_pct = st.number_input(
+        "Official Swing%",
+        min_value=0.0, max_value=100.0,
+        value=round(float(hit_team.get('Swing%', 0))*100, 1),
+        step=0.1,
+        disabled=not use_official_swing,
+    )
+
+raw_swing_pct = float(hit_team.get('Swing%', 0))
+hit_team['RawSwing%'] = raw_swing_pct
+hit_team['OfficialSwingOverride'] = bool(use_official_swing)
+if use_official_swing:
+    hit_team['Swing%'] = float(official_swing_pct) / 100.0
+    if abs(hit_team['Swing%'] - raw_swing_pct) >= 0.0005:
+        st.warning(
+            f"Team Swing% adjusted from {pct(raw_swing_pct)} to "
+            f"the official value of {pct(hit_team['Swing%'])}. "
+            "The PDF uses the official value; the by-count grid remains pitch-level."
+        )
+
 pitch_team, usage_count, usage_overall, pitcher_usage, pitch_leaders = build_pitching(standard)
 catch_team, catchers = build_catching(catching)
 
@@ -1630,6 +1668,26 @@ c1.metric("Team OPS", num(hit_team.get("OPS", 0)))
 c2.metric("Opponent BB%", pct(pitch_team.get("BB%", 0)))
 c3.metric("SB Success", pct(run_team.get("SB%", 0)), delta=(f"LG {pct(lg_run.get('SB%'))}" if lg_run.get('SB%') is not None else None))
 c4.metric("Catcher CS%", pct(catch_team.get("CS%", 0)), delta=(f"LG {pct(lg_catch.get('CS%'))}" if lg_catch.get('CS%') is not None else None))
+
+with st.expander("Hitting calculation check"):
+    st.write({
+        "PA": int(hit_team.get("PA", 0)),
+        "AB": int(hit_team.get("AB", 0)),
+        "H": int(hit_team.get("H", 0)),
+        "1B": int(hit_team.get("1B", 0)),
+        "2B": int(hit_team.get("2B", 0)),
+        "3B": int(hit_team.get("3B", 0)),
+        "HR": int(hit_team.get("HR", 0)),
+        "BB": int(hit_team.get("BB", 0)),
+        "K": int(hit_team.get("K", 0)),
+        "TB": int(hit_team.get("TB", 0)),
+        "AVG": num(hit_team.get("AVG", 0)),
+        "OPS": num(hit_team.get("OPS", 0)),
+        "PDF Swing%": pct(hit_team.get("Swing%", 0)),
+        "Raw pitch Swing%": pct(hit_team.get("RawSwing%", 0)),
+        "Official Swing% override active": bool(hit_team.get("OfficialSwingOverride", False)),
+    })
+
 with st.expander("Catching calculation check"):
     diagnostic = {
         "PDF SBA": int(catch_team.get("SBA", 0)),
