@@ -1557,16 +1557,10 @@ def _rank_text(value, population, higher_is_better=True):
 
 def _strength_label(percentile):
     if percentile is None:
-        return "AVERAGE"
-    if percentile >= 0.85:
-        return "ELITE"
-    if percentile >= 0.65:
-        return "ABOVE AVG"
-    if percentile >= 0.35:
-        return "AVERAGE"
-    if percentile >= 0.15:
         return "BELOW AVG"
-    return "WEAK"
+    if percentile >= 0.50:
+        return "ABOVE AVG"
+    return "BELOW AVG"
 
 
 def build_league_context(
@@ -1721,11 +1715,8 @@ def build_executive_intelligence(
     catch_strength = league_context.get("catching", {}).get("strength", "VS LG AVG")
 
     profile_map = {
-        "ELITE": "elite",
         "ABOVE AVG": "above-average",
-        "AVERAGE": "average",
         "BELOW AVG": "below-average",
-        "WEAK": "weak",
     }
 
     lines.append(
@@ -2229,7 +2220,7 @@ def find_logo_path():
 # Streamlit UI
 # -----------------------------
 st.title("Advanced Pregame Report")
-st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: Page 1 league comparison labels.")
+st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: Above/Below Average Only.")
 
 with st.sidebar:
     st.header("Report Setup")
