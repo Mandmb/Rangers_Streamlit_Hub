@@ -2142,7 +2142,7 @@ def build_visual_pdf(context):
     usage_count = context["usage_count"]; usage_overall = context["usage_overall"]; pitcher_usage = context["pitcher_usage"]; pitch_leaders = context["pitch_leaders"]
     swing_by_count = context["swing_by_count"]; hitters = context["hitters"]
     catchers = context["catchers"]; run_counts = context["run_counts"]; runners = context["runners"]
-        league_catching_for_context = context.get("league_catching_df")
+    league_catching_for_context = context.get("league_catching_df")
     if league_catching_for_context is None or getattr(league_catching_for_context, "empty", True):
         league_catching_for_context = pd.DataFrame({
             "Label": ["TOTAL"],
@@ -2364,7 +2364,7 @@ def find_logo_path():
 # Streamlit UI
 # -----------------------------
 st.title("Advanced Pregame Report")
-st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: CS League Fallback Fix.")
+st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: CS League Fallback Fix Corrected.")
 
 with st.sidebar:
     st.header("Report Setup")
