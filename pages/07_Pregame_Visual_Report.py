@@ -144,7 +144,7 @@ def detect_files(files):
             out["league_pitch_usage"] = f
         elif "base running" in name or "baserunning" in name:
             out["league_baserunning"] = f
-        elif "catcher" in name and "pregame" not in name:
+        elif ("catcher" in name or "framing" in name) and "pregame" not in name:
             out["league_catcher"] = f
         elif "pregame hitting" in name:
             out["league_hitting"] = f
@@ -879,6 +879,9 @@ def league_catcher_baseline(df):
             "CS%", "CSPct", "CS Pct", "CS_Pct",
             "CaughtStealing%", "Caught Stealing%",
             "Caught Stealing Pct", "CaughtStealingPct",
+            "Caught Stealing Rate", "CaughtStealingRate",
+            "CS Rate", "CSRate", "CS Percent", "CS Percentage",
+            "League CS%", "Lg CS%", "CS_PLUS", "CS+",
         ],
     )
     sba_col = find_col(
@@ -972,6 +975,18 @@ def league_catcher_baseline(df):
         rates = data[rate_col].apply(parse_rate_value).dropna()
         if not rates.empty:
             return {"CS%": float(rates.mean())}
+
+    # Fuzzy fallback for exports with unexpected CS-rate header wording.
+    for col in tmp.columns:
+        normalized = "".join(ch for ch in str(col).lower() if ch.isalnum())
+        if "cs" in normalized and (
+            "pct" in normalized
+            or "percent" in normalized
+            or "rate" in normalized
+        ):
+            rates = tmp[col].apply(parse_rate_value).dropna()
+            if not rates.empty:
+                return {"CS%": float(rates.mean())}
 
     return {"CS%": None}
 
@@ -2342,7 +2357,7 @@ def find_logo_path():
 # Streamlit UI
 # -----------------------------
 st.title("Advanced Pregame Report")
-st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: Catcher League Average Fix.")
+st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: League CS Final Fix.")
 
 with st.sidebar:
     st.header("Report Setup")
@@ -2595,6 +2610,30 @@ lg_usage = league_pitch_usage_baseline(league_pitch_usage)
 lg_catch = league_catcher_baseline(league_catcher)
 lg_run = league_baserunning_baseline(league_baserunning)
 
+with st.sidebar:
+    st.markdown("### League catcher comparison")
+    use_league_cs_override = st.checkbox(
+        "Override league CS%",
+        value=False,
+        help="Use this only when the league catcher CSV does not expose a readable CS% field.",
+    )
+    league_cs_default = (
+        round(float(lg_catch.get("CS%")) * 100, 1)
+        if lg_catch.get("CS%") is not None
+        else 18.0
+    )
+    official_league_cs_pct = st.number_input(
+        "League CS%",
+        min_value=0.0,
+        max_value=100.0,
+        value=league_cs_default,
+        step=0.1,
+        disabled=not use_league_cs_override,
+    )
+
+if use_league_cs_override:
+    lg_catch = {"CS%": float(official_league_cs_pct) / 100.0}
+
 logo_path = find_logo_path()
 context = dict(
     opponent=opponent,
@@ -2705,7 +2744,9 @@ st.write({
     "Running team source": files.get("stolen_bases").name if "stolen_bases" in files else "Missing Stolen Bases.csv",
     "Running individual source": files.get("sba_count").name if "sba_count" in files else "Missing SBA Count.csv",
     "League pitch usage source": files.get("league_pitch_usage").name if "league_pitch_usage" in files else "Missing Pitch Usage.csv",
-    "League catcher CS% source": files.get("league_catcher").name if "league_catcher" in files else "Missing Catcher league CSV",
+    "League catcher CS% source": files.get("league_catcher").name if "league_catcher" in files else "Missing Catcher/Framing league CSV",
+    "League catcher CS% value": pct(lg_catch.get("CS%")) if lg_catch.get("CS%") is not None else "Not found",
+    "League CS% override active": bool(use_league_cs_override),
     "League baserunning SB% source": files.get("league_baserunning").name if "league_baserunning" in files else "Missing Base Running league CSV",
 })
 
