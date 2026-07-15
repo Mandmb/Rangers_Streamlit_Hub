@@ -854,13 +854,127 @@ def league_pitching_baseline(df):
 
 
 def league_catcher_baseline(df):
-    """Return league catching baselines from the catcher league CSV."""
+    """Return league CS% from the catcher league CSV.
+
+    Priority:
+    1. Read an explicit CS% field from the TOTAL row.
+    2. Calculate TOTAL CS / TOTAL SBA.
+    3. Aggregate catcher/team rows as sum(CS) / sum(SBA).
+    4. When CS is unavailable, derive CS as SBA - SB.
+    """
     if df is None or df.empty:
         return {"CS%": None}
-    total = df[df.astype(str).apply(lambda row: row.str.upper().eq("TOTAL").any(), axis=1)].head(1)
-    base = total.iloc[0] if not total.empty else df.iloc[0]
-    col = find_col(df, ["CS%", "CSPct", "CaughtStealing%", "Caught Stealing%"] )
-    return {"CS%": parse_rate_value(base[col]) if col else None}
+
+    tmp = df.copy()
+
+    total_mask = tmp.astype(str).apply(
+        lambda row: row.str.strip().str.upper().eq("TOTAL").any(),
+        axis=1,
+    )
+    total_rows = tmp[total_mask].head(1)
+
+    rate_col = find_col(
+        tmp,
+        [
+            "CS%", "CSPct", "CS Pct", "CS_Pct",
+            "CaughtStealing%", "Caught Stealing%",
+            "Caught Stealing Pct", "CaughtStealingPct",
+        ],
+    )
+    sba_col = find_col(
+        tmp,
+        [
+            "SBA", "SB Attempts", "Stolen Base Attempts",
+            "Attempts", "Steal Attempts",
+        ],
+    )
+    cs_col = find_col(
+        tmp,
+        [
+            "CS", "Caught Stealing", "CaughtStealing",
+            "Runners Caught Stealing",
+        ],
+    )
+    sb_col = find_col(
+        tmp,
+        [
+            "SB", "Stolen Bases", "StolenBase",
+            "Successful Steals",
+        ],
+    )
+
+    # Prefer the official TOTAL row when one exists.
+    if not total_rows.empty:
+        row = total_rows.iloc[0]
+
+        if rate_col:
+            rate = parse_rate_value(row[rate_col])
+            if rate is not None and not pd.isna(rate):
+                return {"CS%": float(rate)}
+
+        sba = (
+            pd.to_numeric(row[sba_col], errors="coerce")
+            if sba_col else None
+        )
+        cs = (
+            pd.to_numeric(row[cs_col], errors="coerce")
+            if cs_col else None
+        )
+        sb = (
+            pd.to_numeric(row[sb_col], errors="coerce")
+            if sb_col else None
+        )
+
+        if pd.notna(sba) and float(sba) > 0:
+            if pd.notna(cs):
+                return {"CS%": safe_div(float(cs), float(sba))}
+            if pd.notna(sb):
+                return {
+                    "CS%": safe_div(
+                        max(float(sba) - float(sb), 0),
+                        float(sba),
+                    )
+                }
+
+    # Otherwise aggregate all non-total rows.
+    data = tmp[~total_mask].copy()
+    if data.empty:
+        data = tmp.copy()
+
+    if sba_col:
+        sba_series = pd.to_numeric(data[sba_col], errors="coerce").fillna(0)
+        total_sba = float(sba_series.sum())
+
+        if total_sba > 0:
+            if cs_col:
+                total_cs = float(
+                    pd.to_numeric(data[cs_col], errors="coerce")
+                    .fillna(0)
+                    .sum()
+                )
+                return {"CS%": safe_div(total_cs, total_sba)}
+
+            if sb_col:
+                total_sb = float(
+                    pd.to_numeric(data[sb_col], errors="coerce")
+                    .fillna(0)
+                    .sum()
+                )
+                return {
+                    "CS%": safe_div(
+                        max(total_sba - total_sb, 0),
+                        total_sba,
+                    )
+                }
+
+    # Final fallback: average explicit CS% rows when no volume columns exist.
+    if rate_col:
+        rates = data[rate_col].apply(parse_rate_value).dropna()
+        if not rates.empty:
+            return {"CS%": float(rates.mean())}
+
+    return {"CS%": None}
+
 
 def league_baserunning_baseline(df):
     """Return league baserunning baselines from the base running league CSV."""
@@ -2228,7 +2342,7 @@ def find_logo_path():
 # Streamlit UI
 # -----------------------------
 st.title("Advanced Pregame Report")
-st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: Direct League Comparison Fix.")
+st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: Catcher League Average Fix.")
 
 with st.sidebar:
     st.header("Report Setup")
