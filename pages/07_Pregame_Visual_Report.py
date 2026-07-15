@@ -2142,6 +2142,13 @@ def build_visual_pdf(context):
     usage_count = context["usage_count"]; usage_overall = context["usage_overall"]; pitcher_usage = context["pitcher_usage"]; pitch_leaders = context["pitch_leaders"]
     swing_by_count = context["swing_by_count"]; hitters = context["hitters"]
     catchers = context["catchers"]; run_counts = context["run_counts"]; runners = context["runners"]
+        league_catching_for_context = context.get("league_catching_df")
+    if league_catching_for_context is None or getattr(league_catching_for_context, "empty", True):
+        league_catching_for_context = pd.DataFrame({
+            "Label": ["TOTAL"],
+            "CS%": [lg_catch.get("CS%")],
+        })
+
     league_context = build_league_context(
         hit_team,
         pitch_team,
@@ -2150,7 +2157,7 @@ def build_visual_pdf(context):
         context.get("league_hitting_df"),
         context.get("league_pitching_df"),
         context.get("league_running_df"),
-        context.get("league_catching_df"),
+        league_catching_for_context,
     )
     insights = build_executive_intelligence(
         hit_team,
@@ -2357,7 +2364,7 @@ def find_logo_path():
 # Streamlit UI
 # -----------------------------
 st.title("Advanced Pregame Report")
-st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: League CS Final Fix.")
+st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: CS League Fallback Fix.")
 
 with st.sidebar:
     st.header("Report Setup")
@@ -2612,27 +2619,34 @@ lg_run = league_baserunning_baseline(league_baserunning)
 
 with st.sidebar:
     st.markdown("### League catcher comparison")
-    use_league_cs_override = st.checkbox(
-        "Override league CS%",
-        value=False,
-        help="Use this only when the league catcher CSV does not expose a readable CS% field.",
-    )
+
+    detected_league_cs = lg_catch.get("CS%")
     league_cs_default = (
-        round(float(lg_catch.get("CS%")) * 100, 1)
-        if lg_catch.get("CS%") is not None
+        round(float(detected_league_cs) * 100, 1)
+        if detected_league_cs is not None
         else 18.0
     )
+
     official_league_cs_pct = st.number_input(
         "League CS%",
         min_value=0.0,
         max_value=100.0,
         value=league_cs_default,
         step=0.1,
-        disabled=not use_league_cs_override,
+        help=(
+            "The app uses the detected league catcher CSV value when available. "
+            "If the file has no readable CS% field, this value is used automatically."
+        ),
     )
 
-if use_league_cs_override:
+# Never leave the Page 1 catcher comparison without a league baseline.
+# Use the detected CSV value when available; otherwise use the sidebar fallback.
+if detected_league_cs is None or pd.isna(detected_league_cs):
     lg_catch = {"CS%": float(official_league_cs_pct) / 100.0}
+    league_cs_source = "Sidebar fallback"
+else:
+    lg_catch = {"CS%": float(detected_league_cs)}
+    league_cs_source = "Detected league catcher CSV"
 
 logo_path = find_logo_path()
 context = dict(
@@ -2711,6 +2725,13 @@ with st.expander("Catching calculation check"):
         })
     st.write(diagnostic)
 
+league_catcher_for_context = league_catcher
+if league_catcher_for_context is None or getattr(league_catcher_for_context, "empty", True):
+    league_catcher_for_context = pd.DataFrame({
+        "Label": ["TOTAL"],
+        "CS%": [lg_catch.get("CS%")],
+    })
+
 league_context_ui = build_league_context(
     hit_team,
     pitch_team,
@@ -2719,7 +2740,7 @@ league_context_ui = build_league_context(
     league_hitting,
     league_pitching,
     league_baserunning,
-    league_catcher,
+    league_catcher_for_context,
 )
 
 st.markdown("### Opponent Strength Profile")
@@ -2746,7 +2767,7 @@ st.write({
     "League pitch usage source": files.get("league_pitch_usage").name if "league_pitch_usage" in files else "Missing Pitch Usage.csv",
     "League catcher CS% source": files.get("league_catcher").name if "league_catcher" in files else "Missing Catcher/Framing league CSV",
     "League catcher CS% value": pct(lg_catch.get("CS%")) if lg_catch.get("CS%") is not None else "Not found",
-    "League CS% override active": bool(use_league_cs_override),
+    "League CS% source": league_cs_source,
     "League baserunning SB% source": files.get("league_baserunning").name if "league_baserunning" in files else "Missing Base Running league CSV",
 })
 
