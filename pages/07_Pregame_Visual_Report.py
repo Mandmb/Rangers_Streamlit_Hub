@@ -2186,8 +2186,22 @@ def build_visual_pdf(context):
     metric_card(c, x0 + (card_w+gap), y, card_w, 98, "TEAM PITCHING", pct(pitch_team.get("BB%", 0)), "BB% Allowed", pct(bb_lg) if bb_lg is not None else None, pitch_team.get("BB%",0) <= (bb_lg or 1), "Opponent BB%", league_context["pitching"]["strength"], league_context["pitching"]["rank"])
     run_lg = lg_run.get("SB%") if isinstance(lg_run, dict) else None
     catch_lg = lg_catch.get("CS%") if isinstance(lg_catch, dict) else None
+
+    # Page 1 catcher comparison must use the same resolved league CS%
+    # already displayed on Page 4. Do not depend on league_context here.
+    if catch_lg is not None and not pd.isna(catch_lg):
+        catch_above = float(catch_team.get("CS%", 0)) >= float(catch_lg)
+        catch_strength = "ABOVE AVG" if catch_above else "BELOW AVG"
+    else:
+        catch_above = False
+        catch_strength = "BELOW AVG"
+
+    # Keep the executive profile consistent with the Page 1 catcher card.
+    league_context["catching"]["strength"] = catch_strength
+    league_context["catching"]["rank"] = None
+
     metric_card(c, x0 + 2*(card_w+gap), y, card_w, 98, "TEAM BASERUNNING", pct(run_team.get("SB%",0)), "SB Success", pct(run_lg) if run_lg is not None else None, run_team.get("SB%",0) >= (run_lg or 0), "SB%", league_context["running"]["strength"], league_context["running"]["rank"])
-    metric_card(c, x0 + 3*(card_w+gap), y, card_w, 98, "TEAM CATCHING", pct(catch_team.get("CS%",0)), "Caught Stealing", pct(catch_lg) if catch_lg is not None else None, catch_team.get("CS%",0) >= (catch_lg or 0), "CS%", league_context["catching"]["strength"], league_context["catching"]["rank"])
+    metric_card(c, x0 + 3*(card_w+gap), y, card_w, 98, "TEAM CATCHING", pct(catch_team.get("CS%",0)), "Caught Stealing", pct(catch_lg) if catch_lg is not None else None, catch_above, "CS%", catch_strength, None)
 
     # Takeaways, Primary Threats, and Game Plan
     tx_y = 75; box_h = 220
@@ -2364,7 +2378,7 @@ def find_logo_path():
 # Streamlit UI
 # -----------------------------
 st.title("Advanced Pregame Report")
-st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: CS League Fallback Fix Corrected.")
+st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: Page 1 CS Direct Comparison Fix.")
 
 with st.sidebar:
     st.header("Report Setup")
