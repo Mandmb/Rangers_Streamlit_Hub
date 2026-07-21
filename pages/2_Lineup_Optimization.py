@@ -2593,54 +2593,402 @@ def historical_analysis_pdf(team_name, date_range, summary_text, importance_df, 
     return buffer
 
 
+
+LIDOM_TEAM_OPTIONS = {
+    "Águilas Cibaeñas": "AC",
+    "Estrellas Orientales": "EO",
+    "Gigantes del Cibao": "GC",
+    "Leones del Escogido": "LE",
+    "Tigres del Licey": "TL",
+    "Toros del Este": "TE",
+}
+
+
+def lidom_season_options():
+    current_year = date.today().year
+    return [
+        f"{year}-{str(year + 1)[-2:]}"
+        for year in range(current_year, 1999, -1)
+    ]
+
+
+def standardize_lidom_lineups(uploaded_file, team_name, season_label):
+    try:
+        raw = pd.read_csv(uploaded_file)
+    except Exception as exc:
+        raise ValueError(f"Could not read the LIDOM lineup CSV: {exc}")
+
+    raw = clean_colnames(raw)
+
+    date_col = find_column(
+        raw,
+        ["Date", "GameDate", "Game Date", "Fecha", "game_date"],
+    )
+    player_col = find_column(
+        raw,
+        [
+            "Player", "playerFullName", "PlayerFullName",
+            "Name", "playerName", "Jugador",
+        ],
+    )
+    spot_col = find_column(
+        raw,
+        [
+            "LineupSpot", "Lineup Spot", "BattingOrder",
+            "Batting Order", "Order", "Spot", "Turno",
+        ],
+    )
+
+    opponent_col = find_column(
+        raw,
+        ["Opponent", "Opp", "Oponente", "Rival"],
+    )
+    result_col = find_column(
+        raw,
+        ["Result", "Resultado", "W/L", "WL"],
+    )
+    home_away_col = find_column(
+        raw,
+        ["HomeAway", "Home/Away", "LocalVisitante", "H/A"],
+    )
+    pitcher_col = find_column(
+        raw,
+        [
+            "OpposingStarter", "Opposing Starter",
+            "Opp Pitcher", "Pitcher", "Abridor Rival",
+        ],
+    )
+    pitcher_hand_col = find_column(
+        raw,
+        [
+            "OpposingPitcherHand", "Opposing Pitcher Hand",
+            "PitcherHand", "Pitcher Hand", "Hand",
+        ],
+    )
+    bats_col = find_column(
+        raw,
+        ["Bats", "batsHand", "BatSide", "Batea"],
+    )
+    position_col = find_column(
+        raw,
+        ["Position", "POS", "Pos", "Posición"],
+    )
+    game_id_col = find_column(
+        raw,
+        ["GamePk", "GameID", "Game ID", "game_id", "JuegoID"],
+    )
+
+    # Long format: one row per player per game.
+    if player_col and spot_col:
+        result = pd.DataFrame()
+        result["Date"] = pd.to_datetime(
+            raw[date_col] if date_col else pd.NaT,
+            errors="coerce",
+        ).dt.date
+        result["Player"] = raw[player_col].astype(str).str.strip()
+        result["LineupSpot"] = pd.to_numeric(
+            raw[spot_col],
+            errors="coerce",
+        )
+        result["Opponent"] = (
+            raw[opponent_col].astype(str).str.strip()
+            if opponent_col else ""
+        )
+        result["Result"] = (
+            raw[result_col].astype(str).str.strip()
+            if result_col else ""
+        )
+        result["HomeAway"] = (
+            raw[home_away_col].astype(str).str.strip()
+            if home_away_col else ""
+        )
+        result["OpposingStarter"] = (
+            raw[pitcher_col].astype(str).str.strip()
+            if pitcher_col else ""
+        )
+        result["OpposingPitcherHand"] = (
+            raw[pitcher_hand_col].astype(str).str.upper().str.strip()
+            if pitcher_hand_col else "Unknown"
+        )
+        result["Bats"] = (
+            raw[bats_col].apply(normalize_bats)
+            if bats_col else ""
+        )
+        result["Position"] = (
+            raw[position_col].apply(normalize_position)
+            if position_col else ""
+        )
+
+        if game_id_col:
+            result["GamePk"] = raw[game_id_col].astype(str)
+        else:
+            result["GamePk"] = [
+                f"LIDOM-{season_label}-{d or 'NA'}-{i // 9 + 1}"
+                for i, d in enumerate(result["Date"])
+            ]
+
+    else:
+        # Wide format: one row per game with lineup columns 1 through 9.
+        spot_columns = {}
+        for col in raw.columns:
+            cleaned = str(col).strip().lower()
+            match = re.fullmatch(
+                r"(?:spot|lineup|order|batting order|turno)?\s*([1-9])",
+                cleaned,
+            )
+            if match:
+                spot_columns[int(match.group(1))] = col
+
+        if len(spot_columns) < 9:
+            raise ValueError(
+                "The LIDOM lineup CSV must either contain Player and LineupSpot "
+                "columns, or nine lineup columns labeled 1 through 9."
+            )
+
+        rows = []
+        for row_index, row in raw.iterrows():
+            parsed_date = pd.to_datetime(
+                row.get(date_col, "") if date_col else "",
+                errors="coerce",
+            )
+            game_date = parsed_date.date() if pd.notna(parsed_date) else None
+            game_id = (
+                str(row.get(game_id_col))
+                if game_id_col
+                else f"LIDOM-{season_label}-{game_date or row_index}-{row_index}"
+            )
+
+            for spot in range(1, 10):
+                player_name = str(
+                    row.get(spot_columns[spot], "")
+                ).strip()
+                if not player_name or player_name.lower() in {
+                    "nan", "none", "-", "n/a",
+                }:
+                    continue
+
+                rows.append({
+                    "Date": game_date,
+                    "GamePk": game_id,
+                    "Player": player_name,
+                    "LineupSpot": spot,
+                    "Opponent": (
+                        str(row.get(opponent_col, "")).strip()
+                        if opponent_col else ""
+                    ),
+                    "Result": (
+                        str(row.get(result_col, "")).strip()
+                        if result_col else ""
+                    ),
+                    "HomeAway": (
+                        str(row.get(home_away_col, "")).strip()
+                        if home_away_col else ""
+                    ),
+                    "OpposingStarter": (
+                        str(row.get(pitcher_col, "")).strip()
+                        if pitcher_col else ""
+                    ),
+                    "OpposingPitcherHand": (
+                        str(row.get(pitcher_hand_col, "Unknown")).upper().strip()
+                        if pitcher_hand_col else "Unknown"
+                    ),
+                    "Bats": "",
+                    "Position": "",
+                })
+
+        result = pd.DataFrame(rows)
+
+    if result.empty:
+        raise ValueError("No usable LIDOM lineup rows were found.")
+
+    result["LineupSpot"] = pd.to_numeric(
+        result["LineupSpot"],
+        errors="coerce",
+    )
+    result = result[
+        result["LineupSpot"].between(1, 9)
+        & result["Player"].astype(str).str.strip().ne("")
+    ].copy()
+
+    result["Team"] = team_name
+    result["Venue"] = ""
+    result["PlayerID"] = ""
+    result["Source"] = "Uploaded LIDOM historical lineups"
+
+    # Normalize hand labels.
+    result["OpposingPitcherHand"] = (
+        result["OpposingPitcherHand"]
+        .replace({
+            "RHP": "R", "RIGHT": "R", "D": "R",
+            "LHP": "L", "LEFT": "L", "Z": "L",
+        })
+        .fillna("Unknown")
+    )
+
+    result = result.drop_duplicates(
+        subset=["GamePk", "LineupSpot", "Player"],
+    ).sort_values(
+        ["Date", "GamePk", "LineupSpot"],
+        na_position="last",
+    ).reset_index(drop=True)
+
+    return result
+
+
+def lidom_lineup_template():
+    columns = [
+        "Date", "GameID", "Opponent", "Result", "HomeAway",
+        "OpposingStarter", "OpposingPitcherHand",
+        "LineupSpot", "Player", "Bats", "Position",
+    ]
+    sample_rows = []
+    for spot in range(1, 10):
+        sample_rows.append({
+            "Date": "2025-10-15",
+            "GameID": "LE-2025-10-15-1",
+            "Opponent": "Tigres del Licey",
+            "Result": "W 4-2",
+            "HomeAway": "Home",
+            "OpposingStarter": "Pitcher Name",
+            "OpposingPitcherHand": "R",
+            "LineupSpot": spot,
+            "Player": f"Player {spot}",
+            "Bats": "R",
+            "Position": "",
+        })
+    return pd.DataFrame(sample_rows, columns=columns)
+
+
+def lidom_stats_template():
+    return pd.DataFrame(
+        columns=[
+            "playerFullName", "PA", "AVG", "OBP", "SLG",
+            "OPS", "HR", "BB", "SO", "SB", "CS",
+        ]
+    )
+
 def render_historical_analysis():
     st.subheader("Historical Lineup Construction Analysis")
-    st.caption(
-        "Select an MLB team and season. The app automatically loads the daily lineups "
-        "and the team's season batting statistics—no CSV upload is required."
+
+    selected_league = st.segmented_control(
+        "Select League",
+        options=["MLB", "LIDOM"],
+        default="MLB",
+        key="historical_league_selector",
     )
 
-    st.info(
-        "The app uses Baseball Reference team batting statistics and validates the historical "
-        "lineup source. Official MLB data is used automatically as a fallback when needed."
-    )
-
-    selector_col1, selector_col2 = st.columns(2)
-
-    with selector_col1:
-        selected_team_name = st.selectbox(
-            "Select MLB Team",
-            options=list(MLB_TEAM_OPTIONS.keys()),
-            index=list(MLB_TEAM_OPTIONS.keys()).index("Texas Rangers"),
-            key="historical_team_selector",
+    if selected_league == "MLB":
+        st.caption(
+            "Select an MLB team and season. The app automatically loads daily lineups "
+            "and team season batting statistics."
         )
 
-    with selector_col2:
-        current_year = date.today().year
-        available_years = list(range(current_year, 2000, -1))
-        selected_season = st.selectbox(
-            "Select Season",
-            options=available_years,
-            index=0,
-            key="historical_season_selector",
+        selector_col1, selector_col2 = st.columns(2)
+
+        with selector_col1:
+            selected_team_name = st.selectbox(
+                "Select MLB Team",
+                options=list(MLB_TEAM_OPTIONS.keys()),
+                index=list(MLB_TEAM_OPTIONS.keys()).index("Texas Rangers"),
+                key="historical_mlb_team_selector",
+            )
+
+        with selector_col2:
+            current_year = date.today().year
+            available_years = list(range(current_year, 2000, -1))
+            selected_season = st.selectbox(
+                "Select Season",
+                options=available_years,
+                index=0,
+                key="historical_mlb_season_selector",
+            )
+
+        selected_team_abbr = MLB_TEAM_OPTIONS[selected_team_name]
+        url_text = build_baseball_reference_url(
+            selected_team_abbr,
+            selected_season,
+        )
+        stats_url_text = build_baseball_reference_team_stats_url(
+            selected_team_abbr,
+            selected_season,
         )
 
-    selected_team_abbr = MLB_TEAM_OPTIONS[selected_team_name]
-    url_text = build_baseball_reference_url(
-        selected_team_abbr,
-        selected_season,
-    )
+        source_col1, source_col2 = st.columns(2)
+        with source_col1:
+            st.caption(f"Lineup source: {url_text}")
+        with source_col2:
+            st.caption(f"Team stats source: {stats_url_text}")
 
-    stats_url_text = build_baseball_reference_team_stats_url(
-        selected_team_abbr,
-        selected_season,
-    )
+        lineup_file = None
+        stats_file = None
 
-    source_col1, source_col2 = st.columns(2)
-    with source_col1:
-        st.caption(f"Lineup source: {url_text}")
-    with source_col2:
-        st.caption(f"Team stats source: {stats_url_text}")
+    else:
+        st.caption(
+            "Select a LIDOM team and winter season, then upload historical lineups "
+            "and team batting statistics. The same analysis and PDF format will be used."
+        )
+
+        selector_col1, selector_col2 = st.columns(2)
+
+        with selector_col1:
+            selected_team_name = st.selectbox(
+                "Select LIDOM Team",
+                options=list(LIDOM_TEAM_OPTIONS.keys()),
+                index=list(LIDOM_TEAM_OPTIONS.keys()).index(
+                    "Leones del Escogido"
+                ),
+                key="historical_lidom_team_selector",
+            )
+
+        with selector_col2:
+            selected_season = st.selectbox(
+                "Select Winter Season",
+                options=lidom_season_options(),
+                index=0,
+                key="historical_lidom_season_selector",
+            )
+
+        selected_team_abbr = LIDOM_TEAM_OPTIONS[selected_team_name]
+
+        upload_col1, upload_col2 = st.columns(2)
+        with upload_col1:
+            lineup_file = st.file_uploader(
+                "Historical Lineups CSV",
+                type=["csv"],
+                key="historical_lidom_lineups",
+                help=(
+                    "Use one row per player-game with Date, Player, and LineupSpot, "
+                    "or one row per game with lineup columns 1 through 9."
+                ),
+            )
+        with upload_col2:
+            stats_file = st.file_uploader(
+                "Team Season Stats CSV",
+                type=["csv"],
+                key="historical_lidom_stats",
+                help=(
+                    "Include a player name column and the batting metrics "
+                    "you want the app to evaluate."
+                ),
+            )
+
+        template_col1, template_col2 = st.columns(2)
+        with template_col1:
+            st.download_button(
+                "Download LIDOM Lineup Template",
+                data=lidom_lineup_template().to_csv(index=False).encode("utf-8"),
+                file_name="lidom_historical_lineups_template.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+        with template_col2:
+            st.download_button(
+                "Download LIDOM Stats Template",
+                data=lidom_stats_template().to_csv(index=False).encode("utf-8"),
+                file_name="lidom_team_stats_template.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
 
     analyze = st.button(
         "Analyze Lineup Construction",
@@ -2652,7 +3000,6 @@ def render_historical_analysis():
         st.markdown(
             """
             **The analysis will show:**
-            - Automatically loaded team season statistics
             - Trait importance for batting-order placement
             - Average player profile by lineup spot
             - Player start frequency and average lineup position
@@ -2663,32 +3010,62 @@ def render_historical_analysis():
         )
         return
 
+    if selected_league == "LIDOM" and (
+        lineup_file is None or stats_file is None
+    ):
+        st.error(
+            "Upload both the LIDOM historical lineups CSV and team season stats CSV."
+        )
+        return
+
     try:
-        with st.spinner(
-            "Loading historical lineups and automatic season batting statistics..."
-        ):
+        with st.spinner("Loading and analyzing historical lineup data..."):
             team_abbr = selected_team_abbr
             season = selected_season
-            lineups_df, lineup_source_note = load_historical_lineups_with_fallback(
-                url_text,
-                team_abbr,
-                season,
-            )
             team_slug = team_abbr.lower()
-            (
-                stats_df,
-                numeric_cols,
-                stats_source_note,
-                stats_source_url,
-            ) = load_team_stats_with_fallback(
-                team_abbr,
-                season,
-            )
+
+            if selected_league == "MLB":
+                lineups_df, lineup_source_note = (
+                    load_historical_lineups_with_fallback(
+                        url_text,
+                        team_abbr,
+                        season,
+                    )
+                )
+                (
+                    stats_df,
+                    numeric_cols,
+                    stats_source_note,
+                    stats_source_url,
+                ) = load_team_stats_with_fallback(
+                    team_abbr,
+                    season,
+                )
+            else:
+                lineups_df = standardize_lidom_lineups(
+                    lineup_file,
+                    selected_team_name,
+                    selected_season,
+                )
+                stats_df, numeric_cols = read_historical_stats_csv(
+                    stats_file
+                )
+                lineup_source_note = "Uploaded LIDOM historical lineups CSV"
+                stats_source_note = "Uploaded LIDOM team season stats CSV"
+                stats_source_url = ""
+
             merged_df, unmatched, matched_players = merge_lineups_with_stats(
                 lineups_df,
                 stats_df,
             )
-    except (ValueError, HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
+
+    except (
+        ValueError,
+        HTTPError,
+        URLError,
+        TimeoutError,
+        json.JSONDecodeError,
+    ) as exc:
         st.error(f"Could not complete the historical analysis: {exc}")
         return
     except Exception as exc:
@@ -2706,7 +3083,7 @@ def render_historical_analysis():
     metric3.metric(
         "Players Matched",
         f"{len(matched_players)} / {lineups_df['Player'].nunique()}",
-        help=f"{match_pct:.1f}% of lineup entries matched to the automatic team stats.",
+        help=f"{match_pct:.1f}% of lineup entries matched to team stats.",
     )
     metric4.metric(
         "Date Range",
@@ -2728,28 +3105,47 @@ def render_historical_analysis():
     else:
         st.success(
             f"All {len(matched_players)} lineup players were matched "
-            "to the automatically loaded season batting statistics."
+            "to the team season statistics."
         )
 
-    analysis_df = merged_df[merged_df["_stats_index"].notna()].copy()
+    analysis_df = merged_df[
+        merged_df["_stats_index"].notna()
+    ].copy()
+
     if analysis_df.empty:
         st.error(
-            "No lineup names could be matched to the automatically loaded team statistics."
+            "No lineup names could be matched to the team season statistics."
         )
         return
 
-    importance = calculate_trait_importance(analysis_df, numeric_cols)
-    profiles = calculate_spot_profiles(analysis_df, numeric_cols)
+    importance = calculate_trait_importance(
+        analysis_df,
+        numeric_cols,
+    )
+    profiles = calculate_spot_profiles(
+        analysis_df,
+        numeric_cols,
+    )
     usage = calculate_usage_table(analysis_df)
-    archetypes = build_lineup_archetypes(analysis_df, numeric_cols)
-    expected_spots = calculate_expected_spots(analysis_df, numeric_cols)
+    archetypes = build_lineup_archetypes(
+        analysis_df,
+        numeric_cols,
+    )
+    expected_spots = calculate_expected_spots(
+        analysis_df,
+        numeric_cols,
+    )
     consistency = calculate_lineup_consistency(analysis_df)
-    philosophy = build_philosophy_summary(importance, analysis_df, consistency)
+    philosophy = build_philosophy_summary(
+        importance,
+        analysis_df,
+        consistency,
+    )
 
     st.markdown("### Team Philosophy")
     st.write(philosophy)
 
-    st.markdown("### Automatically Loaded Season Stats")
+    st.markdown("### Team Season Stats")
     preferred_stat_columns = [
         col for col in [
             "Player", "Age", "G", "PA", "AVG", "OBP", "SLG",
@@ -2765,38 +3161,73 @@ def render_historical_analysis():
 
     st.markdown("### Most Emphasized Traits")
     if importance.empty:
-        st.info("The sample is too small or the uploaded metrics do not vary enough.")
+        st.info(
+            "The sample is too small or the uploaded metrics do not vary enough."
+        )
     else:
-        chart_df = importance.head(12).set_index("Trait")[["ImportanceScore"]]
+        chart_df = importance.head(12).set_index("Trait")[
+            ["ImportanceScore"]
+        ]
         st.bar_chart(chart_df, horizontal=True)
         st.dataframe(
-            importance[["Trait", "ImportanceScore", "Relationship", "Direction", "Observations"]],
+            importance[
+                [
+                    "Trait", "ImportanceScore", "Relationship",
+                    "Direction", "Observations",
+                ]
+            ],
             use_container_width=True,
             hide_index=True,
         )
 
     st.markdown("### Average Profile by Lineup Spot")
-    st.dataframe(profiles, use_container_width=True, hide_index=True)
+    st.dataframe(
+        profiles,
+        use_container_width=True,
+        hide_index=True,
+    )
 
     st.markdown("### Player Usage")
-    st.dataframe(usage, use_container_width=True, hide_index=True)
+    st.dataframe(
+        usage,
+        use_container_width=True,
+        hide_index=True,
+    )
 
     st.markdown("### Lineup Archetypes")
     if archetypes.empty:
-        st.info("Not enough compatible metrics were available to create lineup archetypes.")
+        st.info(
+            "Not enough compatible metrics were available "
+            "to create lineup archetypes."
+        )
     else:
-        st.dataframe(archetypes, use_container_width=True, hide_index=True)
+        st.dataframe(
+            archetypes,
+            use_container_width=True,
+            hide_index=True,
+        )
 
     st.markdown("### Actual vs Expected Lineup Spot")
     if expected_spots.empty:
-        st.info("Not enough matched player profiles were available to estimate expected lineup spots.")
+        st.info(
+            "Not enough matched player profiles were available "
+            "to estimate expected lineup spots."
+        )
     else:
-        st.dataframe(expected_spots, use_container_width=True, hide_index=True)
+        st.dataframe(
+            expected_spots,
+            use_container_width=True,
+            hide_index=True,
+        )
 
     st.markdown("### Imported Historical Lineups")
     display_cols = [
-        "Date", "Opponent", "Result", "HomeAway",
-        "LineupSpot", "Player",
+        col for col in [
+            "Date", "Opponent", "Result", "HomeAway",
+            "OpposingStarter", "OpposingPitcherHand",
+            "LineupSpot", "Player", "Bats", "Position",
+        ]
+        if col in lineups_df.columns
     ]
     st.dataframe(
         lineups_df[display_cols],
@@ -2804,26 +3235,43 @@ def render_historical_analysis():
         hide_index=True,
     )
 
-    team_name_display = lineups_df["Team"].dropna().iloc[0] if not lineups_df.empty else team_slug.title()
-    date_range = f"{lineups_df['Date'].min()} – {lineups_df['Date'].max()}"
+    team_name_display = (
+        lineups_df["Team"].dropna().iloc[0]
+        if not lineups_df.empty
+        else selected_team_name
+    )
+    date_range = (
+        f"{lineups_df['Date'].min()} – "
+        f"{lineups_df['Date'].max()}"
+    )
+    season_filename = str(season).replace("/", "-")
 
     export1, export2, export3 = st.columns(3)
+
     with export1:
         st.download_button(
             "Download Imported Lineups CSV",
             data=lineups_df.to_csv(index=False).encode("utf-8"),
-            file_name=f"{team_abbr.lower()}_{season}_historical_lineups.csv",
+            file_name=(
+                f"{team_abbr.lower()}_{season_filename}_"
+                "historical_lineups.csv"
+            ),
             mime="text/csv",
             use_container_width=True,
         )
+
     with export2:
         st.download_button(
             "Download Analysis CSV",
             data=importance.to_csv(index=False).encode("utf-8"),
-            file_name=f"{team_abbr.lower()}_{season}_lineup_trait_importance.csv",
+            file_name=(
+                f"{team_abbr.lower()}_{season_filename}_"
+                "lineup_trait_importance.csv"
+            ),
             mime="text/csv",
             use_container_width=True,
         )
+
     with export3:
         pdf = historical_analysis_pdf(
             team_name_display,
@@ -2836,14 +3284,19 @@ def render_historical_analysis():
         st.download_button(
             "Export Analysis PDF",
             data=pdf,
-            file_name=f"{team_abbr.lower()}_{season}_lineup_construction_analysis.pdf",
+            file_name=(
+                f"{team_abbr.lower()}_{season_filename}_"
+                "lineup_construction_analysis.pdf"
+            ),
             mime="application/pdf",
             use_container_width=True,
         )
 
     st.caption(
-        "Interpretation note: importance scores measure association with earlier or later lineup placement. "
-        "They do not prove causation or fully explain starter selection because bench availability is not included."
+        "Interpretation note: importance scores measure association with "
+        "earlier or later lineup placement. They do not prove causation "
+        "or fully explain starter selection because bench availability "
+        "is not included."
     )
 
 
@@ -2853,7 +3306,7 @@ def render_historical_analysis():
 
 st.title("Lineup Optimization & Construction Intelligence")
 st.caption(
-    "Optimize future lineups or automatically reverse-engineer a team’s season-long lineup construction."
+    "Optimize future lineups or reverse-engineer lineup construction across MLB and LIDOM."
 )
 
 analysis_mode = st.segmented_control(
