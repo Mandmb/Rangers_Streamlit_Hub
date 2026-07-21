@@ -2466,42 +2466,113 @@ def historical_analysis_pdf(team_name, date_range, summary_text, importance_df, 
         text_obj.textLine(line)
     c.drawText(text_obj)
 
-    def draw_simple_table(dataframe, x, y_top, width, title, max_rows=10):
+    def draw_simple_table(
+        dataframe,
+        x,
+        y_top,
+        width,
+        title,
+        max_rows=10,
+        row_height=15,
+        title_gap=22,
+    ):
         c.setFillColor(navy)
         c.setFont("Helvetica-Bold", 10)
         c.drawString(x, y_top, title)
+
         if dataframe is None or dataframe.empty:
             c.setFont("Helvetica", 8)
             c.drawString(x, y_top - 18, "Not enough data.")
-            return
+            return y_top - 18
 
         view = dataframe.head(max_rows).copy()
         for col in view.columns:
             if pd.api.types.is_float_dtype(view[col]):
-                view[col] = view[col].map(lambda v: f"{v:.2f}" if pd.notna(v) else "")
+                view[col] = view[col].map(
+                    lambda v: f"{v:.2f}" if pd.notna(v) else ""
+                )
+
         rows = [list(view.columns)] + view.astype(str).values.tolist()
         col_width = width / len(view.columns)
-        table = Table(rows, colWidths=[col_width] * len(view.columns), rowHeights=18)
+        table_height = row_height * len(rows)
+        table_bottom = y_top - title_gap - table_height
+
+        table = Table(
+            rows,
+            colWidths=[col_width] * len(view.columns),
+            rowHeights=[row_height] * len(rows),
+        )
         table.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), navy),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
             ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
-            ("FONTSIZE", (0, 0), (-1, -1), 6.2),
+            ("FONTSIZE", (0, 0), (-1, -1), 5.9),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+            ("TOPPADDING", (0, 0), (-1, -1), 2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
             ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#D9DEE7")),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
             ("BACKGROUND", (0, 1), (-1, -1), colors.white),
         ]))
-        table.wrapOn(c, width, 300)
-        table.drawOn(c, x, y_top - 24 - 18 * len(rows))
+        table.wrapOn(c, width, table_height)
+        table.drawOn(c, x, table_bottom)
+        return table_bottom
 
-    imp_view = importance_df[["Trait", "ImportanceScore", "Direction"]].copy() if not importance_df.empty else importance_df
-    usage_view = usage_df[["Player", "Starts", "StartRate", "AverageSpot"]].copy() if not usage_df.empty else usage_df
-    draw_simple_table(imp_view, 30, page_h - 180, 350, "MOST EMPHASIZED TRAITS", 10)
-    draw_simple_table(usage_view, 410, page_h - 180, 350, "PLAYER USAGE", 10)
+    imp_view = (
+        importance_df[["Trait", "ImportanceScore", "Direction"]].copy()
+        if not importance_df.empty
+        else importance_df
+    )
+    usage_view = (
+        usage_df[["Player", "Starts", "StartRate", "AverageSpot"]].copy()
+        if not usage_df.empty
+        else usage_df
+    )
 
+    # Compact upper tables and preserve a clear visual gap before
+    # the lineup-spot profile section.
+    upper_title_y = page_h - 180
+    upper_left_bottom = draw_simple_table(
+        imp_view,
+        30,
+        upper_title_y,
+        350,
+        "MOST EMPHASIZED TRAITS",
+        max_rows=10,
+        row_height=15,
+        title_gap=22,
+    )
+    upper_right_bottom = draw_simple_table(
+        usage_view,
+        410,
+        upper_title_y,
+        350,
+        "PLAYER USAGE",
+        max_rows=10,
+        row_height=15,
+        title_gap=22,
+    )
+
+    upper_tables_bottom = min(
+        upper_left_bottom,
+        upper_right_bottom,
+    )
+
+    # Keep at least 18 points between the upper tables and this heading.
+    profile_title_y = min(213, upper_tables_bottom - 18)
     profile_view = profiles_df.copy()
-    draw_simple_table(profile_view, 30, 245, page_w - 60, "AVERAGE PROFILE BY LINEUP SPOT", 9)
+    draw_simple_table(
+        profile_view,
+        30,
+        profile_title_y,
+        page_w - 60,
+        "AVERAGE PROFILE BY LINEUP SPOT",
+        max_rows=9,
+        row_height=15,
+        title_gap=22,
+    )
 
     c.setFillColor(red)
     c.rect(30, 28, page_w - 60, 4, fill=1, stroke=0)
