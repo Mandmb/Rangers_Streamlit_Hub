@@ -9,6 +9,14 @@ from datetime import date
 from io import BytesIO
 import tempfile
 import os
+import re
+import json
+import unicodedata
+from difflib import SequenceMatcher
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
+from urllib.error import URLError, HTTPError
+from datetime import timedelta
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import landscape, letter
@@ -861,12 +869,700 @@ def generate_all_lineups_pdf(lineups, report_title, team_name, report_date, logo
     return buffer
 
 
+
+
+# =====================================================
+# HISTORICAL LINEUP ANALYSIS
+# =====================================================
+
+MLB_TEAM_IDS = {
+    "athletics": 133, "orioles": 110, "red-sox": 111, "yankees": 147,
+    "rays": 139, "blue-jays": 141, "white-sox": 145, "guardians": 114,
+    "tigers": 116, "royals": 118, "twins": 142, "astros": 117,
+    "angels": 108, "mariners": 136, "rangers": 140, "braves": 144,
+    "marlins": 146, "mets": 121, "phillies": 143, "nationals": 120,
+    "cubs": 112, "reds": 113, "brewers": 158, "pirates": 134,
+    "cardinals": 138, "diamondbacks": 109, "rockies": 115,
+    "dodgers": 119, "padres": 135, "giants": 137,
+}
+
+MLB_TEAM_ABBR = {
+    133: "ATH", 110: "BAL", 111: "BOS", 147: "NYY", 139: "TB",
+    141: "TOR", 145: "CWS", 114: "CLE", 116: "DET", 118: "KC",
+    142: "MIN", 117: "HOU", 108: "LAA", 136: "SEA", 140: "TEX",
+    144: "ATL", 146: "MIA", 121: "NYM", 143: "PHI", 120: "WSH",
+    112: "CHC", 113: "CIN", 158: "MIL", 134: "PIT", 138: "STL",
+    109: "ARI", 115: "COL", 119: "LAD", 135: "SD", 137: "SF",
+}
+
+
+def normalize_player_key(value):
+    if pd.isna(value):
+        return ""
+    value = unicodedata.normalize("NFKD", str(value))
+    value = "".join(ch for ch in value if not unicodedata.combining(ch))
+    value = value.lower().strip()
+    value = re.sub(r"[^a-z0-9 ]", " ", value)
+    value = re.sub(r"\b(jr|sr|ii|iii|iv)\b", "", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def fetch_json(url, timeout=20):
+    request = Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 Lineup-Construction-Analyzer/1.0",
+            "Accept": "application/json",
+        },
+    )
+    with urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def parse_mlb_lineup_url(url):
+    parsed = urlparse(str(url).strip())
+    if "mlb.com" not in parsed.netloc.lower():
+        raise ValueError("Please enter an MLB.com starting-lineups URL.")
+
+    parts = [p for p in parsed.path.split("/") if p]
+    if "starting-lineups" not in parts:
+        raise ValueError("The URL must be an MLB starting-lineups page.")
+
+    idx = parts.index("starting-lineups")
+    if idx < 2:
+        raise ValueError("Could not detect the team from the URL.")
+
+    team_slug = parts[0].lower()
+    if team_slug not in MLB_TEAM_IDS:
+        raise ValueError(f"Unsupported or unrecognized MLB team slug: {team_slug}")
+
+    date_value = None
+    if idx + 1 < len(parts):
+        try:
+            date_value = pd.to_datetime(parts[idx + 1]).date()
+        except Exception:
+            date_value = None
+
+    if date_value is None:
+        date_value = date.today()
+
+    return team_slug, MLB_TEAM_IDS[team_slug], date_value
+
+
+def get_pitcher_hand(feed, side_key, probable_pitcher_id=None):
+    game_data = feed.get("gameData", {})
+    players = game_data.get("players", {})
+
+    if probable_pitcher_id:
+        pdata = players.get(f"ID{probable_pitcher_id}", {})
+        hand = pdata.get("pitchHand", {}).get("code")
+        if hand:
+            return hand.upper()
+
+    box_team = feed.get("liveData", {}).get("boxscore", {}).get("teams", {}).get(side_key, {})
+    pitcher_ids = box_team.get("pitchers", [])
+    if pitcher_ids:
+        pdata = players.get(f"ID{pitcher_ids[0]}", {})
+        hand = pdata.get("pitchHand", {}).get("code")
+        if hand:
+            return hand.upper()
+    return "Unknown"
+
+
+def extract_team_lineup_from_feed(feed, team_id, game_date):
+    game_data = feed.get("gameData", {})
+    teams = game_data.get("teams", {})
+    home_id = teams.get("home", {}).get("id")
+    away_id = teams.get("away", {}).get("id")
+
+    if team_id == home_id:
+        team_side, opp_side = "home", "away"
+    elif team_id == away_id:
+        team_side, opp_side = "away", "home"
+    else:
+        return []
+
+    live = feed.get("liveData", {})
+    boxscore = live.get("boxscore", {})
+    team_box = boxscore.get("teams", {}).get(team_side, {})
+    opp_box = boxscore.get("teams", {}).get(opp_side, {})
+    batting_order = team_box.get("battingOrder", [])
+
+    if len(batting_order) < 9:
+        return []
+
+    probable = game_data.get("probablePitchers", {}).get(opp_side, {})
+    opp_pitcher_id = probable.get("id")
+    opp_hand = get_pitcher_hand(feed, opp_side, opp_pitcher_id)
+    opponent_name = teams.get(opp_side, {}).get("name", "")
+    venue = game_data.get("venue", {}).get("name", "")
+    players = game_data.get("players", {})
+
+    rows = []
+    for spot, player_id in enumerate(batting_order[:9], start=1):
+        pdata = players.get(f"ID{player_id}", {})
+        box_player = team_box.get("players", {}).get(f"ID{player_id}", {})
+        position = (
+            box_player.get("position", {}).get("abbreviation")
+            or pdata.get("primaryPosition", {}).get("abbreviation")
+            or ""
+        )
+        bats = pdata.get("batSide", {}).get("code", "")
+        rows.append({
+            "Date": pd.to_datetime(game_date).date(),
+            "GamePk": game_data.get("game", {}).get("pk", ""),
+            "Team": teams.get(team_side, {}).get("name", ""),
+            "Opponent": opponent_name,
+            "HomeAway": "Home" if team_side == "home" else "Away",
+            "Venue": venue,
+            "OpposingStarter": probable.get("fullName", ""),
+            "OpposingPitcherHand": opp_hand,
+            "LineupSpot": spot,
+            "PlayerID": player_id,
+            "Player": pdata.get("fullName", box_player.get("person", {}).get("fullName", "")),
+            "Bats": bats,
+            "Position": position,
+        })
+    return rows
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def load_mlb_lineups_from_urls(url_text, days_per_url=8):
+    urls = [u.strip() for u in re.split(r"[\n,]+", str(url_text)) if u.strip()]
+    if not urls:
+        raise ValueError("Enter at least one MLB starting-lineups URL.")
+
+    all_rows = []
+    detected_team_id = None
+    detected_team_slug = None
+
+    for url in urls:
+        team_slug, team_id, anchor_date = parse_mlb_lineup_url(url)
+        if detected_team_id is not None and team_id != detected_team_id:
+            raise ValueError("All URLs must belong to the same MLB team.")
+        detected_team_id = team_id
+        detected_team_slug = team_slug
+
+        start_date = anchor_date - timedelta(days=max(int(days_per_url) - 1, 0))
+        schedule_url = (
+            "https://statsapi.mlb.com/api/v1/schedule"
+            f"?sportId=1&teamId={team_id}"
+            f"&startDate={start_date:%Y-%m-%d}&endDate={anchor_date:%Y-%m-%d}"
+        )
+        schedule = fetch_json(schedule_url)
+
+        for date_block in schedule.get("dates", []):
+            for game in date_block.get("games", []):
+                status = game.get("status", {}).get("abstractGameState", "")
+                if status not in ["Final", "Live"]:
+                    continue
+                game_pk = game.get("gamePk")
+                if not game_pk:
+                    continue
+                feed = fetch_json(f"https://statsapi.mlb.com/api/v1.1/game/{game_pk}/feed/live")
+                all_rows.extend(
+                    extract_team_lineup_from_feed(
+                        feed,
+                        team_id=team_id,
+                        game_date=date_block.get("date"),
+                    )
+                )
+
+    if not all_rows:
+        raise ValueError("No confirmed historical lineups were found for the supplied URL window.")
+
+    df = pd.DataFrame(all_rows)
+    df = df.drop_duplicates(subset=["GamePk", "LineupSpot", "PlayerID"])
+    df = df.sort_values(["Date", "GamePk", "LineupSpot"]).reset_index(drop=True)
+    return df, detected_team_slug, MLB_TEAM_ABBR.get(detected_team_id, "")
+
+
+def read_historical_stats_csv(uploaded_file):
+    try:
+        df = pd.read_csv(uploaded_file)
+    except Exception as exc:
+        raise ValueError(f"Could not read season stats CSV: {exc}")
+
+    df = clean_colnames(df)
+    name_col = find_column(
+        df,
+        ["playerFullName", "PlayerFullName", "Player", "Name", "playerName", "player_name"],
+    )
+    if not name_col:
+        raise ValueError("Could not find a player-name column in the season stats CSV.")
+
+    df["Player"] = df[name_col].astype(str).str.strip()
+    df["_name_key"] = df["Player"].apply(normalize_player_key)
+
+    excluded = {
+        name_col, "Player", "_name_key", "playerid", "player id", "id",
+        "team", "level", "position", "pos", "bats", "batshand",
+    }
+
+    numeric_cols = []
+    for col in df.columns:
+        if str(col).lower().strip() in excluded:
+            continue
+        converted = pd.to_numeric(
+            df[col].astype(str).str.replace("%", "", regex=False).str.replace(",", "", regex=False),
+            errors="coerce",
+        )
+        if converted.notna().sum() >= max(3, int(len(df) * 0.25)):
+            df[col] = converted
+            numeric_cols.append(col)
+
+    if not numeric_cols:
+        raise ValueError("No usable numeric stat columns were detected in the season stats CSV.")
+
+    return df, numeric_cols
+
+
+def best_name_match(name_key, stats_keys, threshold=0.84):
+    if name_key in stats_keys:
+        return name_key, 1.0
+
+    best_key, best_score = "", 0.0
+    name_parts = name_key.split()
+    for candidate in stats_keys:
+        score = SequenceMatcher(None, name_key, candidate).ratio()
+        candidate_parts = candidate.split()
+        if name_parts and candidate_parts and name_parts[-1] == candidate_parts[-1]:
+            score += 0.08
+        if score > best_score:
+            best_key, best_score = candidate, score
+    return (best_key, min(best_score, 1.0)) if best_score >= threshold else ("", best_score)
+
+
+def merge_lineups_with_stats(lineups_df, stats_df):
+    lineups = lineups_df.copy()
+    lineups["_name_key"] = lineups["Player"].apply(normalize_player_key)
+
+    stats_unique = stats_df.drop_duplicates("_name_key", keep="first").copy()
+    stats_keys = set(stats_unique["_name_key"])
+
+    matches = []
+    scores = []
+    for key in lineups["_name_key"]:
+        matched, score = best_name_match(key, stats_keys)
+        matches.append(matched)
+        scores.append(score)
+
+    lineups["_matched_key"] = matches
+    lineups["NameMatchScore"] = scores
+
+    merged = lineups.merge(
+        stats_unique.drop(columns=["Player"], errors="ignore"),
+        how="left",
+        left_on="_matched_key",
+        right_on="_name_key",
+        suffixes=("", "_stats"),
+    )
+
+    unmatched = (
+        lineups[lineups["_matched_key"].eq("")]["Player"]
+        .drop_duplicates()
+        .sort_values()
+        .tolist()
+    )
+    return merged, unmatched
+
+
+def calculate_trait_importance(merged_df, numeric_cols, min_rows=6):
+    records = []
+    work = merged_df.copy()
+    work["EarlierLineupValue"] = 10 - pd.to_numeric(work["LineupSpot"], errors="coerce")
+
+    for col in numeric_cols:
+        values = pd.to_numeric(work[col], errors="coerce")
+        valid = values.notna() & work["EarlierLineupValue"].notna()
+        n = int(valid.sum())
+        if n < min_rows or values[valid].nunique() < 2:
+            continue
+
+        corr = values[valid].corr(work.loc[valid, "EarlierLineupValue"], method="spearman")
+        if pd.isna(corr):
+            continue
+        records.append({
+            "Trait": col,
+            "Relationship": float(corr),
+            "AbsoluteStrength": abs(float(corr)),
+            "Direction": "Higher values appear earlier" if corr > 0 else "Higher values appear later",
+            "Observations": n,
+        })
+
+    result = pd.DataFrame(records)
+    if result.empty:
+        return result
+
+    max_strength = result["AbsoluteStrength"].max()
+    result["ImportanceScore"] = (
+        result["AbsoluteStrength"] / max_strength * 100 if max_strength > 0 else 0
+    ).round(1)
+    return result.sort_values(["ImportanceScore", "Trait"], ascending=[False, True]).reset_index(drop=True)
+
+
+def calculate_spot_profiles(merged_df, numeric_cols):
+    preferred = [
+        c for c in ["AVG", "OBP", "SLG", "OPS", "ISO", "BB%", "K%", "SB", "wOBA", "wRC+"]
+        if c in numeric_cols
+    ]
+    metrics = preferred[:8] if preferred else numeric_cols[:8]
+    if not metrics:
+        return pd.DataFrame()
+
+    profiles = (
+        merged_df.groupby("LineupSpot")[metrics]
+        .mean(numeric_only=True)
+        .reset_index()
+        .sort_values("LineupSpot")
+    )
+    return profiles
+
+
+def calculate_usage_table(merged_df):
+    games = max(merged_df["GamePk"].nunique(), 1)
+    usage = (
+        merged_df.groupby("Player")
+        .agg(
+            Starts=("GamePk", "nunique"),
+            AverageSpot=("LineupSpot", "mean"),
+            EarliestSpot=("LineupSpot", "min"),
+            LatestSpot=("LineupSpot", "max"),
+            VsRHP=("OpposingPitcherHand", lambda s: int((s == "R").sum())),
+            VsLHP=("OpposingPitcherHand", lambda s: int((s == "L").sum())),
+        )
+        .reset_index()
+    )
+    usage["StartRate"] = (usage["Starts"] / games * 100).round(1)
+    usage["AverageSpot"] = usage["AverageSpot"].round(2)
+    return usage.sort_values(["Starts", "AverageSpot"], ascending=[False, True]).reset_index(drop=True)
+
+
+def calculate_lineup_consistency(merged_df):
+    game_lineups = []
+    for game_pk, group in merged_df.groupby("GamePk"):
+        ordered = tuple(group.sort_values("LineupSpot")["Player"].tolist())
+        game_lineups.append((game_pk, ordered))
+
+    if len(game_lineups) < 2:
+        return 100.0
+
+    similarities = []
+    for i in range(1, len(game_lineups)):
+        previous = game_lineups[i - 1][1]
+        current = game_lineups[i][1]
+        same_spot = sum(a == b for a, b in zip(previous, current)) / 9
+        same_players = len(set(previous) & set(current)) / 9
+        similarities.append((same_spot * 0.60) + (same_players * 0.40))
+    return round(float(np.mean(similarities) * 100), 1)
+
+
+def build_philosophy_summary(importance_df, merged_df, consistency):
+    if importance_df.empty:
+        lead = "The available sample is too small to rank lineup traits reliably."
+    else:
+        top = importance_df.head(3)
+        phrases = []
+        for _, row in top.iterrows():
+            direction = "earlier" if row["Relationship"] > 0 else "later"
+            phrases.append(f"{row['Trait']} ({direction} in the order)")
+        lead = "The strongest observed lineup-placement relationships are " + ", ".join(phrases) + "."
+
+    hand_counts = merged_df["OpposingPitcherHand"].value_counts()
+    hand_text = (
+        f"The sample includes {int(hand_counts.get('R', 0)) // 9} games versus right-handed starters "
+        f"and {int(hand_counts.get('L', 0)) // 9} versus left-handed starters."
+    )
+    consistency_text = (
+        f"Lineup consistency is {consistency:.1f}%, combining repeated starters and repeated batting-order spots."
+    )
+    caveat = (
+        "These results describe observed associations, not proof of the manager's intent. "
+        "Using season-to-date stats from each game date would make the conclusions stronger."
+    )
+    return f"{lead} {hand_text} {consistency_text} {caveat}"
+
+
+def historical_analysis_pdf(team_name, date_range, summary_text, importance_df, usage_df, profiles_df):
+    buffer = BytesIO()
+    page_w, page_h = landscape(letter)
+    c = canvas.Canvas(buffer, pagesize=landscape(letter))
+    navy = colors.HexColor("#002D72")
+    red = colors.HexColor("#BA0C2F")
+    light = colors.HexColor("#F3F6FA")
+
+    c.setFillColor(navy)
+    c.rect(0, page_h - 72, page_w, 72, fill=1, stroke=0)
+    c.setFillColor(colors.white)
+    c.setFont("Helvetica-Bold", 22)
+    c.drawString(30, page_h - 42, "LINEUP CONSTRUCTION ANALYSIS")
+    c.setFont("Helvetica", 9)
+    c.drawRightString(page_w - 30, page_h - 40, f"{team_name} | {date_range}")
+
+    c.setFillColor(light)
+    c.roundRect(30, page_h - 150, page_w - 60, 58, 7, fill=1, stroke=0)
+    c.setFillColor(colors.HexColor("#20242A"))
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(42, page_h - 112, "TEAM PHILOSOPHY SUMMARY")
+    text_obj = c.beginText(42, page_h - 127)
+    text_obj.setFont("Helvetica", 7.5)
+    words = summary_text.split()
+    line = ""
+    for word in words:
+        test = f"{line} {word}".strip()
+        if c.stringWidth(test, "Helvetica", 7.5) > page_w - 90:
+            text_obj.textLine(line)
+            line = word
+        else:
+            line = test
+    if line:
+        text_obj.textLine(line)
+    c.drawText(text_obj)
+
+    def draw_simple_table(dataframe, x, y_top, width, title, max_rows=10):
+        c.setFillColor(navy)
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(x, y_top, title)
+        if dataframe is None or dataframe.empty:
+            c.setFont("Helvetica", 8)
+            c.drawString(x, y_top - 18, "Not enough data.")
+            return
+
+        view = dataframe.head(max_rows).copy()
+        for col in view.columns:
+            if pd.api.types.is_float_dtype(view[col]):
+                view[col] = view[col].map(lambda v: f"{v:.2f}" if pd.notna(v) else "")
+        rows = [list(view.columns)] + view.astype(str).values.tolist()
+        col_width = width / len(view.columns)
+        table = Table(rows, colWidths=[col_width] * len(view.columns), rowHeights=18)
+        table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), navy),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
+            ("FONTSIZE", (0, 0), (-1, -1), 6.2),
+            ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#D9DEE7")),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("BACKGROUND", (0, 1), (-1, -1), colors.white),
+        ]))
+        table.wrapOn(c, width, 300)
+        table.drawOn(c, x, y_top - 24 - 18 * len(rows))
+
+    imp_view = importance_df[["Trait", "ImportanceScore", "Direction"]].copy() if not importance_df.empty else importance_df
+    usage_view = usage_df[["Player", "Starts", "StartRate", "AverageSpot"]].copy() if not usage_df.empty else usage_df
+    draw_simple_table(imp_view, 30, page_h - 180, 350, "MOST EMPHASIZED TRAITS", 10)
+    draw_simple_table(usage_view, 410, page_h - 180, 350, "PLAYER USAGE", 10)
+
+    profile_view = profiles_df.copy()
+    draw_simple_table(profile_view, 30, 245, page_w - 60, "AVERAGE PROFILE BY LINEUP SPOT", 9)
+
+    c.setFillColor(red)
+    c.rect(30, 28, page_w - 60, 4, fill=1, stroke=0)
+    c.setFillColor(colors.HexColor("#666666"))
+    c.setFont("Helvetica", 6.5)
+    c.drawString(30, 16, "Observed lineup associations; results should be interpreted with sample size and data timing in mind.")
+
+    c.showPage()
+    c.save()
+    buffer.seek(0)
+    return buffer
+
+
+def render_historical_analysis():
+    st.subheader("Historical Lineup Construction Analysis")
+    st.caption(
+        "Paste one or more MLB starting-lineups URLs and upload a season-stat CSV. "
+        "The app uses confirmed lineups from the date window and matches them to player traits."
+    )
+
+    st.info(
+        "For a larger sample, paste multiple URLs on separate lines. "
+        "Duplicate games are removed automatically."
+    )
+
+    url_text = st.text_area(
+        "MLB Starting-Lineups URL(s)",
+        placeholder=(
+            "https://www.mlb.com/rangers/roster/starting-lineups/2026-07-21\n"
+            "https://www.mlb.com/rangers/roster/starting-lineups/2026-07-14"
+        ),
+        height=115,
+        key="historical_mlb_urls",
+    )
+    days_per_url = st.slider(
+        "Days to retrieve per URL",
+        min_value=3,
+        max_value=14,
+        value=8,
+        help="Each URL acts as the end date for a backward-looking window.",
+    )
+    season_stats_file = st.file_uploader(
+        "Season Stats CSV",
+        type=["csv"],
+        key="historical_stats_csv",
+    )
+
+    analyze = st.button(
+        "Analyze Lineup Construction",
+        type="primary",
+        use_container_width=True,
+    )
+
+    if not analyze:
+        st.markdown(
+            """
+            **The analysis will show:**
+            - Trait importance for batting-order placement
+            - Average player profile by lineup spot
+            - Player start frequency and average lineup position
+            - Results split by opposing pitcher hand
+            - Lineup consistency and an automated philosophy summary
+            """
+        )
+        return
+
+    if not url_text.strip() or season_stats_file is None:
+        st.error("Add at least one MLB lineup URL and upload the season stats CSV.")
+        return
+
+    try:
+        with st.spinner("Loading confirmed MLB lineups and matching season statistics..."):
+            lineups_df, team_slug, team_abbr = load_mlb_lineups_from_urls(url_text, days_per_url)
+            stats_df, numeric_cols = read_historical_stats_csv(season_stats_file)
+            merged_df, unmatched = merge_lineups_with_stats(lineups_df, stats_df)
+    except (ValueError, HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
+        st.error(f"Could not complete the historical analysis: {exc}")
+        return
+    except Exception as exc:
+        st.error(f"Unexpected historical-analysis error: {exc}")
+        return
+
+    matched_rows = merged_df["_matched_key"].ne("").sum()
+    total_rows = len(merged_df)
+    games = lineups_df["GamePk"].nunique()
+    match_pct = matched_rows / max(total_rows, 1) * 100
+
+    metric1, metric2, metric3, metric4 = st.columns(4)
+    metric1.metric("Games", games)
+    metric2.metric("Lineup Entries", total_rows)
+    metric3.metric("Players Matched", f"{match_pct:.1f}%")
+    metric4.metric("Date Range", f"{lineups_df['Date'].min()} to {lineups_df['Date'].max()}")
+
+    if unmatched:
+        st.warning(
+            "Unmatched players were excluded from trait calculations: "
+            + ", ".join(unmatched)
+        )
+
+    analysis_df = merged_df[merged_df["_matched_key"].ne("")].copy()
+    if analysis_df.empty:
+        st.error("No lineup names could be matched to the season stats CSV.")
+        return
+
+    importance = calculate_trait_importance(analysis_df, numeric_cols)
+    profiles = calculate_spot_profiles(analysis_df, numeric_cols)
+    usage = calculate_usage_table(analysis_df)
+    consistency = calculate_lineup_consistency(analysis_df)
+    philosophy = build_philosophy_summary(importance, analysis_df, consistency)
+
+    st.markdown("### Team Philosophy")
+    st.write(philosophy)
+
+    st.markdown("### Most Emphasized Traits")
+    if importance.empty:
+        st.info("The sample is too small or the uploaded metrics do not vary enough.")
+    else:
+        chart_df = importance.head(12).set_index("Trait")[["ImportanceScore"]]
+        st.bar_chart(chart_df, horizontal=True)
+        st.dataframe(
+            importance[["Trait", "ImportanceScore", "Relationship", "Direction", "Observations"]],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    st.markdown("### Average Profile by Lineup Spot")
+    st.dataframe(profiles, use_container_width=True, hide_index=True)
+
+    st.markdown("### Player Usage")
+    st.dataframe(usage, use_container_width=True, hide_index=True)
+
+    st.markdown("### Imported Historical Lineups")
+    display_cols = [
+        "Date", "Opponent", "HomeAway", "OpposingStarter",
+        "OpposingPitcherHand", "LineupSpot", "Player", "Bats", "Position",
+    ]
+    st.dataframe(
+        lineups_df[display_cols],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    team_name_display = lineups_df["Team"].dropna().iloc[0] if not lineups_df.empty else team_slug.title()
+    date_range = f"{lineups_df['Date'].min()} – {lineups_df['Date'].max()}"
+
+    export1, export2, export3 = st.columns(3)
+    with export1:
+        st.download_button(
+            "Download Imported Lineups CSV",
+            data=lineups_df.to_csv(index=False).encode("utf-8"),
+            file_name=f"{team_abbr.lower()}_historical_lineups.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+    with export2:
+        st.download_button(
+            "Download Analysis CSV",
+            data=importance.to_csv(index=False).encode("utf-8"),
+            file_name=f"{team_abbr.lower()}_lineup_trait_importance.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+    with export3:
+        pdf = historical_analysis_pdf(
+            team_name_display,
+            date_range,
+            philosophy,
+            importance,
+            usage,
+            profiles,
+        )
+        st.download_button(
+            "Export Analysis PDF",
+            data=pdf,
+            file_name=f"{team_abbr.lower()}_lineup_construction_analysis.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+        )
+
+    st.caption(
+        "Interpretation note: importance scores measure association with earlier or later lineup placement. "
+        "They do not prove causation or fully explain starter selection because bench availability is not included."
+    )
+
+
 # =====================================================
 # APP UI
 # =====================================================
 
-st.title("Lineup Optimization")
-st.caption("Upload CSV files and optimize lineups overall, vs right-handed pitchers, and vs left-handed pitchers.")
+st.title("Lineup Optimization & Construction Intelligence")
+st.caption(
+    "Optimize future lineups or reverse-engineer how a team has constructed its recent batting orders."
+)
+
+analysis_mode = st.segmented_control(
+    "Select Analysis Mode",
+    options=["Optimize Lineup", "Analyze Historical Lineups"],
+    default="Optimize Lineup",
+    key="analysis_mode_selector",
+)
+
+if analysis_mode == "Analyze Historical Lineups":
+    render_historical_analysis()
+    st.stop()
+
+# ------------------------------
+# ORIGINAL LINEUP OPTIMIZER
+# ------------------------------
 
 st.sidebar.header("Report Branding")
 team_name = st.sidebar.text_input("Team Name", value="Texas Rangers")
@@ -987,11 +1683,13 @@ else:
 st.markdown("### Lineup Notes")
 st.write(
     """
-    - Use the sidebar to choose between Overall, Vs RHP, and Vs LHP.
-    - Upload all three CSVs to activate the PDF export.
-    - The PDF uses your uploaded team logo and automatically detects team colors for the report theme.
+    - Use the analysis-mode selector to switch between optimization and historical analysis.
+    - Upload all three optimizer CSVs to activate the optimization PDF export.
+    - Historical analysis accepts one or more MLB starting-lineups URLs and a season-stat CSV.
+    - Duplicate historical games are removed automatically.
+    - The historical mode reports observed relationships; it does not claim causal intent.
+    - The PDF uses your uploaded team logo and automatically detects team colors for the optimizer theme.
     - Batting hand colors stay fixed: LHH red, switch hitters blue, RHH black.
     - Position requirements are optional.
-    - The batting order uses both your selected stat weights and spot-specific logic.
     """
 )
