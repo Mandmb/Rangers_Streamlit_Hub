@@ -1618,6 +1618,465 @@ def load_historical_lineups_with_fallback(url, team_abbr, season):
     )
     return mlb_df, source_note
 
+
+def build_baseball_reference_team_stats_url(team_abbr, season):
+    return (
+        f"https://www.baseball-reference.com/teams/"
+        f"{team_abbr}/{int(season)}.shtml"
+    )
+
+
+def detect_baseball_reference_batting_table(tables):
+    candidates = []
+
+    for index, table in enumerate(tables):
+        frame = flatten_html_columns(table)
+        columns = [str(col).strip() for col in frame.columns]
+        lower_columns = [col.lower() for col in columns]
+
+        name_score = int(
+            any(
+                col in {
+                    "player", "name", "player name",
+                    "standard batting player",
+                }
+                or col.endswith(" player")
+                for col in lower_columns
+            )
+        )
+
+        expected_stats = {
+            "pa", "ab", "r", "h", "2b", "3b", "hr",
+            "rbi", "sb", "cs", "bb", "so", "ba", "avg",
+            "obp", "slg", "ops", "ops+",
+        }
+        stat_score = sum(col in expected_stats for col in lower_columns)
+
+        # Standard team batting tables generally contain many of these columns.
+        score = name_score * 20 + stat_score
+
+        if len(frame) >= 5:
+            score += 2
+        if len(frame.columns) >= 12:
+            score += 3
+
+        candidates.append((score, index, frame))
+
+    candidates.sort(reverse=True, key=lambda item: item[0])
+
+    if not candidates or candidates[0][0] < 28:
+        headers = [
+            ", ".join(map(str, flatten_html_columns(table).columns[:15]))
+            for table in tables[:10]
+        ]
+        raise ValueError(
+            "Could not identify the Baseball Reference standard batting table. "
+            "Detected table headers: " + " | ".join(headers)
+        )
+
+    return candidates[0][2]
+
+
+def find_bref_stat_column(df, possible_names):
+    normalized = {
+        re.sub(r"\s+", " ", str(col)).strip().lower(): col
+        for col in df.columns
+    }
+
+    for name in possible_names:
+        key = re.sub(r"\s+", " ", str(name)).strip().lower()
+        if key in normalized:
+            return normalized[key]
+
+    for normalized_name, original in normalized.items():
+        for name in possible_names:
+            key = str(name).strip().lower()
+            if normalized_name.endswith(f" {key}"):
+                return original
+
+    return None
+
+
+def clean_baseball_reference_stats_table(df):
+    df = flatten_html_columns(df).copy()
+
+    name_col = find_bref_stat_column(
+        df,
+        ["Player", "Name", "Player Name"],
+    )
+    if name_col is None:
+        raise ValueError(
+            "The Baseball Reference batting table did not contain a player-name column."
+        )
+
+    df["Player"] = (
+        df[name_col]
+        .astype(str)
+        .str.replace(r"\*+$", "", regex=True)
+        .str.replace(r"^\s*\d+\.\s*", "", regex=True)
+        .str.replace(r"\s+", " ", regex=True)
+        .str.strip()
+    )
+
+    excluded_name_patterns = [
+        r"^team totals?$",
+        r"^team total$",
+        r"^rank in",
+        r"^league average",
+        r"^lg average",
+        r"^average$",
+        r"^player$",
+        r"^nan$",
+        r"^$",
+    ]
+
+    invalid_mask = pd.Series(False, index=df.index)
+    for pattern in excluded_name_patterns:
+        invalid_mask |= df["Player"].str.match(
+            pattern,
+            case=False,
+            na=False,
+        )
+
+    df = df[~invalid_mask].copy()
+
+    column_aliases = {
+        "Age": ["Age"],
+        "G": ["G", "Games"],
+        "PA": ["PA", "Plate Appearances"],
+        "AB": ["AB", "At Bats"],
+        "R": ["R", "Runs"],
+        "H": ["H", "Hits"],
+        "2B": ["2B", "Doubles"],
+        "3B": ["3B", "Triples"],
+        "HR": ["HR", "Home Runs"],
+        "RBI": ["RBI"],
+        "SB": ["SB", "Stolen Bases"],
+        "CS": ["CS", "Caught Stealing"],
+        "BB": ["BB", "Walks"],
+        "SO": ["SO", "Strikeouts"],
+        "AVG": ["BA", "AVG", "Batting Average"],
+        "OBP": ["OBP"],
+        "SLG": ["SLG"],
+        "OPS": ["OPS"],
+        "OPS+": ["OPS+"],
+        "TB": ["TB", "Total Bases"],
+        "GDP": ["GDP", "GIDP"],
+        "HBP": ["HBP"],
+        "SF": ["SF"],
+        "Pos": ["Pos", "Position", "Pos Summary"],
+    }
+
+    output = pd.DataFrame()
+    output["Player"] = df["Player"]
+
+    for standardized_name, aliases in column_aliases.items():
+        source_col = find_bref_stat_column(df, aliases)
+        if source_col is not None:
+            output[standardized_name] = df[source_col]
+
+    # Convert available statistical columns to numeric.
+    non_numeric = {"Player", "Pos"}
+    for col in output.columns:
+        if col in non_numeric:
+            continue
+
+        output[col] = pd.to_numeric(
+            output[col]
+            .astype(str)
+            .str.replace(",", "", regex=False)
+            .str.replace("%", "", regex=False)
+            .str.strip(),
+            errors="coerce",
+        )
+
+    # Drop rows without real playing time.
+    if "PA" in output.columns:
+        output = output[
+            output["PA"].fillna(0) > 0
+        ].copy()
+    elif "G" in output.columns:
+        output = output[
+            output["G"].fillna(0) > 0
+        ].copy()
+
+    # Derived traits that improve the lineup-construction analysis.
+    if "SLG" in output.columns and "AVG" in output.columns:
+        output["ISO"] = output["SLG"] - output["AVG"]
+
+    if "BB" in output.columns and "PA" in output.columns:
+        output["BB%"] = np.where(
+            output["PA"] > 0,
+            output["BB"] / output["PA"] * 100,
+            np.nan,
+        )
+
+    if "SO" in output.columns and "PA" in output.columns:
+        output["K%"] = np.where(
+            output["PA"] > 0,
+            output["SO"] / output["PA"] * 100,
+            np.nan,
+        )
+
+    if "SB" in output.columns and "CS" in output.columns:
+        attempts = output["SB"].fillna(0) + output["CS"].fillna(0)
+        output["SB%"] = np.where(
+            attempts > 0,
+            output["SB"].fillna(0) / attempts * 100,
+            np.nan,
+        )
+
+    output["_name_key"] = output["Player"].apply(normalize_player_key)
+
+    def build_name_keys(player_name):
+        key = normalize_player_key(player_name)
+        keys = {key} if key else set()
+        parts = key.split()
+
+        if len(parts) >= 2:
+            keys.add(parts[-1])
+            keys.add(f"{parts[0][0]} {parts[-1]}")
+
+        return sorted(keys)
+
+    output["_all_name_keys"] = output["Player"].apply(build_name_keys)
+    output = output.drop_duplicates("_name_key", keep="first")
+
+    numeric_cols = [
+        col for col in output.columns
+        if col not in {
+            "Player", "Pos", "_name_key", "_all_name_keys"
+        }
+        and pd.api.types.is_numeric_dtype(output[col])
+        and output[col].notna().sum() >= 3
+        and output[col].nunique(dropna=True) >= 2
+    ]
+
+    if not numeric_cols:
+        raise ValueError(
+            "No usable player statistics were found in the Baseball Reference batting table."
+        )
+
+    return output.reset_index(drop=True), numeric_cols
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def load_baseball_reference_team_stats(team_abbr, season):
+    stats_url = build_baseball_reference_team_stats_url(
+        team_abbr,
+        season,
+    )
+    page_html = baseball_reference_request(stats_url)
+    page_html = uncomment_baseball_reference_tables(page_html)
+
+    try:
+        tables = pd.read_html(StringIO(page_html))
+    except ValueError:
+        raise ValueError(
+            "Baseball Reference returned no readable team-stat tables."
+        )
+
+    batting_table = detect_baseball_reference_batting_table(tables)
+    stats_df, numeric_cols = clean_baseball_reference_stats_table(
+        batting_table
+    )
+
+    return stats_df, numeric_cols, stats_url
+
+
+def clean_mlb_api_player_name(value):
+    return re.sub(
+        r"\s+",
+        " ",
+        str(value or "").strip(),
+    )
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def load_official_mlb_team_stats(team_abbr, season):
+    team_id = MLB_TEAM_IDS_BY_BREF_ABBR.get(team_abbr)
+    if not team_id:
+        raise ValueError(
+            f"Could not find an MLB team ID for {team_abbr}."
+        )
+
+    url = (
+        "https://statsapi.mlb.com/api/v1/stats"
+        "?stats=season"
+        "&group=hitting"
+        "&sportIds=1"
+        f"&teamId={team_id}"
+        f"&season={int(season)}"
+        "&playerPool=ALL"
+        "&limit=500"
+        "&hydrate=person"
+    )
+
+    payload = fetch_json(url)
+    splits = []
+
+    for stats_group in payload.get("stats", []):
+        splits.extend(stats_group.get("splits", []))
+
+    rows = []
+    for split in splits:
+        player = split.get("player", {})
+        stat = split.get("stat", {})
+
+        player_name = clean_mlb_api_player_name(
+            player.get("fullName", "")
+        )
+        if not player_name:
+            continue
+
+        row = {
+            "Player": player_name,
+            "Age": player.get("currentAge"),
+            "G": stat.get("gamesPlayed"),
+            "PA": stat.get("plateAppearances"),
+            "AB": stat.get("atBats"),
+            "R": stat.get("runs"),
+            "H": stat.get("hits"),
+            "2B": stat.get("doubles"),
+            "3B": stat.get("triples"),
+            "HR": stat.get("homeRuns"),
+            "RBI": stat.get("rbi"),
+            "SB": stat.get("stolenBases"),
+            "CS": stat.get("caughtStealing"),
+            "BB": stat.get("baseOnBalls"),
+            "SO": stat.get("strikeOuts"),
+            "AVG": stat.get("avg"),
+            "OBP": stat.get("obp"),
+            "SLG": stat.get("slg"),
+            "OPS": stat.get("ops"),
+            "TB": stat.get("totalBases"),
+            "HBP": stat.get("hitByPitch"),
+            "SF": stat.get("sacFlies"),
+        }
+        rows.append(row)
+
+    if not rows:
+        raise ValueError(
+            "No official MLB batting statistics were returned for the selected team and season."
+        )
+
+    stats_df = pd.DataFrame(rows)
+
+    for col in stats_df.columns:
+        if col == "Player":
+            continue
+        stats_df[col] = pd.to_numeric(
+            stats_df[col],
+            errors="coerce",
+        )
+
+    stats_df = stats_df[
+        stats_df.get("PA", pd.Series(0, index=stats_df.index))
+        .fillna(0) > 0
+    ].copy()
+
+    if "SLG" in stats_df.columns and "AVG" in stats_df.columns:
+        stats_df["ISO"] = stats_df["SLG"] - stats_df["AVG"]
+
+    if "BB" in stats_df.columns and "PA" in stats_df.columns:
+        stats_df["BB%"] = np.where(
+            stats_df["PA"] > 0,
+            stats_df["BB"] / stats_df["PA"] * 100,
+            np.nan,
+        )
+
+    if "SO" in stats_df.columns and "PA" in stats_df.columns:
+        stats_df["K%"] = np.where(
+            stats_df["PA"] > 0,
+            stats_df["SO"] / stats_df["PA"] * 100,
+            np.nan,
+        )
+
+    if "SB" in stats_df.columns and "CS" in stats_df.columns:
+        attempts = (
+            stats_df["SB"].fillna(0)
+            + stats_df["CS"].fillna(0)
+        )
+        stats_df["SB%"] = np.where(
+            attempts > 0,
+            stats_df["SB"].fillna(0) / attempts * 100,
+            np.nan,
+        )
+
+    stats_df["_name_key"] = stats_df["Player"].apply(
+        normalize_player_key
+    )
+
+    def player_keys(player_name):
+        key = normalize_player_key(player_name)
+        keys = {key} if key else set()
+        parts = key.split()
+
+        if len(parts) >= 2:
+            keys.add(parts[-1])
+            keys.add(f"{parts[0][0]} {parts[-1]}")
+
+        return sorted(keys)
+
+    stats_df["_all_name_keys"] = stats_df["Player"].apply(
+        player_keys
+    )
+    stats_df = stats_df.drop_duplicates(
+        "_name_key",
+        keep="first",
+    )
+
+    numeric_cols = [
+        col for col in stats_df.columns
+        if col not in {
+            "Player", "_name_key", "_all_name_keys"
+        }
+        and pd.api.types.is_numeric_dtype(stats_df[col])
+        and stats_df[col].notna().sum() >= 3
+        and stats_df[col].nunique(dropna=True) >= 2
+    ]
+
+    return stats_df.reset_index(drop=True), numeric_cols
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def load_team_stats_with_fallback(team_abbr, season):
+    try:
+        stats_df, numeric_cols, stats_url = (
+            load_baseball_reference_team_stats(
+                team_abbr,
+                season,
+            )
+        )
+        source_note = (
+            "Baseball Reference standard batting table"
+        )
+        return (
+            stats_df,
+            numeric_cols,
+            source_note,
+            stats_url,
+        )
+    except Exception:
+        stats_df, numeric_cols = load_official_mlb_team_stats(
+            team_abbr,
+            season,
+        )
+        stats_url = build_baseball_reference_team_stats_url(
+            team_abbr,
+            season,
+        )
+        source_note = (
+            "Official MLB season batting statistics were used because "
+            "the Baseball Reference batting table could not be read."
+        )
+        return (
+            stats_df,
+            numeric_cols,
+            source_note,
+            stats_url,
+        )
+
 def read_historical_stats_csv(uploaded_file):
     try:
         df = pd.read_csv(uploaded_file)
@@ -2059,13 +2518,13 @@ def historical_analysis_pdf(team_name, date_range, summary_text, importance_df, 
 def render_historical_analysis():
     st.subheader("Historical Lineup Construction Analysis")
     st.caption(
-        "Select an MLB team and season, then upload a season-stat CSV. "
-        "The app automatically builds the Baseball Reference URL, validates the table, and uses official MLB game feeds when needed for complete daily lineups."
+        "Select an MLB team and season. The app automatically loads the daily lineups "
+        "and the team's season batting statistics—no CSV upload is required."
     )
 
     st.info(
-        "Choose the team and year—no URL entry is required. "
-        "The app automatically reads the full Baseball Reference batting-order table for that season."
+        "The app uses Baseball Reference team batting statistics and validates the historical "
+        "lineup source. Official MLB data is used automatically as a fallback when needed."
     )
 
     selector_col1, selector_col2 = st.columns(2)
@@ -2094,12 +2553,16 @@ def render_historical_analysis():
         selected_season,
     )
 
-    st.caption(f"Baseball Reference source: {url_text}")
-    season_stats_file = st.file_uploader(
-        "Season Stats CSV",
-        type=["csv"],
-        key="historical_stats_csv",
+    stats_url_text = build_baseball_reference_team_stats_url(
+        selected_team_abbr,
+        selected_season,
     )
+
+    source_col1, source_col2 = st.columns(2)
+    with source_col1:
+        st.caption(f"Lineup source: {url_text}")
+    with source_col2:
+        st.caption(f"Team stats source: {stats_url_text}")
 
     analyze = st.button(
         "Analyze Lineup Construction",
@@ -2111,6 +2574,7 @@ def render_historical_analysis():
         st.markdown(
             """
             **The analysis will show:**
+            - Automatically loaded team season statistics
             - Trait importance for batting-order placement
             - Average player profile by lineup spot
             - Player start frequency and average lineup position
@@ -2121,12 +2585,10 @@ def render_historical_analysis():
         )
         return
 
-    if season_stats_file is None:
-        st.error("Upload the season stats CSV before running the analysis.")
-        return
-
     try:
-        with st.spinner("Loading Baseball Reference season batting orders and matching season statistics..."):
+        with st.spinner(
+            "Loading historical lineups and automatic season batting statistics..."
+        ):
             team_abbr = selected_team_abbr
             season = selected_season
             lineups_df, lineup_source_note = load_historical_lineups_with_fallback(
@@ -2135,7 +2597,15 @@ def render_historical_analysis():
                 season,
             )
             team_slug = team_abbr.lower()
-            stats_df, numeric_cols = read_historical_stats_csv(season_stats_file)
+            (
+                stats_df,
+                numeric_cols,
+                stats_source_note,
+                stats_source_url,
+            ) = load_team_stats_with_fallback(
+                team_abbr,
+                season,
+            )
             merged_df, unmatched, matched_players = merge_lineups_with_stats(
                 lineups_df,
                 stats_df,
@@ -2158,7 +2628,7 @@ def render_historical_analysis():
     metric3.metric(
         "Players Matched",
         f"{len(matched_players)} / {lineups_df['Player'].nunique()}",
-        help=f"{match_pct:.1f}% of lineup entries matched to the uploaded stats.",
+        help=f"{match_pct:.1f}% of lineup entries matched to the automatic team stats.",
     )
     metric4.metric(
         "Date Range",
@@ -2166,6 +2636,7 @@ def render_historical_analysis():
     )
 
     st.caption(f"Historical lineup source: {lineup_source_note}")
+    st.caption(f"Season-stat source: {stats_source_note}")
 
     if unmatched:
         preview_unmatched = unmatched[:20]
@@ -2179,12 +2650,14 @@ def render_historical_analysis():
     else:
         st.success(
             f"All {len(matched_players)} lineup players were matched "
-            "to the uploaded season stats CSV."
+            "to the automatically loaded season batting statistics."
         )
 
     analysis_df = merged_df[merged_df["_stats_index"].notna()].copy()
     if analysis_df.empty:
-        st.error("No lineup names could be matched to the season stats CSV.")
+        st.error(
+            "No lineup names could be matched to the automatically loaded team statistics."
+        )
         return
 
     importance = calculate_trait_importance(analysis_df, numeric_cols)
@@ -2197,6 +2670,20 @@ def render_historical_analysis():
 
     st.markdown("### Team Philosophy")
     st.write(philosophy)
+
+    st.markdown("### Automatically Loaded Season Stats")
+    preferred_stat_columns = [
+        col for col in [
+            "Player", "Age", "G", "PA", "AVG", "OBP", "SLG",
+            "OPS", "OPS+", "ISO", "BB%", "K%", "HR", "SB", "SB%",
+        ]
+        if col in stats_df.columns
+    ]
+    st.dataframe(
+        stats_df[preferred_stat_columns],
+        use_container_width=True,
+        hide_index=True,
+    )
 
     st.markdown("### Most Emphasized Traits")
     if importance.empty:
@@ -2288,7 +2775,7 @@ def render_historical_analysis():
 
 st.title("Lineup Optimization & Construction Intelligence")
 st.caption(
-    "Optimize future lineups or reverse-engineer how a team has constructed its recent batting orders."
+    "Optimize future lineups or automatically reverse-engineer a team’s season-long lineup construction."
 )
 
 analysis_mode = st.segmented_control(
@@ -2427,8 +2914,8 @@ st.write(
     """
     - Use the analysis-mode selector to switch between optimization and historical analysis.
     - Upload all three optimizer CSVs to activate the optimization PDF export.
-    - Historical analysis uses MLB team and season dropdowns plus a season-stat CSV.
-    - The Baseball Reference URL is created automatically; official MLB game feeds are used whenever Baseball Reference provides only a summary table.
+    - Historical analysis only requires MLB team and season selections.
+    - Team batting statistics and historical daily lineups are loaded automatically, with official MLB data used as a fallback.
     - The historical mode reports observed relationships; it does not claim causal intent.
     - The PDF uses your uploaded team logo and automatically detects team colors for the optimizer theme.
     - Batting hand colors stay fixed: LHH red, switch hitters blue, RHH black.
