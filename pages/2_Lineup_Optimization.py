@@ -14,7 +14,7 @@ import re
 import json
 import unicodedata
 from difflib import SequenceMatcher
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin, parse_qs
 from urllib.request import Request, urlopen, build_opener, HTTPCookieProcessor
 from urllib.error import URLError, HTTPError
 import http.cookiejar
@@ -2867,6 +2867,726 @@ def lidom_stats_template():
         ]
     )
 
+
+LIDOM_DIGIMETRICS_BASE = "https://estadisticas.lidom.com"
+
+LIDOM_TEAM_NAME_ALIASES = {
+    "Águilas Cibaeñas": [
+        "aguilas cibaeñas", "aguilas cibaeñas", "aguilas",
+    ],
+    "Estrellas Orientales": [
+        "estrellas orientales", "estrellas",
+    ],
+    "Gigantes del Cibao": [
+        "gigantes del cibao", "gigantes",
+    ],
+    "Leones del Escogido": [
+        "leones del escogido", "escogido", "leones",
+    ],
+    "Tigres del Licey": [
+        "tigres del licey", "licey", "tigres",
+    ],
+    "Toros del Este": [
+        "toros del este", "toros",
+    ],
+}
+
+
+def normalize_lidom_text(value):
+    if pd.isna(value):
+        return ""
+    normalized = unicodedata.normalize("NFKD", str(value))
+    normalized = "".join(
+        ch for ch in normalized
+        if not unicodedata.combining(ch)
+    )
+    normalized = normalized.lower().strip()
+    normalized = re.sub(r"\s+", " ", normalized)
+    return normalized
+
+
+def lidom_request(url, timeout=30):
+    request = Request(
+        url,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/147.0.0.0 Safari/537.36"
+            ),
+            "Accept": (
+                "text/html,application/xhtml+xml,application/xml;"
+                "q=0.9,*/*;q=0.8"
+            ),
+            "Accept-Language": "es-DO,es;q=0.9,en;q=0.7",
+            "Cache-Control": "no-cache",
+        },
+    )
+    with urlopen(request, timeout=timeout) as response:
+        return response.read().decode("utf-8", errors="replace")
+
+
+def extract_lidom_game_links(page_html, base_url=LIDOM_DIGIMETRICS_BASE):
+    links = set()
+
+    for href in re.findall(
+        r'href=["\']([^"\']+)["\']',
+        page_html,
+        flags=re.I,
+    ):
+        absolute = urljoin(base_url, unescape(href))
+        if re.search(
+            r"/Partido/Detalle\?idPartido=\d+",
+            absolute,
+            flags=re.I,
+        ):
+            links.add(absolute)
+
+    # Some pages expose game IDs inside JavaScript rather than anchor tags.
+    for game_id in re.findall(
+        r"idPartido\s*[=:]\s*['\"]?(\d+)",
+        page_html,
+        flags=re.I,
+    ):
+        links.add(
+            f"{LIDOM_DIGIMETRICS_BASE}/Partido/Detalle"
+            f"?idPartido={game_id}"
+        )
+
+    return sorted(links)
+
+
+def parse_lidom_season_start_year(season_label):
+    match = re.match(r"(\d{4})", str(season_label))
+    if not match:
+        raise ValueError(
+            f"Could not interpret LIDOM season: {season_label}"
+        )
+    return int(match.group(1))
+
+
+def lidom_date_matches_season(game_date, season_label):
+    if game_date is None or pd.isna(game_date):
+        return True
+
+    start_year = parse_lidom_season_start_year(season_label)
+    allowed_years = {start_year, start_year + 1}
+    return pd.Timestamp(game_date).year in allowed_years
+
+
+def find_date_in_lidom_page(page_html):
+    text_only = re.sub(r"<[^>]+>", " ", page_html)
+    text_only = unescape(text_only)
+
+    date_patterns = [
+        r"\b(\d{1,2}/\d{1,2}/\d{4})\b",
+        r"\b(\d{4}-\d{2}-\d{2})\b",
+        r"\b(\d{1,2}-\d{1,2}-\d{4})\b",
+    ]
+
+    for pattern in date_patterns:
+        match = re.search(pattern, text_only)
+        if match:
+            parsed = pd.to_datetime(
+                match.group(1),
+                dayfirst=True,
+                errors="coerce",
+            )
+            if pd.notna(parsed):
+                return parsed.date()
+
+    return None
+
+
+def identify_lidom_team_from_text(value):
+    normalized = normalize_lidom_text(value)
+
+    for team_name, aliases in LIDOM_TEAM_NAME_ALIASES.items():
+        if any(alias in normalized for alias in aliases):
+            return team_name
+
+    return ""
+
+
+def flatten_lidom_table_columns(df):
+    df = df.copy()
+
+    if isinstance(df.columns, pd.MultiIndex):
+        flattened = []
+        for parts in df.columns:
+            clean_parts = [
+                str(part).strip()
+                for part in parts
+                if str(part).strip()
+                and not str(part).startswith("Unnamed")
+            ]
+            flattened.append(
+                " ".join(dict.fromkeys(clean_parts)).strip()
+            )
+        df.columns = flattened
+    else:
+        df.columns = [
+            str(col).strip()
+            for col in df.columns
+        ]
+
+    return df
+
+
+def detect_lidom_batting_tables(tables):
+    detected = []
+
+    for table_index, table in enumerate(tables):
+        frame = flatten_lidom_table_columns(table)
+        lower_cols = [
+            normalize_lidom_text(col)
+            for col in frame.columns
+        ]
+
+        has_batter = any(
+            col in {
+                "bateador", "jugador", "player", "nombre",
+            }
+            or "bateador" in col
+            for col in lower_cols
+        )
+        has_ab = any(
+            col == "ab" or "turnos" in col
+            for col in lower_cols
+        )
+        has_hits = any(col == "h" for col in lower_cols)
+        has_runs = any(col == "r" for col in lower_cols)
+
+        score = (
+            int(has_batter) * 10
+            + int(has_ab) * 4
+            + int(has_hits) * 3
+            + int(has_runs) * 2
+        )
+
+        if score >= 14 and len(frame) >= 5:
+            detected.append(
+                {
+                    "index": table_index,
+                    "score": score,
+                    "frame": frame,
+                }
+            )
+
+    return detected
+
+
+def find_lidom_col(df, aliases):
+    normalized_map = {
+        normalize_lidom_text(col): col
+        for col in df.columns
+    }
+
+    for alias in aliases:
+        normalized_alias = normalize_lidom_text(alias)
+        if normalized_alias in normalized_map:
+            return normalized_map[normalized_alias]
+
+    for normalized_col, original_col in normalized_map.items():
+        for alias in aliases:
+            normalized_alias = normalize_lidom_text(alias)
+            if normalized_alias in normalized_col:
+                return original_col
+
+    return None
+
+
+def clean_lidom_batter_name(value):
+    value = re.sub(r"<[^>]+>", " ", str(value or ""))
+    value = unescape(value)
+    value = re.sub(r"\s+", " ", value).strip()
+
+    # Remove common substitution/order markers while keeping the actual name.
+    value = re.sub(r"^\d+[\.\-\)]\s*", "", value)
+    value = re.sub(r"^[a-z]\-\s*", "", value, flags=re.I)
+    value = re.sub(r"\s+\((?:PH|PR|DR|C|1B|2B|3B|SS|LF|CF|RF|OF|DH)\)$", "", value, flags=re.I)
+    value = re.sub(r"\s+(?:PH|PR|DR)$", "", value, flags=re.I)
+
+    return value.strip()
+
+
+def infer_team_for_batting_table(
+    frame,
+    table_index,
+    batting_tables,
+    page_text,
+):
+    # Often the table immediately follows a team heading. Search text around
+    # the first player name and use the closest recognized team name.
+    first_col = frame.columns[0] if len(frame.columns) else None
+    sample_name = ""
+    if first_col is not None and not frame.empty:
+        sample_name = clean_lidom_batter_name(
+            frame.iloc[0][first_col]
+        )
+
+    normalized_page = normalize_lidom_text(page_text)
+    sample_key = normalize_lidom_text(sample_name)
+
+    if sample_key:
+        position = normalized_page.find(sample_key)
+        if position >= 0:
+            nearby = normalized_page[
+                max(0, position - 700): position + 200
+            ]
+            team = identify_lidom_team_from_text(nearby)
+            if team:
+                return team
+
+    # Fallback: preserve page order. Official box scores normally list
+    # visiting batting table first and home batting table second.
+    known_teams = []
+    for team_name in LIDOM_TEAM_OPTIONS:
+        if any(
+            alias in normalized_page
+            for alias in LIDOM_TEAM_NAME_ALIASES[team_name]
+        ):
+            known_teams.append(team_name)
+
+    if len(known_teams) >= 2:
+        relative_index = [
+            item["index"]
+            for item in batting_tables
+        ].index(table_index)
+        return known_teams[
+            min(relative_index, len(known_teams) - 1)
+        ]
+
+    return ""
+
+
+def parse_lidom_batting_table(
+    frame,
+    team_name,
+    game_id,
+    game_date,
+    opponent,
+):
+    frame = flatten_lidom_table_columns(frame)
+
+    player_col = find_lidom_col(
+        frame,
+        ["Bateador", "Jugador", "Player", "Nombre"],
+    )
+    if player_col is None:
+        player_col = frame.columns[0]
+
+    aliases = {
+        "AB": ["AB", "Turnos"],
+        "R": ["R", "Carreras"],
+        "H": ["H", "Hits"],
+        "2B": ["2B"],
+        "3B": ["3B"],
+        "HR": ["HR"],
+        "RBI": ["RBI", "CE"],
+        "BB": ["BB", "Boletos"],
+        "SO": ["SO", "K", "Ponches"],
+        "AVG": ["AVG", "AVGA"],
+        "OBP": ["OBP"],
+        "SLG": ["SLG"],
+        "SB": ["SB", "BR"],
+        "CS": ["CS"],
+    }
+
+    mapped_cols = {
+        standard: find_lidom_col(frame, candidates)
+        for standard, candidates in aliases.items()
+    }
+
+    parsed_rows = []
+    lineup_candidates = []
+
+    for source_index, source_row in frame.iterrows():
+        player_name = clean_lidom_batter_name(
+            source_row.get(player_col, "")
+        )
+
+        if not player_name:
+            continue
+
+        normalized_name = normalize_lidom_text(player_name)
+        if normalized_name in {
+            "totales", "total", "team totals",
+            "bateador", "jugador",
+        }:
+            continue
+
+        row = {
+            "Date": game_date,
+            "GamePk": game_id,
+            "Team": team_name,
+            "Opponent": opponent,
+            "Player": player_name,
+            "PlayerID": "",
+            "Bats": "",
+            "Position": "",
+            "Source": "LIDOM Digimetrics",
+        }
+
+        for standard, source_col in mapped_cols.items():
+            if source_col is not None:
+                row[standard] = pd.to_numeric(
+                    source_row.get(source_col),
+                    errors="coerce",
+                )
+
+        parsed_rows.append(row)
+
+        # The first nine non-substitution rows in official batting order
+        # tables represent the starters. Indented or prefixed rows are
+        # generally substitutions.
+        raw_name = str(source_row.get(player_col, ""))
+        is_substitute = bool(
+            re.match(r"^\s{2,}", raw_name)
+            or re.match(r"^[a-z]\-", raw_name, flags=re.I)
+            or re.search(
+                r"\b(?:PH|PR|DR)\b",
+                raw_name,
+                flags=re.I,
+            )
+        )
+
+        if not is_substitute and player_name not in lineup_candidates:
+            lineup_candidates.append(player_name)
+
+    lineup_candidates = lineup_candidates[:9]
+
+    lineup_rows = []
+    for spot, player_name in enumerate(
+        lineup_candidates,
+        start=1,
+    ):
+        lineup_rows.append({
+            "Date": game_date,
+            "GamePk": game_id,
+            "Team": team_name,
+            "Opponent": opponent,
+            "Result": "",
+            "HomeAway": "",
+            "Venue": "",
+            "OpposingStarter": "",
+            "OpposingPitcherHand": "Unknown",
+            "LineupSpot": spot,
+            "PlayerID": "",
+            "Player": player_name,
+            "Bats": "",
+            "Position": "",
+            "Source": "LIDOM Digimetrics",
+        })
+
+    return lineup_rows, parsed_rows
+
+
+def aggregate_lidom_batting_stats(boxscore_rows):
+    if not boxscore_rows:
+        raise ValueError(
+            "No LIDOM batting box-score rows were available to aggregate."
+        )
+
+    df = pd.DataFrame(boxscore_rows)
+
+    count_stats = [
+        col for col in [
+            "AB", "R", "H", "2B", "3B", "HR",
+            "RBI", "BB", "SO", "SB", "CS",
+        ]
+        if col in df.columns
+    ]
+
+    for col in count_stats:
+        df[col] = pd.to_numeric(
+            df[col],
+            errors="coerce",
+        ).fillna(0)
+
+    grouped = (
+        df.groupby("Player", as_index=False)[count_stats]
+        .sum()
+    )
+
+    games = (
+        df.groupby("Player")["GamePk"]
+        .nunique()
+        .rename("G")
+        .reset_index()
+    )
+    grouped = grouped.merge(
+        games,
+        on="Player",
+        how="left",
+    )
+
+    # Approximate PA from official countable outcomes available in the
+    # box score. HBP/SF may not always be exposed, so PA is conservative.
+    grouped["PA"] = (
+        grouped.get("AB", 0)
+        + grouped.get("BB", 0)
+    )
+
+    grouped["AVG"] = np.where(
+        grouped.get("AB", 0) > 0,
+        grouped.get("H", 0) / grouped.get("AB", 0),
+        np.nan,
+    )
+
+    total_bases = (
+        grouped.get("H", 0)
+        + grouped.get("2B", 0)
+        + 2 * grouped.get("3B", 0)
+        + 3 * grouped.get("HR", 0)
+    )
+    grouped["TB"] = total_bases
+
+    grouped["SLG"] = np.where(
+        grouped.get("AB", 0) > 0,
+        total_bases / grouped.get("AB", 0),
+        np.nan,
+    )
+
+    grouped["OBP"] = np.where(
+        grouped["PA"] > 0,
+        (
+            grouped.get("H", 0)
+            + grouped.get("BB", 0)
+        ) / grouped["PA"],
+        np.nan,
+    )
+    grouped["OPS"] = grouped["OBP"] + grouped["SLG"]
+    grouped["ISO"] = grouped["SLG"] - grouped["AVG"]
+
+    grouped["BB%"] = np.where(
+        grouped["PA"] > 0,
+        grouped.get("BB", 0) / grouped["PA"] * 100,
+        np.nan,
+    )
+    grouped["K%"] = np.where(
+        grouped["PA"] > 0,
+        grouped.get("SO", 0) / grouped["PA"] * 100,
+        np.nan,
+    )
+
+    attempts = (
+        grouped.get("SB", 0)
+        + grouped.get("CS", 0)
+    )
+    grouped["SB%"] = np.where(
+        attempts > 0,
+        grouped.get("SB", 0) / attempts * 100,
+        np.nan,
+    )
+
+    grouped["_name_key"] = grouped["Player"].apply(
+        normalize_player_key
+    )
+
+    def player_keys(player_name):
+        key = normalize_player_key(player_name)
+        keys = {key} if key else set()
+        parts = key.split()
+        if len(parts) >= 2:
+            keys.add(parts[-1])
+            keys.add(f"{parts[0][0]} {parts[-1]}")
+        return sorted(keys)
+
+    grouped["_all_name_keys"] = grouped["Player"].apply(
+        player_keys
+    )
+
+    numeric_cols = [
+        col for col in grouped.columns
+        if col not in {
+            "Player", "_name_key", "_all_name_keys",
+        }
+        and pd.api.types.is_numeric_dtype(grouped[col])
+        and grouped[col].notna().sum() >= 3
+        and grouped[col].nunique(dropna=True) >= 2
+    ]
+
+    return grouped, numeric_cols
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_lidom_digimetrics_data(
+    selected_team_name,
+    selected_season,
+):
+    seed_urls = [
+        f"{LIDOM_DIGIMETRICS_BASE}/",
+        f"{LIDOM_DIGIMETRICS_BASE}/PlayByPlay",
+        f"{LIDOM_DIGIMETRICS_BASE}/Partido",
+        f"{LIDOM_DIGIMETRICS_BASE}/Partido/Index",
+    ]
+
+    game_links = set()
+    seed_errors = []
+
+    for seed_url in seed_urls:
+        try:
+            seed_html = lidom_request(seed_url)
+            game_links.update(
+                extract_lidom_game_links(
+                    seed_html,
+                    seed_url,
+                )
+            )
+        except Exception as exc:
+            seed_errors.append(
+                f"{seed_url}: {exc}"
+            )
+
+    if not game_links:
+        raise ValueError(
+            "Digimetrics did not expose any game-detail links. "
+            "The site may be temporarily blocking automated access."
+        )
+
+    lineup_rows = []
+    target_boxscore_rows = []
+    games_checked = 0
+    games_used = 0
+
+    for game_url in sorted(game_links):
+        try:
+            page_html = lidom_request(game_url)
+            game_date = find_date_in_lidom_page(page_html)
+
+            if not lidom_date_matches_season(
+                game_date,
+                selected_season,
+            ):
+                continue
+
+            page_text = unescape(
+                re.sub(r"<[^>]+>", " ", page_html)
+            )
+            normalized_page = normalize_lidom_text(
+                page_text
+            )
+
+            target_aliases = LIDOM_TEAM_NAME_ALIASES[
+                selected_team_name
+            ]
+            if not any(
+                alias in normalized_page
+                for alias in target_aliases
+            ):
+                continue
+
+            game_id_match = re.search(
+                r"idPartido=(\d+)",
+                game_url,
+                flags=re.I,
+            )
+            game_id = (
+                f"LIDOM-{game_id_match.group(1)}"
+                if game_id_match
+                else game_url
+            )
+
+            tables = pd.read_html(
+                StringIO(page_html)
+            )
+            batting_tables = detect_lidom_batting_tables(
+                tables
+            )
+            if len(batting_tables) < 2:
+                continue
+
+            team_tables = []
+            for batting_item in batting_tables:
+                team_name = infer_team_for_batting_table(
+                    batting_item["frame"],
+                    batting_item["index"],
+                    batting_tables,
+                    page_text,
+                )
+                team_tables.append(
+                    (
+                        team_name,
+                        batting_item["frame"],
+                    )
+                )
+
+            present_teams = [
+                team_name
+                for team_name, _ in team_tables
+                if team_name
+            ]
+            opponent = next(
+                (
+                    team
+                    for team in present_teams
+                    if team != selected_team_name
+                ),
+                "",
+            )
+
+            games_checked += 1
+
+            for team_name, batting_frame in team_tables:
+                if team_name != selected_team_name:
+                    continue
+
+                game_lineup, game_box_rows = (
+                    parse_lidom_batting_table(
+                        batting_frame,
+                        team_name=selected_team_name,
+                        game_id=game_id,
+                        game_date=game_date,
+                        opponent=opponent,
+                    )
+                )
+
+                if len(game_lineup) >= 7:
+                    lineup_rows.extend(game_lineup)
+                    target_boxscore_rows.extend(
+                        game_box_rows
+                    )
+                    games_used += 1
+                    break
+
+        except Exception:
+            continue
+
+    if not lineup_rows:
+        raise ValueError(
+            "No usable Digimetrics lineups were found for "
+            f"{selected_team_name}, {selected_season}. "
+            "The selected season may not be available from the site's "
+            "current game index."
+        )
+
+    lineups_df = pd.DataFrame(lineup_rows)
+    lineups_df = lineups_df.drop_duplicates(
+        subset=["GamePk", "LineupSpot", "Player"],
+    ).sort_values(
+        ["Date", "GamePk", "LineupSpot"],
+        na_position="last",
+    ).reset_index(drop=True)
+
+    stats_df, numeric_cols = (
+        aggregate_lidom_batting_stats(
+            target_boxscore_rows
+        )
+    )
+
+    source_note = (
+        "LIDOM Digimetrics official game box scores "
+        f"({games_used} games imported)"
+    )
+
+    return (
+        lineups_df,
+        stats_df,
+        numeric_cols,
+        source_note,
+    )
+
 def render_historical_analysis():
     st.subheader("Historical Lineup Construction Analysis")
 
@@ -2924,8 +3644,9 @@ def render_historical_analysis():
 
     else:
         st.caption(
-            "Select a LIDOM team and winter season, then upload historical lineups "
-            "and team batting statistics. The same analysis and PDF format will be used."
+            "Select a LIDOM team and winter season. The app automatically "
+            "loads official Digimetrics box scores, reconstructs the daily "
+            "batting orders, and aggregates team batting statistics."
         )
 
         selector_col1, selector_col2 = st.columns(2)
@@ -2948,47 +3669,16 @@ def render_historical_analysis():
                 key="historical_lidom_season_selector",
             )
 
-        selected_team_abbr = LIDOM_TEAM_OPTIONS[selected_team_name]
+        selected_team_abbr = LIDOM_TEAM_OPTIONS[
+            selected_team_name
+        ]
+        lineup_file = None
+        stats_file = None
 
-        upload_col1, upload_col2 = st.columns(2)
-        with upload_col1:
-            lineup_file = st.file_uploader(
-                "Historical Lineups CSV",
-                type=["csv"],
-                key="historical_lidom_lineups",
-                help=(
-                    "Use one row per player-game with Date, Player, and LineupSpot, "
-                    "or one row per game with lineup columns 1 through 9."
-                ),
-            )
-        with upload_col2:
-            stats_file = st.file_uploader(
-                "Team Season Stats CSV",
-                type=["csv"],
-                key="historical_lidom_stats",
-                help=(
-                    "Include a player name column and the batting metrics "
-                    "you want the app to evaluate."
-                ),
-            )
-
-        template_col1, template_col2 = st.columns(2)
-        with template_col1:
-            st.download_button(
-                "Download LIDOM Lineup Template",
-                data=lidom_lineup_template().to_csv(index=False).encode("utf-8"),
-                file_name="lidom_historical_lineups_template.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
-        with template_col2:
-            st.download_button(
-                "Download LIDOM Stats Template",
-                data=lidom_stats_template().to_csv(index=False).encode("utf-8"),
-                file_name="lidom_team_stats_template.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
+        st.caption(
+            "Official source: "
+            "https://estadisticas.lidom.com/"
+        )
 
     analyze = st.button(
         "Analyze Lineup Construction",
@@ -3007,14 +3697,6 @@ def render_historical_analysis():
             - Actual versus expected lineup placement
             - Lineup consistency and an automated philosophy summary
             """
-        )
-        return
-
-    if selected_league == "LIDOM" and (
-        lineup_file is None or stats_file is None
-    ):
-        st.error(
-            "Upload both the LIDOM historical lineups CSV and team season stats CSV."
         )
         return
 
@@ -3042,17 +3724,23 @@ def render_historical_analysis():
                     season,
                 )
             else:
-                lineups_df = standardize_lidom_lineups(
-                    lineup_file,
+                (
+                    lineups_df,
+                    stats_df,
+                    numeric_cols,
+                    digimetrics_source_note,
+                ) = load_lidom_digimetrics_data(
                     selected_team_name,
                     selected_season,
                 )
-                stats_df, numeric_cols = read_historical_stats_csv(
-                    stats_file
+                lineup_source_note = digimetrics_source_note
+                stats_source_note = (
+                    "Aggregated from the same official "
+                    "LIDOM Digimetrics box scores"
                 )
-                lineup_source_note = "Uploaded LIDOM historical lineups CSV"
-                stats_source_note = "Uploaded LIDOM team season stats CSV"
-                stats_source_url = ""
+                stats_source_url = (
+                    "https://estadisticas.lidom.com/"
+                )
 
             merged_df, unmatched, matched_players = merge_lineups_with_stats(
                 lineups_df,
