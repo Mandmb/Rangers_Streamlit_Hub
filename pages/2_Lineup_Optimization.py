@@ -5,8 +5,9 @@ apply_page_style()
 import pandas as pd
 import numpy as np
 import html
+from html import unescape
 from datetime import date
-from io import BytesIO
+from io import BytesIO, StringIO
 import tempfile
 import os
 import re
@@ -920,253 +921,413 @@ def fetch_json(url, timeout=20):
         return json.loads(response.read().decode("utf-8"))
 
 
-def parse_rotowire_batting_order_url(url):
+def parse_baseball_reference_url(url):
     parsed = urlparse(str(url).strip())
-    if "rotowire.com" not in parsed.netloc.lower():
-        raise ValueError("Please enter a RotoWire batting-orders URL.")
+    if "baseball-reference.com" not in parsed.netloc.lower():
+        raise ValueError("Please enter a Baseball Reference team batting-orders URL.")
 
-    if not parsed.path.lower().endswith("/baseball/batting-orders.php"):
+    match = re.search(
+        r"/teams/([A-Z0-9]{2,3})/(\d{4})-batting-orders\.shtml$",
+        parsed.path,
+        flags=re.I,
+    )
+    if not match:
         raise ValueError(
-            "Use a RotoWire team batting-orders URL such as "
-            "https://www.rotowire.com/baseball/batting-orders.php?team=LAD"
+            "Use a Baseball Reference URL such as "
+            "https://www.baseball-reference.com/teams/LAD/2025-batting-orders.shtml"
         )
 
-    query_parts = {}
-    for part in parsed.query.split("&"):
-        if "=" in part:
-            key, value = part.split("=", 1)
-            query_parts[key.lower()] = value
-
-    team_abbr = query_parts.get("team", "").strip().upper()
-    if not re.fullmatch(r"[A-Z]{2,3}", team_abbr):
-        raise ValueError("Could not detect the MLB team abbreviation from the URL.")
-
-    return team_abbr
+    team_abbr = match.group(1).upper()
+    season = int(match.group(2))
+    return team_abbr, season
 
 
-def build_rotowire_opener():
-    cookie_jar = http.cookiejar.CookieJar()
-    return build_opener(HTTPCookieProcessor(cookie_jar))
-
-
-def rotowire_request(opener, url, referer=None, timeout=25):
+def baseball_reference_request(url, timeout=30):
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/147.0.0.0 Safari/537.36"
         ),
-        "Accept": "text/csv,text/plain,application/json,text/html;q=0.9,*/*;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
         "Cache-Control": "no-cache",
     }
-    if referer:
-        headers["Referer"] = referer
-
     request = Request(url, headers=headers)
-    with opener.open(request, timeout=timeout) as response:
-        return response.read(), response.headers.get("Content-Type", "")
+    with urlopen(request, timeout=timeout) as response:
+        return response.read().decode("utf-8", errors="replace")
 
 
-def clean_rotowire_player_name(value):
-    if pd.isna(value):
-        return ""
-    name = str(value).strip()
-
-    # Remove HTML tags and common position/hand annotations.
-    name = re.sub(r"<[^>]+>", " ", name)
-    name = re.sub(r"\s+", " ", name).strip()
-    name = re.sub(r"\s*\((?:L|R|S|B|C|1B|2B|3B|SS|LF|CF|RF|OF|DH|UTIL)\)\s*$", "", name, flags=re.I)
-    name = re.sub(r"\s+(?:C|1B|2B|3B|SS|LF|CF|RF|OF|DH|UTIL)$", "", name, flags=re.I)
-    name = re.sub(r"^\d+\.\s*", "", name)
-    return name.strip()
+def uncomment_baseball_reference_tables(page_html):
+    # Baseball Reference often wraps data tables inside HTML comments.
+    comment_blocks = re.findall(r"<!--(.*?)-->", page_html, flags=re.S)
+    useful = [block for block in comment_blocks if "<table" in block.lower()]
+    if useful:
+        page_html = page_html + "\n" + "\n".join(useful)
+    return unescape(page_html)
 
 
-def infer_pitcher_hand(value):
-    text_value = str(value or "").upper()
-    if re.search(r"\bLHP\b|\(L\)|\bLEFT\b", text_value):
-        return "L"
-    if re.search(r"\bRHP\b|\(R\)|\bRIGHT\b", text_value):
-        return "R"
-    return "Unknown"
-
-
-def normalize_rotowire_columns(df):
+def flatten_html_columns(df):
     df = df.copy()
-    df.columns = [re.sub(r"\s+", " ", str(c)).strip() for c in df.columns]
-
-    # Flatten accidental duplicate headers or unnamed index columns.
-    df = df.loc[:, ~pd.Series(df.columns).str.match(r"^Unnamed", case=False, na=False).values]
+    if isinstance(df.columns, pd.MultiIndex):
+        flattened = []
+        for parts in df.columns:
+            clean_parts = [
+                str(part).strip()
+                for part in parts
+                if str(part).strip() and not str(part).startswith("Unnamed")
+            ]
+            flattened.append(" ".join(dict.fromkeys(clean_parts)).strip())
+        df.columns = flattened
+    else:
+        df.columns = [str(col).strip() for col in df.columns]
     return df
 
 
-def parse_rotowire_csv_bytes(raw_bytes, team_abbr):
-    if not raw_bytes:
-        raise ValueError("RotoWire returned an empty response.")
+def clean_bref_player_name(value):
+    if pd.isna(value):
+        return ""
+    value = str(value).strip()
+    value = re.sub(r"\s+", " ", value)
+    value = re.sub(r"^\d+[\.\)]\s*", "", value)
+    value = re.sub(r"\s+\*+$", "", value)
+    return value.strip()
 
-    text_data = raw_bytes.decode("utf-8-sig", errors="replace").strip()
-    if not text_data:
-        raise ValueError("RotoWire returned an empty CSV.")
 
-    # RotoWire may return HTML when the CSV request is blocked or redirected.
-    if text_data.lower().startswith("<!doctype") or "<html" in text_data[:500].lower():
+def detect_bref_batting_order_table(tables):
+    scored = []
+
+    for idx, table in enumerate(tables):
+        frame = flatten_html_columns(table)
+        cols = [str(c).strip() for c in frame.columns]
+        lower_cols = [c.lower() for c in cols]
+
+        spot_count = 0
+        for col in lower_cols:
+            if re.fullmatch(r"(?:batting order\s*)?[1-9]", col):
+                spot_count += 1
+            elif re.fullmatch(r"[1-9](?:st|nd|rd|th)", col):
+                spot_count += 1
+
+        has_date = any("date" == c or c.endswith(" date") for c in lower_cols)
+        has_game = any(c in {"g", "game", "game number", "gm"} for c in lower_cols)
+        has_opponent = any("opp" in c or "opponent" in c for c in lower_cols)
+
+        # Some Baseball Reference tables use generic labels and put the lineup
+        # in nine consecutive columns. Give larger tables a secondary score.
+        score = spot_count * 10 + int(has_date) * 4 + int(has_game) * 2 + int(has_opponent) * 3
+        if len(frame.columns) >= 10:
+            score += 2
+        if len(frame) >= 10:
+            score += 2
+
+        scored.append((score, idx, frame))
+
+    scored.sort(reverse=True, key=lambda item: item[0])
+
+    if not scored or scored[0][0] < 15:
+        detected = [
+            ", ".join(map(str, flatten_html_columns(t).columns[:12]))
+            for t in tables[:8]
+        ]
         raise ValueError(
-            "RotoWire returned its webpage instead of the downloadable CSV. "
-            "This can happen when the site blocks automated requests."
+            "Could not identify the Baseball Reference batting-order table. "
+            "Detected table headers: " + " | ".join(detected)
         )
 
-    parse_attempts = []
-    for sep in [",", "\t", ";"]:
-        try:
-            candidate = pd.read_csv(BytesIO(raw_bytes), sep=sep)
-            candidate = normalize_rotowire_columns(candidate)
-            parse_attempts.append(candidate)
-        except Exception:
-            pass
+    return scored[0][2]
 
-    if not parse_attempts:
-        raise ValueError("Could not parse the RotoWire batting-order download.")
 
-    # Prefer the parse with the largest useful column count.
-    df = max(parse_attempts, key=lambda frame: (len(frame.columns), len(frame)))
-    if df.empty:
-        raise ValueError("The RotoWire batting-order download contained no rows.")
-
-    lower_map = {str(c).lower().strip(): c for c in df.columns}
+def map_bref_columns(df):
+    cols = list(df.columns)
+    lower_map = {str(c).lower().strip(): c for c in cols}
 
     date_col = next(
-        (lower_map[k] for k in ["date", "game date", "gamedate"] if k in lower_map),
+        (col for key, col in lower_map.items() if key == "date" or key.endswith(" date")),
         None,
     )
-    pitcher_col = next(
-        (
-            lower_map[k]
-            for k in [
-                "opposing pitcher", "opponent pitcher", "opp pitcher",
-                "pitcher", "opposing starter", "opp. pitcher",
-            ]
-            if k in lower_map
-        ),
+    game_col = next(
+        (col for key, col in lower_map.items() if key in {"g", "game", "game number", "gm"}),
         None,
     )
     opponent_col = next(
-        (lower_map[k] for k in ["opponent", "opp", "opposing team"] if k in lower_map),
+        (col for key, col in lower_map.items() if "opp" in key or "opponent" in key),
+        None,
+    )
+    result_col = next(
+        (col for key, col in lower_map.items() if key in {"result", "w/l", "wl", "res"}),
         None,
     )
 
-    # The RotoWire historical table normally labels batting positions 1 through 9.
     spot_cols = {}
-    for col in df.columns:
+    for col in cols:
         cleaned = str(col).strip().lower()
-        match = re.fullmatch(r"(?:spot\s*)?([1-9])(?:st|nd|rd|th)?", cleaned)
+        match = re.fullmatch(r"(?:batting order\s*)?([1-9])", cleaned)
         if match:
             spot_cols[int(match.group(1))] = col
             continue
 
-        match = re.fullmatch(r"(?:lineup|batting order|order)\s*([1-9])", cleaned)
+        match = re.fullmatch(r"([1-9])(?:st|nd|rd|th)", cleaned)
+        if match:
+            spot_cols[int(match.group(1))] = col
+            continue
+
+        match = re.fullmatch(r"(?:spot|order|lineup)\s*([1-9])", cleaned)
         if match:
             spot_cols[int(match.group(1))] = col
 
-    # Support CSVs where player columns are labeled Player 1 ... Player 9.
     if len(spot_cols) < 9:
-        for col in df.columns:
-            cleaned = str(col).strip().lower()
-            match = re.fullmatch(r"player\s*([1-9])", cleaned)
-            if match:
-                spot_cols[int(match.group(1))] = col
+        # Fallback: identify nine player-like columns after metadata columns.
+        excluded = {c for c in [date_col, game_col, opponent_col, result_col] if c is not None}
+        candidates = [c for c in cols if c not in excluded]
+
+        player_like = []
+        for col in candidates:
+            sample = df[col].dropna().astype(str).head(20)
+            if sample.empty:
+                continue
+            text_ratio = sample.str.contains(r"[A-Za-z]", regex=True).mean()
+            numeric_ratio = pd.to_numeric(sample, errors="coerce").notna().mean()
+            if text_ratio >= 0.6 and numeric_ratio < 0.5:
+                player_like.append(col)
+
+        if len(player_like) >= 9:
+            spot_cols = {spot: player_like[spot - 1] for spot in range(1, 10)}
 
     if len(spot_cols) < 9:
         raise ValueError(
-            "The RotoWire download did not contain recognizable lineup columns 1 through 9. "
-            f"Detected columns: {', '.join(map(str, df.columns))}"
+            "The Baseball Reference table was found, but lineup spots 1 through 9 "
+            "could not be identified."
         )
+
+    return date_col, game_col, opponent_col, result_col, spot_cols
+
+
+def parse_baseball_reference_table(df, team_abbr, season):
+    df = flatten_html_columns(df)
+    date_col, game_col, opponent_col, result_col, spot_cols = map_bref_columns(df)
 
     rows = []
-    synthetic_counter = 0
+    game_counter = 0
 
     for row_index, source_row in df.iterrows():
-        raw_date = source_row.get(date_col, "") if date_col else ""
-        parsed_date = pd.to_datetime(raw_date, errors="coerce")
-        game_date = parsed_date.date() if pd.notna(parsed_date) else None
-
-        pitcher_text = source_row.get(pitcher_col, "") if pitcher_col else ""
-        opponent_text = source_row.get(opponent_col, "") if opponent_col else ""
-
         lineup_names = [
-            clean_rotowire_player_name(source_row.get(spot_cols.get(spot), ""))
+            clean_bref_player_name(source_row.get(spot_cols[spot], ""))
             for spot in range(1, 10)
         ]
-        lineup_names = [name for name in lineup_names if name and name.lower() not in {"nan", "none", "-", "n/a"}]
 
-        if len(lineup_names) < 7:
+        valid_names = [
+            name for name in lineup_names
+            if name and name.lower() not in {"nan", "none", "-", "n/a", "did not play"}
+        ]
+        if len(valid_names) < 7:
             continue
 
-        synthetic_counter += 1
+        raw_date = source_row.get(date_col, "") if date_col else ""
+        parsed_date = pd.to_datetime(raw_date, errors="coerce")
+
+        if pd.isna(parsed_date):
+            # Baseball Reference sometimes omits the year in date labels.
+            parsed_date = pd.to_datetime(
+                f"{raw_date} {season}",
+                errors="coerce",
+            )
+
+        game_date = parsed_date.date() if pd.notna(parsed_date) else None
+        raw_game = source_row.get(game_col, "") if game_col else ""
+        opponent = str(source_row.get(opponent_col, "") if opponent_col else "").strip()
+        result = str(source_row.get(result_col, "") if result_col else "").strip()
+
+        game_counter += 1
         game_id = (
-            f"RW-{team_abbr}-{game_date.isoformat()}-{synthetic_counter}"
+            f"BR-{team_abbr}-{game_date.isoformat()}-{raw_game or game_counter}"
             if game_date
-            else f"RW-{team_abbr}-ROW-{row_index}-{synthetic_counter}"
+            else f"BR-{team_abbr}-{season}-{raw_game or game_counter}"
         )
 
-        pitcher_hand = infer_pitcher_hand(pitcher_text)
-        pitcher_name = re.sub(r"\s*\((?:L|R)\)\s*", " ", str(pitcher_text), flags=re.I)
-        pitcher_name = re.sub(r"\b(?:LHP|RHP)\b", " ", pitcher_name, flags=re.I)
-        pitcher_name = re.sub(r"\s+", " ", pitcher_name).strip()
-
         for spot in range(1, 10):
-            player_name = clean_rotowire_player_name(source_row.get(spot_cols.get(spot), ""))
-            if not player_name or player_name.lower() in {"nan", "none", "-", "n/a"}:
+            player_name = clean_bref_player_name(source_row.get(spot_cols[spot], ""))
+            if not player_name or player_name.lower() in {
+                "nan", "none", "-", "n/a", "did not play"
+            }:
                 continue
 
             rows.append({
                 "Date": game_date,
                 "GamePk": game_id,
                 "Team": team_abbr,
-                "Opponent": str(opponent_text).strip(),
-                "HomeAway": "",
+                "Opponent": opponent,
+                "Result": result,
+                "HomeAway": "Away" if opponent.startswith("@") else "Home",
                 "Venue": "",
-                "OpposingStarter": pitcher_name,
-                "OpposingPitcherHand": pitcher_hand,
+                "OpposingStarter": "",
+                "OpposingPitcherHand": "Unknown",
                 "LineupSpot": spot,
                 "PlayerID": "",
                 "Player": player_name,
                 "Bats": "",
                 "Position": "",
-                "Source": "RotoWire",
+                "Source": "Baseball Reference",
             })
 
     if not rows:
-        raise ValueError("No completed historical batting orders could be extracted from the RotoWire CSV.")
+        raise ValueError("No completed historical batting orders were found on the page.")
 
-    result = pd.DataFrame(rows)
-    result = result.drop_duplicates(subset=["GamePk", "LineupSpot", "Player"])
-    result = result.sort_values(["Date", "GamePk", "LineupSpot"], na_position="last").reset_index(drop=True)
-    return result
+    result_df = pd.DataFrame(rows)
+    result_df = result_df.drop_duplicates(subset=["GamePk", "LineupSpot", "Player"])
+    result_df = result_df.sort_values(
+        ["Date", "GamePk", "LineupSpot"],
+        na_position="last",
+    ).reset_index(drop=True)
+    return result_df
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def load_rotowire_lineups(url):
-    team_abbr = parse_rotowire_batting_order_url(url)
-    page_url = f"https://www.rotowire.com/baseball/batting-orders.php?team={team_abbr}"
-    csv_url = f"https://www.rotowire.com/baseball/extra/csv/batting-orders.php?team={team_abbr}"
+def load_baseball_reference_lineups(url):
+    team_abbr, season = parse_baseball_reference_url(url)
+    page_html = baseball_reference_request(url)
+    page_html = uncomment_baseball_reference_tables(page_html)
 
-    opener = build_rotowire_opener()
-
-    # Visit the team page first so RotoWire can set any normal browser cookies.
     try:
-        rotowire_request(opener, page_url, timeout=25)
-    except Exception:
-        # The CSV request may still work even if the initial page request fails.
-        pass
+        tables = pd.read_html(StringIO(page_html))
+    except ValueError:
+        raise ValueError("Baseball Reference returned no readable tables.")
 
-    raw_bytes, _content_type = rotowire_request(
-        opener,
-        csv_url,
-        referer=page_url,
-        timeout=30,
+    batting_order_table = detect_bref_batting_order_table(tables)
+    lineups_df = parse_baseball_reference_table(
+        batting_order_table,
+        team_abbr,
+        season,
     )
-    lineups_df = parse_rotowire_csv_bytes(raw_bytes, team_abbr)
-    return lineups_df, team_abbr
+    return lineups_df, team_abbr, season
+
+
+def calculate_expected_spots(merged_df, numeric_cols):
+    work = merged_df.copy()
+
+    usable = []
+    for col in numeric_cols:
+        vals = pd.to_numeric(work[col], errors="coerce")
+        if vals.notna().sum() >= 6 and vals.nunique(dropna=True) >= 2:
+            usable.append(col)
+
+    if not usable:
+        return pd.DataFrame()
+
+    # Use the most complete metrics, capped to avoid overfitting small samples.
+    completeness = {
+        col: pd.to_numeric(work[col], errors="coerce").notna().mean()
+        for col in usable
+    }
+    model_cols = sorted(
+        usable,
+        key=lambda col: completeness[col],
+        reverse=True,
+    )[:12]
+
+    player_profiles = (
+        work.groupby("Player")[model_cols + ["LineupSpot"]]
+        .mean(numeric_only=True)
+        .reset_index()
+    )
+
+    if len(player_profiles) < 3:
+        return pd.DataFrame()
+
+    X = player_profiles[model_cols].apply(pd.to_numeric, errors="coerce")
+    X = X.fillna(X.median(numeric_only=True)).fillna(0)
+
+    std = X.std(ddof=0).replace(0, 1)
+    X_scaled = (X - X.mean()) / std
+
+    y = player_profiles["LineupSpot"].astype(float)
+    design = np.column_stack([np.ones(len(X_scaled)), X_scaled.values])
+
+    try:
+        coefficients, *_ = np.linalg.lstsq(design, y.values, rcond=None)
+        predicted = design @ coefficients
+    except Exception:
+        return pd.DataFrame()
+
+    predicted = np.clip(predicted, 1, 9)
+    player_profiles["ActualAverageSpot"] = y.round(2)
+    player_profiles["ExpectedSpot"] = np.round(predicted, 2)
+    player_profiles["ActualMinusExpected"] = (
+        player_profiles["ActualAverageSpot"] - player_profiles["ExpectedSpot"]
+    ).round(2)
+    player_profiles["Interpretation"] = np.where(
+        player_profiles["ActualMinusExpected"] < -0.50,
+        "Used earlier than profile",
+        np.where(
+            player_profiles["ActualMinusExpected"] > 0.50,
+            "Used later than profile",
+            "Close to expected",
+        ),
+    )
+
+    return player_profiles[
+        [
+            "Player",
+            "ActualAverageSpot",
+            "ExpectedSpot",
+            "ActualMinusExpected",
+            "Interpretation",
+        ]
+    ].sort_values("ActualMinusExpected").reset_index(drop=True)
+
+
+def build_lineup_archetypes(merged_df, numeric_cols):
+    preferred = [
+        c for c in [
+            "AVG", "OBP", "SLG", "OPS", "ISO", "BB%", "K%",
+            "Contact%", "Chase%", "SB", "wOBA", "wRC+",
+        ]
+        if c in numeric_cols
+    ]
+    metrics = preferred[:8] if preferred else numeric_cols[:8]
+    if not metrics:
+        return pd.DataFrame()
+
+    work = merged_df.copy()
+    work["LineupGroup"] = pd.cut(
+        pd.to_numeric(work["LineupSpot"], errors="coerce"),
+        bins=[0, 2, 5, 9],
+        labels=["Table Setters (1-2)", "Run Producers (3-5)", "Bottom Order (6-9)"],
+    )
+
+    grouped = (
+        work.groupby("LineupGroup", observed=False)[metrics]
+        .mean(numeric_only=True)
+        .reset_index()
+    )
+
+    overall = work[metrics].mean(numeric_only=True)
+    std = work[metrics].std(numeric_only=True).replace(0, np.nan)
+
+    descriptions = []
+    for _, row in grouped.iterrows():
+        strengths = []
+        weaknesses = []
+
+        for metric in metrics:
+            if pd.isna(row.get(metric)) or pd.isna(std.get(metric)):
+                continue
+            z = (row[metric] - overall[metric]) / std[metric]
+            inverse = metric.upper() in {"K%", "CHASE%", "GB%"}
+
+            if (z >= 0.30 and not inverse) or (z <= -0.30 and inverse):
+                strengths.append(metric)
+            elif (z <= -0.30 and not inverse) or (z >= 0.30 and inverse):
+                weaknesses.append(metric)
+
+        strength_text = ", ".join(strengths[:3]) if strengths else "Balanced profile"
+        weakness_text = ", ".join(weaknesses[:2]) if weaknesses else "No major weakness"
+        descriptions.append(
+            f"Emphasizes {strength_text}; lower emphasis on {weakness_text}."
+        )
+
+    grouped["ArchetypeSummary"] = descriptions
+    return grouped
 
 
 def read_historical_stats_csv(uploaded_file):
@@ -1364,11 +1525,22 @@ def build_philosophy_summary(importance_df, merged_df, consistency):
             phrases.append(f"{row['Trait']} ({direction} in the order)")
         lead = "The strongest observed lineup-placement relationships are " + ", ".join(phrases) + "."
 
-    hand_counts = merged_df["OpposingPitcherHand"].value_counts()
-    hand_text = (
-        f"The sample includes {int(hand_counts.get('R', 0)) // 9} games versus right-handed starters "
-        f"and {int(hand_counts.get('L', 0)) // 9} versus left-handed starters."
-    )
+    hand_counts = merged_df.get(
+        "OpposingPitcherHand",
+        pd.Series(dtype=str),
+    ).value_counts()
+    rhp_games = int(hand_counts.get("R", 0)) // 9
+    lhp_games = int(hand_counts.get("L", 0)) // 9
+    if rhp_games or lhp_games:
+        hand_text = (
+            f"The sample includes {rhp_games} games versus right-handed starters "
+            f"and {lhp_games} versus left-handed starters."
+        )
+    else:
+        hand_text = (
+            f"The sample includes {merged_df['GamePk'].nunique()} historical lineups. "
+            "Opposing pitcher handedness is not supplied by this Baseball Reference table."
+        )
     consistency_text = (
         f"Lineup consistency is {consistency:.1f}%, combining repeated starters and repeated batting-order spots."
     )
@@ -1467,19 +1639,19 @@ def historical_analysis_pdf(team_name, date_range, summary_text, importance_df, 
 def render_historical_analysis():
     st.subheader("Historical Lineup Construction Analysis")
     st.caption(
-        "Paste a RotoWire team batting-orders URL and upload a season-stat CSV. "
-        "The app imports the Previous Games table and matches those lineups to player traits."
+        "Paste a Baseball Reference team batting-orders URL and upload a season-stat CSV. "
+        "The app imports the full-season batting-order table and matches those lineups to player traits."
     )
 
     st.info(
-        "RotoWire provides a larger historical batting-order table from one team URL. "
-        "The app uses the downloadable CSV behind that page."
+        "Baseball Reference provides a season-long batting-order history from one team URL. "
+        "The app reads the full batting-order table directly from that page."
     )
 
     url_text = st.text_input(
-        "RotoWire Team Batting-Orders URL",
-        placeholder="https://www.rotowire.com/baseball/batting-orders.php?team=LAD",
-        key="historical_rotowire_url",
+        "Baseball Reference Team Batting-Orders URL",
+        placeholder="https://www.baseball-reference.com/teams/LAD/2025-batting-orders.shtml",
+        key="historical_baseball_reference_url",
     )
     season_stats_file = st.file_uploader(
         "Season Stats CSV",
@@ -1500,19 +1672,20 @@ def render_historical_analysis():
             - Trait importance for batting-order placement
             - Average player profile by lineup spot
             - Player start frequency and average lineup position
-            - Results split by opposing pitcher hand
+            - Table-setter, run-producer, and bottom-order archetypes
+            - Actual versus expected lineup placement
             - Lineup consistency and an automated philosophy summary
             """
         )
         return
 
     if not url_text.strip() or season_stats_file is None:
-        st.error("Add a RotoWire batting-orders URL and upload the season stats CSV.")
+        st.error("Add a Baseball Reference batting-orders URL and upload the season stats CSV.")
         return
 
     try:
-        with st.spinner("Loading RotoWire historical batting orders and matching season statistics..."):
-            lineups_df, team_abbr = load_rotowire_lineups(url_text)
+        with st.spinner("Loading Baseball Reference season batting orders and matching season statistics..."):
+            lineups_df, team_abbr, season = load_baseball_reference_lineups(url_text)
             team_slug = team_abbr.lower()
             stats_df, numeric_cols = read_historical_stats_csv(season_stats_file)
             merged_df, unmatched = merge_lineups_with_stats(lineups_df, stats_df)
@@ -1548,6 +1721,8 @@ def render_historical_analysis():
     importance = calculate_trait_importance(analysis_df, numeric_cols)
     profiles = calculate_spot_profiles(analysis_df, numeric_cols)
     usage = calculate_usage_table(analysis_df)
+    archetypes = build_lineup_archetypes(analysis_df, numeric_cols)
+    expected_spots = calculate_expected_spots(analysis_df, numeric_cols)
     consistency = calculate_lineup_consistency(analysis_df)
     philosophy = build_philosophy_summary(importance, analysis_df, consistency)
 
@@ -1572,10 +1747,22 @@ def render_historical_analysis():
     st.markdown("### Player Usage")
     st.dataframe(usage, use_container_width=True, hide_index=True)
 
+    st.markdown("### Lineup Archetypes")
+    if archetypes.empty:
+        st.info("Not enough compatible metrics were available to create lineup archetypes.")
+    else:
+        st.dataframe(archetypes, use_container_width=True, hide_index=True)
+
+    st.markdown("### Actual vs Expected Lineup Spot")
+    if expected_spots.empty:
+        st.info("Not enough matched player profiles were available to estimate expected lineup spots.")
+    else:
+        st.dataframe(expected_spots, use_container_width=True, hide_index=True)
+
     st.markdown("### Imported Historical Lineups")
     display_cols = [
-        "Date", "Opponent", "OpposingStarter",
-        "OpposingPitcherHand", "LineupSpot", "Player",
+        "Date", "Opponent", "Result", "HomeAway",
+        "LineupSpot", "Player",
     ]
     st.dataframe(
         lineups_df[display_cols],
@@ -1591,7 +1778,7 @@ def render_historical_analysis():
         st.download_button(
             "Download Imported Lineups CSV",
             data=lineups_df.to_csv(index=False).encode("utf-8"),
-            file_name=f"{team_abbr.lower()}_historical_lineups.csv",
+            file_name=f"{team_abbr.lower()}_{season}_historical_lineups.csv",
             mime="text/csv",
             use_container_width=True,
         )
@@ -1599,7 +1786,7 @@ def render_historical_analysis():
         st.download_button(
             "Download Analysis CSV",
             data=importance.to_csv(index=False).encode("utf-8"),
-            file_name=f"{team_abbr.lower()}_lineup_trait_importance.csv",
+            file_name=f"{team_abbr.lower()}_{season}_lineup_trait_importance.csv",
             mime="text/csv",
             use_container_width=True,
         )
@@ -1615,7 +1802,7 @@ def render_historical_analysis():
         st.download_button(
             "Export Analysis PDF",
             data=pdf,
-            file_name=f"{team_abbr.lower()}_lineup_construction_analysis.pdf",
+            file_name=f"{team_abbr.lower()}_{season}_lineup_construction_analysis.pdf",
             mime="application/pdf",
             use_container_width=True,
         )
@@ -1771,8 +1958,8 @@ st.write(
     """
     - Use the analysis-mode selector to switch between optimization and historical analysis.
     - Upload all three optimizer CSVs to activate the optimization PDF export.
-    - Historical analysis accepts a RotoWire team batting-orders URL and a season-stat CSV.
-    - The importer reads RotoWire's downloadable Previous Games batting-order table.
+    - Historical analysis accepts a Baseball Reference team batting-orders URL and a season-stat CSV.
+    - The importer reads the full-season batting-order table directly from Baseball Reference.
     - The historical mode reports observed relationships; it does not claim causal intent.
     - The PDF uses your uploaded team logo and automatically detects team colors for the optimizer theme.
     - Batting hand colors stay fixed: LHH red, switch hitters blue, RHH black.
