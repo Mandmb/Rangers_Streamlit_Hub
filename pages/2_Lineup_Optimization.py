@@ -1179,7 +1179,11 @@ def calculate_trait_importance(merged_df, numeric_cols, min_rows=6):
         if n < min_rows or values[valid].nunique() < 2:
             continue
 
-        corr = values[valid].corr(work.loc[valid, "EarlierLineupValue"], method="spearman")
+        # Calculate Spearman correlation without SciPy.
+        # Spearman is simply Pearson correlation applied to ranked values.
+        ranked_trait = values.loc[valid].rank(method="average")
+        ranked_lineup = work.loc[valid, "EarlierLineupValue"].rank(method="average")
+        corr = ranked_trait.corr(ranked_lineup, method="pearson")
         if pd.isna(corr):
             continue
         records.append({
