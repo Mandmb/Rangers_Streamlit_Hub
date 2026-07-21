@@ -955,6 +955,40 @@ MLB_TEAM_OPTIONS = {
 }
 
 
+MLB_TEAM_IDS_BY_BREF_ABBR = {
+    "ARI": 109,
+    "ATH": 133,
+    "ATL": 144,
+    "BAL": 110,
+    "BOS": 111,
+    "CHC": 112,
+    "CHW": 145,
+    "CIN": 113,
+    "CLE": 114,
+    "COL": 115,
+    "DET": 116,
+    "HOU": 117,
+    "KCR": 118,
+    "LAA": 108,
+    "LAD": 119,
+    "MIA": 146,
+    "MIL": 158,
+    "MIN": 142,
+    "NYM": 121,
+    "NYY": 147,
+    "PHI": 143,
+    "PIT": 134,
+    "SDP": 135,
+    "SFG": 137,
+    "SEA": 136,
+    "STL": 138,
+    "TBR": 139,
+    "TEX": 140,
+    "TOR": 141,
+    "WSN": 120,
+}
+
+
 def build_baseball_reference_url(team_abbr, season):
     return (
         f"https://www.baseball-reference.com/teams/"
@@ -1371,6 +1405,219 @@ def build_lineup_archetypes(merged_df, numeric_cols):
     return grouped
 
 
+
+def get_mlb_pitcher_hand(feed, side_key, probable_pitcher_id=None):
+    players = feed.get("gameData", {}).get("players", {})
+
+    if probable_pitcher_id:
+        player_data = players.get(f"ID{probable_pitcher_id}", {})
+        hand = player_data.get("pitchHand", {}).get("code")
+        if hand:
+            return str(hand).upper()
+
+    team_box = (
+        feed.get("liveData", {})
+        .get("boxscore", {})
+        .get("teams", {})
+        .get(side_key, {})
+    )
+    pitcher_ids = team_box.get("pitchers", [])
+    if pitcher_ids:
+        player_data = players.get(f"ID{pitcher_ids[0]}", {})
+        hand = player_data.get("pitchHand", {}).get("code")
+        if hand:
+            return str(hand).upper()
+
+    return "Unknown"
+
+
+def extract_mlb_daily_lineup(feed, team_id, game_date):
+    game_data = feed.get("gameData", {})
+    teams = game_data.get("teams", {})
+    home_id = teams.get("home", {}).get("id")
+    away_id = teams.get("away", {}).get("id")
+
+    if team_id == home_id:
+        team_side, opponent_side = "home", "away"
+    elif team_id == away_id:
+        team_side, opponent_side = "away", "home"
+    else:
+        return []
+
+    live_data = feed.get("liveData", {})
+    boxscore = live_data.get("boxscore", {})
+    team_box = boxscore.get("teams", {}).get(team_side, {})
+    batting_order = team_box.get("battingOrder", [])
+
+    if len(batting_order) < 9:
+        return []
+
+    players = game_data.get("players", {})
+    probable_pitcher = (
+        game_data.get("probablePitchers", {}).get(opponent_side, {})
+    )
+    pitcher_id = probable_pitcher.get("id")
+    pitcher_hand = get_mlb_pitcher_hand(
+        feed,
+        opponent_side,
+        pitcher_id,
+    )
+
+    opponent_name = teams.get(opponent_side, {}).get("name", "")
+    game_pk = game_data.get("game", {}).get("pk", "")
+    venue = game_data.get("venue", {}).get("name", "")
+
+    linescore = live_data.get("linescore", {})
+    home_runs = linescore.get("teams", {}).get("home", {}).get("runs")
+    away_runs = linescore.get("teams", {}).get("away", {}).get("runs")
+
+    if home_runs is not None and away_runs is not None:
+        team_runs = home_runs if team_side == "home" else away_runs
+        opponent_runs = away_runs if team_side == "home" else home_runs
+        result = "W" if team_runs > opponent_runs else "L" if team_runs < opponent_runs else "T"
+        result = f"{result} {team_runs}-{opponent_runs}"
+    else:
+        result = ""
+
+    rows = []
+    for spot, player_id in enumerate(batting_order[:9], start=1):
+        player_data = players.get(f"ID{player_id}", {})
+        box_player = team_box.get("players", {}).get(f"ID{player_id}", {})
+
+        position = (
+            box_player.get("position", {}).get("abbreviation")
+            or player_data.get("primaryPosition", {}).get("abbreviation")
+            or ""
+        )
+        bats = player_data.get("batSide", {}).get("code", "")
+
+        rows.append({
+            "Date": pd.to_datetime(game_date).date(),
+            "GamePk": game_pk,
+            "Team": teams.get(team_side, {}).get("name", ""),
+            "Opponent": opponent_name,
+            "Result": result,
+            "HomeAway": "Home" if team_side == "home" else "Away",
+            "Venue": venue,
+            "OpposingStarter": probable_pitcher.get("fullName", ""),
+            "OpposingPitcherHand": pitcher_hand,
+            "LineupSpot": spot,
+            "PlayerID": player_id,
+            "Player": player_data.get(
+                "fullName",
+                box_player.get("person", {}).get("fullName", ""),
+            ),
+            "Bats": bats,
+            "Position": position,
+            "Source": "MLB Official Game Feed",
+        })
+
+    return rows
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def load_official_mlb_lineups(team_abbr, season):
+    team_id = MLB_TEAM_IDS_BY_BREF_ABBR.get(team_abbr)
+    if not team_id:
+        raise ValueError(f"Could not find MLB team ID for {team_abbr}.")
+
+    schedule_url = (
+        "https://statsapi.mlb.com/api/v1/schedule"
+        f"?sportId=1&teamId={team_id}"
+        f"&startDate={int(season)}-01-01"
+        f"&endDate={int(season)}-12-31"
+    )
+    schedule = fetch_json(schedule_url)
+
+    rows = []
+    for date_block in schedule.get("dates", []):
+        game_date = date_block.get("date")
+        for game in date_block.get("games", []):
+            status = game.get("status", {}).get("abstractGameState", "")
+            if status not in {"Final", "Live"}:
+                continue
+
+            game_pk = game.get("gamePk")
+            if not game_pk:
+                continue
+
+            try:
+                feed = fetch_json(
+                    f"https://statsapi.mlb.com/api/v1.1/game/{game_pk}/feed/live"
+                )
+                rows.extend(
+                    extract_mlb_daily_lineup(
+                        feed,
+                        team_id=team_id,
+                        game_date=game_date,
+                    )
+                )
+            except Exception:
+                continue
+
+    if not rows:
+        raise ValueError(
+            "No completed daily lineups were found for the selected team and season."
+        )
+
+    result = pd.DataFrame(rows)
+    result = result.drop_duplicates(
+        subset=["GamePk", "LineupSpot", "PlayerID"]
+    )
+    result = result.sort_values(
+        ["Date", "GamePk", "LineupSpot"]
+    ).reset_index(drop=True)
+    return result
+
+
+def baseball_reference_data_is_daily(lineups_df, season):
+    if lineups_df is None or lineups_df.empty:
+        return False
+
+    dates = pd.to_datetime(lineups_df.get("Date"), errors="coerce")
+    valid_dates = dates.notna().sum()
+    unique_dates = dates.dropna().dt.date.nunique()
+
+    if valid_dates < min(10, len(lineups_df) * 0.50):
+        return False
+
+    if unique_dates < 5:
+        return False
+
+    year_matches = (dates.dropna().dt.year == int(season)).mean()
+    if year_matches < 0.80:
+        return False
+
+    names = lineups_df.get("Player", pd.Series(dtype=str)).astype(str)
+    bad_name_ratio = names.str.contains(
+        r"\bPlayers?\b|-\d+$|-(?:C|1B|2B|3B|SS|LF|CF|RF|OF|DH)$",
+        regex=True,
+        case=False,
+        na=False,
+    ).mean()
+
+    return bad_name_ratio < 0.20
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def load_historical_lineups_with_fallback(url, team_abbr, season):
+    source_note = ""
+
+    try:
+        bref_df, _, _ = load_baseball_reference_lineups(url)
+        if baseball_reference_data_is_daily(bref_df, season):
+            source_note = "Baseball Reference daily batting-order table"
+            return bref_df, source_note
+    except Exception:
+        pass
+
+    mlb_df = load_official_mlb_lineups(team_abbr, season)
+    source_note = (
+        "MLB official game feeds were used because the Baseball Reference page "
+        "returned a summary table rather than true daily lineups."
+    )
+    return mlb_df, source_note
+
 def read_historical_stats_csv(uploaded_file):
     try:
         df = pd.read_csv(uploaded_file)
@@ -1378,27 +1625,77 @@ def read_historical_stats_csv(uploaded_file):
         raise ValueError(f"Could not read season stats CSV: {exc}")
 
     df = clean_colnames(df)
-    name_col = find_column(
-        df,
-        ["playerFullName", "PlayerFullName", "Player", "Name", "playerName", "player_name"],
-    )
-    if not name_col:
-        raise ValueError("Could not find a player-name column in the season stats CSV.")
 
-    df["Player"] = df[name_col].astype(str).str.strip()
+    candidate_name_columns = [
+        col for col in [
+            find_column(df, ["playerFullName", "PlayerFullName", "Full Name"]),
+            find_column(df, ["Player", "Name", "playerName", "player_name"]),
+            find_column(df, ["abbrevName", "AbbrevName", "Abbreviated Name"]),
+            find_column(df, ["player", "Last Name", "lastName"]),
+        ]
+        if col is not None
+    ]
+    candidate_name_columns = list(dict.fromkeys(candidate_name_columns))
+
+    if not candidate_name_columns:
+        raise ValueError(
+            "Could not find a player-name column in the season stats CSV."
+        )
+
+    primary_name_col = (
+        find_column(df, ["playerFullName", "PlayerFullName", "Full Name"])
+        or candidate_name_columns[0]
+    )
+
+    df["Player"] = df[primary_name_col].astype(str).str.strip()
+
+    # Remove total rows, repeated header rows, and blank-name rows.
+    invalid_names = {
+        "", "nan", "none", "null", "total",
+        "playerfullname", "player", "name",
+    }
+    df = df[
+        ~df["Player"].str.lower().str.strip().isin(invalid_names)
+    ].copy()
+
+    # Build multiple normalized keys for each player.
+    def row_name_keys(row):
+        keys = set()
+        for col in candidate_name_columns:
+            value = row.get(col)
+            key = normalize_player_key(value)
+            if key and key not in invalid_names:
+                keys.add(key)
+
+                parts = key.split()
+                if len(parts) >= 2:
+                    keys.add(parts[-1])
+                    keys.add(f"{parts[0][0]} {parts[-1]}")
+        return sorted(keys)
+
+    df["_all_name_keys"] = df.apply(row_name_keys, axis=1)
     df["_name_key"] = df["Player"].apply(normalize_player_key)
 
     excluded = {
-        name_col, "Player", "_name_key", "playerid", "player id", "id",
-        "team", "level", "position", "pos", "bats", "batshand",
+        primary_name_col.lower(),
+        "player", "_name_key", "_all_name_keys",
+        "playerid", "player id", "id",
+        "team", "level", "position", "pos",
+        "bats", "batshand",
     }
 
     numeric_cols = []
     for col in df.columns:
         if str(col).lower().strip() in excluded:
             continue
+        if col in candidate_name_columns:
+            continue
+
         converted = pd.to_numeric(
-            df[col].astype(str).str.replace("%", "", regex=False).str.replace(",", "", regex=False),
+            df[col]
+            .astype(str)
+            .str.replace("%", "", regex=False)
+            .str.replace(",", "", regex=False),
             errors="coerce",
         )
         if converted.notna().sum() >= max(3, int(len(df) * 0.25)):
@@ -1406,9 +1703,12 @@ def read_historical_stats_csv(uploaded_file):
             numeric_cols.append(col)
 
     if not numeric_cols:
-        raise ValueError("No usable numeric stat columns were detected in the season stats CSV.")
+        raise ValueError(
+            "No usable numeric stat columns were detected in the season stats CSV."
+        )
 
     return df, numeric_cols
+
 
 
 def best_name_match(name_key, stats_keys, threshold=0.84):
@@ -1432,33 +1732,112 @@ def merge_lineups_with_stats(lineups_df, stats_df):
     lineups["_name_key"] = lineups["Player"].apply(normalize_player_key)
 
     stats_unique = stats_df.drop_duplicates("_name_key", keep="first").copy()
-    stats_keys = set(stats_unique["_name_key"])
 
-    matches = []
-    scores = []
-    for key in lineups["_name_key"]:
-        matched, score = best_name_match(key, stats_keys)
-        matches.append(matched)
-        scores.append(score)
+    key_to_index = {}
+    for idx, row in stats_unique.iterrows():
+        keys = row.get("_all_name_keys", [])
+        if not isinstance(keys, list):
+            keys = []
+        keys = set(keys)
+        keys.add(row.get("_name_key", ""))
 
-    lineups["_matched_key"] = matches
-    lineups["NameMatchScore"] = scores
+        for key in keys:
+            if key:
+                key_to_index.setdefault(key, idx)
+
+    available_keys = set(key_to_index.keys())
+
+    matched_indexes = []
+    match_scores = []
+    match_methods = []
+
+    for lineup_name, lineup_key in zip(
+        lineups["Player"],
+        lineups["_name_key"],
+    ):
+        matched_index = None
+        score = 0.0
+        method = "Unmatched"
+
+        if lineup_key in key_to_index:
+            matched_index = key_to_index[lineup_key]
+            score = 1.0
+            method = "Exact"
+        else:
+            name_parts = lineup_key.split()
+            last_name = name_parts[-1] if name_parts else ""
+
+            last_name_candidates = [
+                key for key in available_keys
+                if key.split() and key.split()[-1] == last_name
+            ]
+
+            candidate_pool = (
+                last_name_candidates
+                if last_name_candidates
+                else list(available_keys)
+            )
+
+            best_key = ""
+            best_score = 0.0
+            for candidate in candidate_pool:
+                candidate_score = SequenceMatcher(
+                    None,
+                    lineup_key,
+                    candidate,
+                ).ratio()
+
+                candidate_parts = candidate.split()
+                if (
+                    name_parts
+                    and candidate_parts
+                    and name_parts[-1] == candidate_parts[-1]
+                ):
+                    candidate_score += 0.10
+
+                if candidate_score > best_score:
+                    best_key = candidate
+                    best_score = candidate_score
+
+            if best_key and best_score >= 0.80:
+                matched_index = key_to_index[best_key]
+                score = min(best_score, 1.0)
+                method = "Fuzzy"
+
+        matched_indexes.append(matched_index)
+        match_scores.append(score)
+        match_methods.append(method)
+
+    lineups["_stats_index"] = matched_indexes
+    lineups["NameMatchScore"] = match_scores
+    lineups["NameMatchMethod"] = match_methods
+
+    stats_for_merge = stats_unique.copy()
+    stats_for_merge["_stats_index"] = stats_for_merge.index
 
     merged = lineups.merge(
-        stats_unique.drop(columns=["Player"], errors="ignore"),
+        stats_for_merge.drop(columns=["Player"], errors="ignore"),
         how="left",
-        left_on="_matched_key",
-        right_on="_name_key",
+        on="_stats_index",
         suffixes=("", "_stats"),
     )
 
     unmatched = (
-        lineups[lineups["_matched_key"].eq("")]["Player"]
+        lineups[lineups["_stats_index"].isna()]["Player"]
         .drop_duplicates()
         .sort_values()
         .tolist()
     )
-    return merged, unmatched
+
+    matched_players = (
+        lineups[lineups["_stats_index"].notna()]["Player"]
+        .drop_duplicates()
+        .sort_values()
+        .tolist()
+    )
+
+    return merged, unmatched, matched_players
+
 
 
 def calculate_trait_importance(merged_df, numeric_cols, min_rows=6):
@@ -1681,7 +2060,7 @@ def render_historical_analysis():
     st.subheader("Historical Lineup Construction Analysis")
     st.caption(
         "Select an MLB team and season, then upload a season-stat CSV. "
-        "The app automatically builds the Baseball Reference URL and imports the full-season batting-order table."
+        "The app automatically builds the Baseball Reference URL, validates the table, and uses official MLB game feeds when needed for complete daily lineups."
     )
 
     st.info(
@@ -1748,10 +2127,19 @@ def render_historical_analysis():
 
     try:
         with st.spinner("Loading Baseball Reference season batting orders and matching season statistics..."):
-            lineups_df, team_abbr, season = load_baseball_reference_lineups(url_text)
+            team_abbr = selected_team_abbr
+            season = selected_season
+            lineups_df, lineup_source_note = load_historical_lineups_with_fallback(
+                url_text,
+                team_abbr,
+                season,
+            )
             team_slug = team_abbr.lower()
             stats_df, numeric_cols = read_historical_stats_csv(season_stats_file)
-            merged_df, unmatched = merge_lineups_with_stats(lineups_df, stats_df)
+            merged_df, unmatched, matched_players = merge_lineups_with_stats(
+                lineups_df,
+                stats_df,
+            )
     except (ValueError, HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
         st.error(f"Could not complete the historical analysis: {exc}")
         return
@@ -1759,7 +2147,7 @@ def render_historical_analysis():
         st.error(f"Unexpected historical-analysis error: {exc}")
         return
 
-    matched_rows = merged_df["_matched_key"].ne("").sum()
+    matched_rows = merged_df["_stats_index"].notna().sum()
     total_rows = len(merged_df)
     games = lineups_df["GamePk"].nunique()
     match_pct = matched_rows / max(total_rows, 1) * 100
@@ -1767,16 +2155,34 @@ def render_historical_analysis():
     metric1, metric2, metric3, metric4 = st.columns(4)
     metric1.metric("Games", games)
     metric2.metric("Lineup Entries", total_rows)
-    metric3.metric("Players Matched", f"{match_pct:.1f}%")
-    metric4.metric("Date Range", f"{lineups_df['Date'].min()} to {lineups_df['Date'].max()}")
+    metric3.metric(
+        "Players Matched",
+        f"{len(matched_players)} / {lineups_df['Player'].nunique()}",
+        help=f"{match_pct:.1f}% of lineup entries matched to the uploaded stats.",
+    )
+    metric4.metric(
+        "Date Range",
+        f"{lineups_df['Date'].min()} to {lineups_df['Date'].max()}",
+    )
+
+    st.caption(f"Historical lineup source: {lineup_source_note}")
 
     if unmatched:
+        preview_unmatched = unmatched[:20]
+        unmatched_text = ", ".join(preview_unmatched)
+        if len(unmatched) > 20:
+            unmatched_text += f", and {len(unmatched) - 20} more"
         st.warning(
-            "Unmatched players were excluded from trait calculations: "
-            + ", ".join(unmatched)
+            f"{len(unmatched)} unmatched player(s) were excluded: "
+            + unmatched_text
+        )
+    else:
+        st.success(
+            f"All {len(matched_players)} lineup players were matched "
+            "to the uploaded season stats CSV."
         )
 
-    analysis_df = merged_df[merged_df["_matched_key"].ne("")].copy()
+    analysis_df = merged_df[merged_df["_stats_index"].notna()].copy()
     if analysis_df.empty:
         st.error("No lineup names could be matched to the season stats CSV.")
         return
@@ -2022,7 +2428,7 @@ st.write(
     - Use the analysis-mode selector to switch between optimization and historical analysis.
     - Upload all three optimizer CSVs to activate the optimization PDF export.
     - Historical analysis uses MLB team and season dropdowns plus a season-stat CSV.
-    - The Baseball Reference URL is created automatically from your selections.
+    - The Baseball Reference URL is created automatically; official MLB game feeds are used whenever Baseball Reference provides only a summary table.
     - The historical mode reports observed relationships; it does not claim causal intent.
     - The PDF uses your uploaded team logo and automatically detects team colors for the optimizer theme.
     - Batting hand colors stay fixed: LHH red, switch hitters blue, RHH black.
