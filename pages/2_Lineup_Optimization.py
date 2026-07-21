@@ -3587,6 +3587,548 @@ def load_lidom_digimetrics_data(
         source_note,
     )
 
+
+MLB_WINTER_SPORT_ID = 17
+
+LIDOM_MLB_NAME_ALIASES = {
+    "Águilas Cibaeñas": [
+        "aguilas cibaeñas", "aguilas cibaeñas", "aguilas",
+    ],
+    "Estrellas Orientales": [
+        "estrellas orientales", "estrellas",
+    ],
+    "Gigantes del Cibao": [
+        "gigantes del cibao", "gigantes",
+    ],
+    "Leones del Escogido": [
+        "leones del escogido", "escogido", "leones",
+    ],
+    "Tigres del Licey": [
+        "tigres del licey", "licey", "tigres",
+    ],
+    "Toros del Este": [
+        "toros del este", "toros",
+    ],
+}
+
+
+def normalize_winter_name(value):
+    if pd.isna(value):
+        return ""
+
+    value = unicodedata.normalize("NFKD", str(value))
+    value = "".join(
+        character
+        for character in value
+        if not unicodedata.combining(character)
+    )
+    value = value.lower().strip()
+    value = re.sub(r"[^a-z0-9 ]", " ", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def winter_season_date_range(season_label):
+    match = re.match(r"(\d{4})", str(season_label))
+    if not match:
+        raise ValueError(
+            f"Could not interpret winter season: {season_label}"
+        )
+
+    start_year = int(match.group(1))
+    start_date = f"{start_year}-09-01"
+    end_date = f"{start_year + 1}-02-28"
+    return start_year, start_date, end_date
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def discover_lidom_team_id(selected_team_name, season_label):
+    start_year, _, _ = winter_season_date_range(season_label)
+
+    possible_urls = [
+        (
+            "https://statsapi.mlb.com/api/v1/teams"
+            f"?sportId={MLB_WINTER_SPORT_ID}"
+            f"&season={start_year}"
+        ),
+        (
+            "https://statsapi.mlb.com/api/v1/teams"
+            f"?sportIds={MLB_WINTER_SPORT_ID}"
+            f"&season={start_year}"
+        ),
+    ]
+
+    teams = []
+    last_error = None
+
+    for teams_url in possible_urls:
+        try:
+            payload = fetch_json(teams_url)
+            teams = payload.get("teams", [])
+            if teams:
+                break
+        except Exception as exc:
+            last_error = exc
+
+    if not teams:
+        raise ValueError(
+            "MLB Winter Leagues did not return a team directory"
+            + (f": {last_error}" if last_error else ".")
+        )
+
+    selected_aliases = [
+        normalize_winter_name(alias)
+        for alias in LIDOM_MLB_NAME_ALIASES[selected_team_name]
+    ]
+
+    candidates = []
+
+    for team in teams:
+        searchable_values = [
+            team.get("name", ""),
+            team.get("teamName", ""),
+            team.get("clubName", ""),
+            team.get("shortName", ""),
+            team.get("locationName", ""),
+            team.get("franchiseName", ""),
+            team.get("abbreviation", ""),
+        ]
+        searchable_text = normalize_winter_name(
+            " ".join(
+                str(value)
+                for value in searchable_values
+                if value
+            )
+        )
+
+        score = 0
+        for alias in selected_aliases:
+            if alias == searchable_text:
+                score = max(score, 100)
+            elif alias in searchable_text:
+                score = max(score, 80)
+            elif searchable_text and searchable_text in alias:
+                score = max(score, 60)
+
+        league_name = normalize_winter_name(
+            team.get("league", {}).get("name", "")
+        )
+        if "dominican" in league_name:
+            score += 20
+
+        if score > 0:
+            candidates.append(
+                (
+                    score,
+                    team.get("id"),
+                    team.get("name", selected_team_name),
+                )
+            )
+
+    if not candidates:
+        available = ", ".join(
+            sorted(
+                {
+                    str(team.get("name", ""))
+                    for team in teams
+                    if team.get("name")
+                }
+            )
+        )
+        raise ValueError(
+            f"Could not identify {selected_team_name} in MLB Winter Leagues. "
+            f"Available teams included: {available[:800]}"
+        )
+
+    candidates.sort(reverse=True)
+    _, team_id, official_team_name = candidates[0]
+
+    return int(team_id), official_team_name
+
+
+def extract_winter_boxscore_batting_rows(
+    feed,
+    team_id,
+    game_date,
+):
+    game_data = feed.get("gameData", {})
+    teams = game_data.get("teams", {})
+    home_id = teams.get("home", {}).get("id")
+    away_id = teams.get("away", {}).get("id")
+
+    if team_id == home_id:
+        team_side = "home"
+    elif team_id == away_id:
+        team_side = "away"
+    else:
+        return []
+
+    team_box = (
+        feed.get("liveData", {})
+        .get("boxscore", {})
+        .get("teams", {})
+        .get(team_side, {})
+    )
+
+    game_pk = game_data.get("game", {}).get("pk", "")
+    players_data = game_data.get("players", {})
+    box_players = team_box.get("players", {})
+
+    batting_order_ids = set(team_box.get("battingOrder", []))
+    rows = []
+
+    for player_key, player_box in box_players.items():
+        person = player_box.get("person", {})
+        player_id = person.get("id")
+
+        batting = (
+            player_box.get("stats", {})
+            .get("batting", {})
+        )
+
+        if not batting:
+            continue
+
+        at_bats = pd.to_numeric(
+            batting.get("atBats"),
+            errors="coerce",
+        )
+        plate_appearances = pd.to_numeric(
+            batting.get("plateAppearances"),
+            errors="coerce",
+        )
+
+        if (
+            (pd.isna(at_bats) or at_bats == 0)
+            and (
+                pd.isna(plate_appearances)
+                or plate_appearances == 0
+            )
+            and player_id not in batting_order_ids
+        ):
+            continue
+
+        player_data = players_data.get(
+            f"ID{player_id}",
+            {},
+        )
+
+        rows.append({
+            "Date": pd.to_datetime(game_date).date(),
+            "GamePk": game_pk,
+            "PlayerID": player_id,
+            "Player": (
+                player_data.get("fullName")
+                or person.get("fullName")
+                or ""
+            ),
+            "G": 1,
+            "PA": batting.get("plateAppearances", 0),
+            "AB": batting.get("atBats", 0),
+            "R": batting.get("runs", 0),
+            "H": batting.get("hits", 0),
+            "2B": batting.get("doubles", 0),
+            "3B": batting.get("triples", 0),
+            "HR": batting.get("homeRuns", 0),
+            "RBI": batting.get("rbi", 0),
+            "BB": batting.get("baseOnBalls", 0),
+            "SO": batting.get("strikeOuts", 0),
+            "SB": batting.get("stolenBases", 0),
+            "CS": batting.get("caughtStealing", 0),
+            "HBP": batting.get("hitByPitch", 0),
+            "SF": batting.get("sacFlies", 0),
+        })
+
+    return rows
+
+
+def aggregate_winter_game_stats(game_stat_rows):
+    if not game_stat_rows:
+        raise ValueError(
+            "No player batting statistics were found in the "
+            "MLB Winter Leagues game feeds."
+        )
+
+    raw = pd.DataFrame(game_stat_rows)
+
+    numeric_count_columns = [
+        "PA", "AB", "R", "H", "2B", "3B", "HR",
+        "RBI", "BB", "SO", "SB", "CS", "HBP", "SF",
+    ]
+
+    for column in numeric_count_columns:
+        if column not in raw.columns:
+            raw[column] = 0
+        raw[column] = pd.to_numeric(
+            raw[column],
+            errors="coerce",
+        ).fillna(0)
+
+    grouped = (
+        raw.groupby(
+            ["PlayerID", "Player"],
+            as_index=False,
+        )[numeric_count_columns]
+        .sum()
+    )
+
+    games = (
+        raw.groupby(
+            ["PlayerID", "Player"],
+            as_index=False,
+        )["GamePk"]
+        .nunique()
+        .rename(columns={"GamePk": "G"})
+    )
+
+    grouped = grouped.merge(
+        games,
+        on=["PlayerID", "Player"],
+        how="left",
+    )
+
+    grouped["AVG"] = np.where(
+        grouped["AB"] > 0,
+        grouped["H"] / grouped["AB"],
+        np.nan,
+    )
+
+    total_bases = (
+        grouped["H"]
+        + grouped["2B"]
+        + 2 * grouped["3B"]
+        + 3 * grouped["HR"]
+    )
+    grouped["TB"] = total_bases
+
+    grouped["SLG"] = np.where(
+        grouped["AB"] > 0,
+        grouped["TB"] / grouped["AB"],
+        np.nan,
+    )
+
+    obp_denominator = (
+        grouped["AB"]
+        + grouped["BB"]
+        + grouped["HBP"]
+        + grouped["SF"]
+    )
+    grouped["OBP"] = np.where(
+        obp_denominator > 0,
+        (
+            grouped["H"]
+            + grouped["BB"]
+            + grouped["HBP"]
+        ) / obp_denominator,
+        np.nan,
+    )
+
+    grouped["OPS"] = grouped["OBP"] + grouped["SLG"]
+    grouped["ISO"] = grouped["SLG"] - grouped["AVG"]
+
+    grouped["BB%"] = np.where(
+        grouped["PA"] > 0,
+        grouped["BB"] / grouped["PA"] * 100,
+        np.nan,
+    )
+    grouped["K%"] = np.where(
+        grouped["PA"] > 0,
+        grouped["SO"] / grouped["PA"] * 100,
+        np.nan,
+    )
+
+    stolen_base_attempts = (
+        grouped["SB"] + grouped["CS"]
+    )
+    grouped["SB%"] = np.where(
+        stolen_base_attempts > 0,
+        grouped["SB"] / stolen_base_attempts * 100,
+        np.nan,
+    )
+
+    grouped["_name_key"] = grouped["Player"].apply(
+        normalize_player_key
+    )
+
+    def winter_player_keys(player_name):
+        key = normalize_player_key(player_name)
+        keys = {key} if key else set()
+        parts = key.split()
+
+        if len(parts) >= 2:
+            keys.add(parts[-1])
+            keys.add(f"{parts[0][0]} {parts[-1]}")
+
+        return sorted(keys)
+
+    grouped["_all_name_keys"] = grouped["Player"].apply(
+        winter_player_keys
+    )
+
+    numeric_cols = [
+        column
+        for column in grouped.columns
+        if column not in {
+            "PlayerID",
+            "Player",
+            "_name_key",
+            "_all_name_keys",
+        }
+        and pd.api.types.is_numeric_dtype(
+            grouped[column]
+        )
+        and grouped[column].notna().sum() >= 3
+        and grouped[column].nunique(dropna=True) >= 2
+    ]
+
+    return grouped, numeric_cols
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_lidom_from_mlb_winter_leagues(
+    selected_team_name,
+    selected_season,
+):
+    team_id, official_team_name = discover_lidom_team_id(
+        selected_team_name,
+        selected_season,
+    )
+
+    (
+        start_year,
+        start_date,
+        end_date,
+    ) = winter_season_date_range(selected_season)
+
+    schedule_urls = [
+        (
+            "https://statsapi.mlb.com/api/v1/schedule"
+            f"?sportId={MLB_WINTER_SPORT_ID}"
+            f"&teamId={team_id}"
+            f"&startDate={start_date}"
+            f"&endDate={end_date}"
+        ),
+        (
+            "https://statsapi.mlb.com/api/v1/schedule"
+            f"?sportId={MLB_WINTER_SPORT_ID}"
+            f"&teamIds={team_id}"
+            f"&startDate={start_date}"
+            f"&endDate={end_date}"
+        ),
+    ]
+
+    schedule = None
+    schedule_error = None
+
+    for schedule_url in schedule_urls:
+        try:
+            candidate = fetch_json(schedule_url)
+            if candidate.get("dates"):
+                schedule = candidate
+                break
+        except Exception as exc:
+            schedule_error = exc
+
+    if not schedule:
+        raise ValueError(
+            "MLB Winter Leagues returned no LIDOM schedule"
+            + (
+                f": {schedule_error}"
+                if schedule_error
+                else "."
+            )
+        )
+
+    lineup_rows = []
+    game_stat_rows = []
+    completed_games = 0
+    skipped_games = 0
+
+    for date_block in schedule.get("dates", []):
+        game_date = date_block.get("date")
+
+        for game in date_block.get("games", []):
+            abstract_state = (
+                game.get("status", {})
+                .get("abstractGameState", "")
+            )
+
+            if abstract_state not in {"Final", "Live"}:
+                continue
+
+            game_pk = game.get("gamePk")
+            if not game_pk:
+                continue
+
+            try:
+                feed = fetch_json(
+                    "https://statsapi.mlb.com/api/v1.1/"
+                    f"game/{game_pk}/feed/live"
+                )
+
+                game_lineup = extract_mlb_daily_lineup(
+                    feed,
+                    team_id=team_id,
+                    game_date=game_date,
+                )
+
+                if len(game_lineup) >= 7:
+                    for row in game_lineup:
+                        row["Source"] = (
+                            "MLB Winter Leagues official game feed"
+                        )
+                    lineup_rows.extend(game_lineup)
+
+                    game_stat_rows.extend(
+                        extract_winter_boxscore_batting_rows(
+                            feed,
+                            team_id=team_id,
+                            game_date=game_date,
+                        )
+                    )
+                    completed_games += 1
+                else:
+                    skipped_games += 1
+
+            except Exception:
+                skipped_games += 1
+                continue
+
+    if not lineup_rows:
+        raise ValueError(
+            "MLB Winter Leagues found the selected team and schedule, "
+            "but no completed batting orders were available."
+        )
+
+    lineups_df = pd.DataFrame(lineup_rows)
+    lineups_df = lineups_df.drop_duplicates(
+        subset=["GamePk", "LineupSpot", "PlayerID"],
+    ).sort_values(
+        ["Date", "GamePk", "LineupSpot"],
+        na_position="last",
+    ).reset_index(drop=True)
+
+    stats_df, numeric_cols = aggregate_winter_game_stats(
+        game_stat_rows
+    )
+
+    source_note = (
+        "MLB Winter Leagues official game feeds "
+        f"({completed_games} completed games imported"
+    )
+    if skipped_games:
+        source_note += (
+            f", {skipped_games} games skipped"
+        )
+    source_note += ")"
+
+    return (
+        lineups_df,
+        stats_df,
+        numeric_cols,
+        source_note,
+        official_team_name,
+    )
+
 def render_historical_analysis():
     st.subheader("Historical Lineup Construction Analysis")
 
@@ -3645,8 +4187,8 @@ def render_historical_analysis():
     else:
         st.caption(
             "Select a LIDOM team and winter season. The app automatically "
-            "loads official Digimetrics box scores, reconstructs the daily "
-            "batting orders, and aggregates team batting statistics."
+            "loads official MLB Winter Leagues games, daily batting orders, "
+            "opposing starters, and player batting statistics."
         )
 
         selector_col1, selector_col2 = st.columns(2)
@@ -3676,8 +4218,7 @@ def render_historical_analysis():
         stats_file = None
 
         st.caption(
-            "Official source: "
-            "https://estadisticas.lidom.com/"
+            "Official source: MLB Winter Leagues / MLB Stats API"
         )
 
     analyze = st.button(
@@ -3728,18 +4269,19 @@ def render_historical_analysis():
                     lineups_df,
                     stats_df,
                     numeric_cols,
-                    digimetrics_source_note,
-                ) = load_lidom_digimetrics_data(
+                    winter_source_note,
+                    official_team_name,
+                ) = load_lidom_from_mlb_winter_leagues(
                     selected_team_name,
                     selected_season,
                 )
-                lineup_source_note = digimetrics_source_note
+                lineup_source_note = winter_source_note
                 stats_source_note = (
-                    "Aggregated from the same official "
-                    "LIDOM Digimetrics box scores"
+                    "Aggregated from official MLB Winter "
+                    "Leagues game box scores"
                 )
                 stats_source_url = (
-                    "https://estadisticas.lidom.com/"
+                    "https://www.mlb.com/ligas-invernales/"
                 )
 
             merged_df, unmatched, matched_players = merge_lineups_with_stats(
