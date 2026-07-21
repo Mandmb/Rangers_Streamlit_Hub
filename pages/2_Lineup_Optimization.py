@@ -2486,11 +2486,18 @@ def historical_analysis_pdf(team_name, date_range, summary_text, importance_df, 
             return y_top - 18
 
         view = dataframe.head(max_rows).copy()
+        three_decimal_stats = {"AVG", "OBP", "SLG", "OPS", "ISO"}
+
         for col in view.columns:
             if pd.api.types.is_float_dtype(view[col]):
-                view[col] = view[col].map(
-                    lambda v: f"{v:.2f}" if pd.notna(v) else ""
-                )
+                if str(col).strip().upper() in three_decimal_stats:
+                    view[col] = view[col].map(
+                        lambda v: f"{v:.3f}" if pd.notna(v) else ""
+                    )
+                else:
+                    view[col] = view[col].map(
+                        lambda v: f"{v:.2f}" if pd.notna(v) else ""
+                    )
 
         rows = [list(view.columns)] + view.astype(str).values.tolist()
         col_width = width / len(view.columns)
