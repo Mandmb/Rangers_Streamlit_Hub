@@ -921,6 +921,47 @@ def fetch_json(url, timeout=20):
         return json.loads(response.read().decode("utf-8"))
 
 
+MLB_TEAM_OPTIONS = {
+    "Arizona Diamondbacks": "ARI",
+    "Athletics": "ATH",
+    "Atlanta Braves": "ATL",
+    "Baltimore Orioles": "BAL",
+    "Boston Red Sox": "BOS",
+    "Chicago Cubs": "CHC",
+    "Chicago White Sox": "CHW",
+    "Cincinnati Reds": "CIN",
+    "Cleveland Guardians": "CLE",
+    "Colorado Rockies": "COL",
+    "Detroit Tigers": "DET",
+    "Houston Astros": "HOU",
+    "Kansas City Royals": "KCR",
+    "Los Angeles Angels": "LAA",
+    "Los Angeles Dodgers": "LAD",
+    "Miami Marlins": "MIA",
+    "Milwaukee Brewers": "MIL",
+    "Minnesota Twins": "MIN",
+    "New York Mets": "NYM",
+    "New York Yankees": "NYY",
+    "Philadelphia Phillies": "PHI",
+    "Pittsburgh Pirates": "PIT",
+    "San Diego Padres": "SDP",
+    "San Francisco Giants": "SFG",
+    "Seattle Mariners": "SEA",
+    "St. Louis Cardinals": "STL",
+    "Tampa Bay Rays": "TBR",
+    "Texas Rangers": "TEX",
+    "Toronto Blue Jays": "TOR",
+    "Washington Nationals": "WSN",
+}
+
+
+def build_baseball_reference_url(team_abbr, season):
+    return (
+        f"https://www.baseball-reference.com/teams/"
+        f"{team_abbr}/{int(season)}-batting-orders.shtml"
+    )
+
+
 def parse_baseball_reference_url(url):
     parsed = urlparse(str(url).strip())
     if "baseball-reference.com" not in parsed.netloc.lower():
@@ -1639,20 +1680,42 @@ def historical_analysis_pdf(team_name, date_range, summary_text, importance_df, 
 def render_historical_analysis():
     st.subheader("Historical Lineup Construction Analysis")
     st.caption(
-        "Paste a Baseball Reference team batting-orders URL and upload a season-stat CSV. "
-        "The app imports the full-season batting-order table and matches those lineups to player traits."
+        "Select an MLB team and season, then upload a season-stat CSV. "
+        "The app automatically builds the Baseball Reference URL and imports the full-season batting-order table."
     )
 
     st.info(
-        "Baseball Reference provides a season-long batting-order history from one team URL. "
-        "The app reads the full batting-order table directly from that page."
+        "Choose the team and year—no URL entry is required. "
+        "The app automatically reads the full Baseball Reference batting-order table for that season."
     )
 
-    url_text = st.text_input(
-        "Baseball Reference Team Batting-Orders URL",
-        placeholder="https://www.baseball-reference.com/teams/LAD/2025-batting-orders.shtml",
-        key="historical_baseball_reference_url",
+    selector_col1, selector_col2 = st.columns(2)
+
+    with selector_col1:
+        selected_team_name = st.selectbox(
+            "Select MLB Team",
+            options=list(MLB_TEAM_OPTIONS.keys()),
+            index=list(MLB_TEAM_OPTIONS.keys()).index("Texas Rangers"),
+            key="historical_team_selector",
+        )
+
+    with selector_col2:
+        current_year = date.today().year
+        available_years = list(range(current_year, 2000, -1))
+        selected_season = st.selectbox(
+            "Select Season",
+            options=available_years,
+            index=0,
+            key="historical_season_selector",
+        )
+
+    selected_team_abbr = MLB_TEAM_OPTIONS[selected_team_name]
+    url_text = build_baseball_reference_url(
+        selected_team_abbr,
+        selected_season,
     )
+
+    st.caption(f"Baseball Reference source: {url_text}")
     season_stats_file = st.file_uploader(
         "Season Stats CSV",
         type=["csv"],
@@ -1679,8 +1742,8 @@ def render_historical_analysis():
         )
         return
 
-    if not url_text.strip() or season_stats_file is None:
-        st.error("Add a Baseball Reference batting-orders URL and upload the season stats CSV.")
+    if season_stats_file is None:
+        st.error("Upload the season stats CSV before running the analysis.")
         return
 
     try:
@@ -1958,8 +2021,8 @@ st.write(
     """
     - Use the analysis-mode selector to switch between optimization and historical analysis.
     - Upload all three optimizer CSVs to activate the optimization PDF export.
-    - Historical analysis accepts a Baseball Reference team batting-orders URL and a season-stat CSV.
-    - The importer reads the full-season batting-order table directly from Baseball Reference.
+    - Historical analysis uses MLB team and season dropdowns plus a season-stat CSV.
+    - The Baseball Reference URL is created automatically from your selections.
     - The historical mode reports observed relationships; it does not claim causal intent.
     - The PDF uses your uploaded team logo and automatically detects team colors for the optimizer theme.
     - Batting hand colors stay fixed: LHH red, switch hitters blue, RHH black.
