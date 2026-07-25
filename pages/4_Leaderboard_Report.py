@@ -4,8 +4,6 @@ from datetime import date
 
 import pandas as pd
 import streamlit as st
-from ui_styles import apply_page_style
-apply_page_style()
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import landscape, letter
 from reportlab.lib.utils import ImageReader
@@ -41,7 +39,6 @@ min_inn_if = st.sidebar.number_input("Minimum InnIF", min_value=0, value=40)
 min_inn_of = st.sidebar.number_input("Minimum InnOF", min_value=0, value=40)
 min_catcher_p = st.sidebar.number_input("Minimum Catcher P", min_value=0, value=100)
 min_sba = st.sidebar.number_input("Minimum SBA for CS%", min_value=0, value=5)
-min_pitch_bf = st.sidebar.number_input("Minimum BF for pitchers", min_value=0, value=30)
 
 hitting_file = None
 baserunning_file = None
@@ -120,6 +117,17 @@ def to_number(series):
     )
 
 
+def top_leaders(df, stat_col, n=5, ascending=False):
+    if df is None or "Player" not in df.columns or stat_col not in df.columns:
+        return pd.DataFrame(columns=["Player", stat_col])
+
+    temp = df.copy()
+    temp["_sort"] = to_number(temp[stat_col])
+    temp = temp.dropna(subset=["_sort"])
+
+    return temp.sort_values("_sort", ascending=ascending)[["Player", stat_col]].head(n)
+
+
 def top_leaders_with_extra(df, stat_col, extra_col, n=5, ascending=False, min_col=None, minimum=0):
     if df is None or "Player" not in df.columns or stat_col not in df.columns or extra_col not in df.columns:
         return pd.DataFrame(columns=["Player", stat_col, extra_col])
@@ -185,7 +193,7 @@ catching_df = clean_df(
 pitching_df = clean_df(
     load_csv(pitching_file),
     {"playerFullName": "Player", "FPStk%": "FPS%"},
-    ["Player", "BF", "IP", "FPS%", "FB/SI Zone%", "SWM%", "K%", "BB%", "TX Barrell"],
+    ["Player", "FPS%", "FB/SI Zone%", "SWM%", "K%", "BB%", "TX Barrell"],
 )
 
 
@@ -522,15 +530,15 @@ def draw_pitching_page(c):
     # Higher is better: FPS%, FB/SI Zone%, SWM%, K%.
     # Lower is better: BB%, TX Barrell.
     pitching_tables_top = [
-        ("FPS%", top_leaders_with_context(pitching_df, "FPS%", "BF", ascending=show_bottom, min_col="BF", minimum=min_pitch_bf)),
-        ("FB/SI ZONE%", top_leaders_with_context(pitching_df, "FB/SI Zone%", "BF", ascending=show_bottom, min_col="BF", minimum=min_pitch_bf)),
-        ("SWM%", top_leaders_with_context(pitching_df, "SWM%", "BF", ascending=show_bottom, min_col="BF", minimum=min_pitch_bf)),
+        ("FPS%", top_leaders(pitching_df, "FPS%", ascending=show_bottom)),
+        ("FB/SI ZONE%", top_leaders(pitching_df, "FB/SI Zone%", ascending=show_bottom)),
+        ("SWM%", top_leaders(pitching_df, "SWM%", ascending=show_bottom)),
     ]
 
     pitching_tables_bottom = [
-        ("K%", top_leaders_with_context(pitching_df, "K%", "BF", ascending=show_bottom, min_col="BF", minimum=min_pitch_bf)),
-        ("BB%", top_leaders_with_context(pitching_df, "BB%", "BF", ascending=not show_bottom, min_col="BF", minimum=min_pitch_bf)),
-        ("TX BARRELL", top_leaders_with_context(pitching_df, "TX Barrell", "IP", ascending=not show_bottom, min_col="BF", minimum=min_pitch_bf)),
+        ("K%", top_leaders(pitching_df, "K%", ascending=show_bottom)),
+        ("BB%", top_leaders(pitching_df, "BB%", ascending=not show_bottom)),
+        ("TX BARRELL", top_leaders(pitching_df, "TX Barrell", ascending=not show_bottom)),
     ]
 
     table_w = 220
@@ -549,7 +557,7 @@ def draw_pitching_page(c):
     for i, (title, df) in enumerate(pitching_tables_bottom):
         draw_table(c, title, df, start_x + i * (table_w + gap), y_bottom, table_w, [0.12, 0.54, 0.16, 0.18], pitching_icon)
 
-    draw_page_footer(c, f"{ranking_label.upper()} | MIN BF {min_pitch_bf} | PITCHING PAGE")
+    draw_page_footer(c, f"{ranking_label.upper()} | PITCHING PAGE")
 
 
 def build_pdf():
