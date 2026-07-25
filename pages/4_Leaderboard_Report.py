@@ -193,7 +193,7 @@ catching_df = clean_df(
 pitching_df = clean_df(
     load_csv(pitching_file),
     {"playerFullName": "Player", "FPStk%": "FPS%"},
-    ["Player", "FPS%", "FB/SI Zone%", "SWM%", "K%", "BB%", "TX Barrell"],
+    ["Player", "BF", "FPS%", "FB/SI Zone%", "SWM%", "K%", "BB%", "TX Barrell"],
 )
 
 
@@ -530,15 +530,15 @@ def draw_pitching_page(c):
     # Higher is better: FPS%, FB/SI Zone%, SWM%, K%.
     # Lower is better: BB%, TX Barrell.
     pitching_tables_top = [
-        ("FPS%", top_leaders(pitching_df, "FPS%", ascending=show_bottom)),
-        ("FB/SI ZONE%", top_leaders(pitching_df, "FB/SI Zone%", ascending=show_bottom)),
-        ("SWM%", top_leaders(pitching_df, "SWM%", ascending=show_bottom)),
+        ("FPS%", top_leaders_with_context(pitching_df, "FPS%", "BF", ascending=show_bottom)),
+        ("FB/SI ZONE%", top_leaders_with_context(pitching_df, "FB/SI Zone%", "BF", ascending=show_bottom)),
+        ("SWM%", top_leaders_with_context(pitching_df, "SWM%", "BF", ascending=show_bottom)),
     ]
 
     pitching_tables_bottom = [
-        ("K%", top_leaders(pitching_df, "K%", ascending=show_bottom)),
-        ("BB%", top_leaders(pitching_df, "BB%", ascending=not show_bottom)),
-        ("TX BARRELL", top_leaders(pitching_df, "TX Barrell", ascending=not show_bottom)),
+        ("K%", top_leaders_with_context(pitching_df, "K%", "BF", ascending=show_bottom)),
+        ("BB%", top_leaders_with_context(pitching_df, "BB%", "BF", ascending=not show_bottom)),
+        ("TX BARRELL", top_leaders_with_context(pitching_df, "TX Barrell", "BF", ascending=not show_bottom)),
     ]
 
     table_w = 220
@@ -548,14 +548,14 @@ def draw_pitching_page(c):
 
     y_top = 472
     for i, (title, df) in enumerate(pitching_tables_top):
-        draw_table(c, title, df, start_x + i * (table_w + gap), y_top, table_w, [0.12, 0.54, 0.16, 0.18], pitching_icon)
+        draw_table(c, title, df, start_x + i * (table_w + gap), y_top, table_w, [0.12, 0.46, 0.18, 0.24], pitching_icon)
 
     c.setFillColor(panel)
     c.roundRect(10, 125, width - 20, 160, 6, stroke=0, fill=1)
 
     y_bottom = 282
     for i, (title, df) in enumerate(pitching_tables_bottom):
-        draw_table(c, title, df, start_x + i * (table_w + gap), y_bottom, table_w, [0.12, 0.54, 0.16, 0.18], pitching_icon)
+        draw_table(c, title, df, start_x + i * (table_w + gap), y_bottom, table_w, [0.12, 0.46, 0.18, 0.24], pitching_icon)
 
     draw_page_footer(c, f"{ranking_label.upper()} | PITCHING PAGE")
 
