@@ -192,20 +192,9 @@ catching_df = clean_df(
 
 pitching_df = clean_df(
     load_csv(pitching_file),
-    {
-        "playerFullName": "Player",
-        "FPStk%": "FPS%",
-        "BFP": "BF",
-        "Batters Faced": "BF",
-        "BattersFaced": "BF",
-    },
+    {"playerFullName": "Player", "FPStk%": "FPS%"},
     ["Player", "BF", "FPS%", "FB/SI Zone%", "SWM%", "K%", "BB%", "TX Barrell"],
 )
-
-# Keep pitcher names visible even when an export omits BF.
-# BF cannot be calculated from rate columns, so it remains blank until a BF column is supplied.
-if pitching_df is not None and "BF" not in pitching_df.columns:
-    pitching_df.insert(1, "BF", "")
 
 
 def short_name(name, max_len=18):
@@ -559,14 +548,14 @@ def draw_pitching_page(c):
 
     y_top = 472
     for i, (title, df) in enumerate(pitching_tables_top):
-        draw_table(c, title, df, start_x + i * (table_w + gap), y_top, table_w, [0.12, 0.54, 0.16, 0.18], pitching_icon)
+        draw_table(c, title, df, start_x + i * (table_w + gap), y_top, table_w, [0.12, 0.46, 0.18, 0.24], pitching_icon)
 
     c.setFillColor(panel)
     c.roundRect(10, 125, width - 20, 160, 6, stroke=0, fill=1)
 
     y_bottom = 282
     for i, (title, df) in enumerate(pitching_tables_bottom):
-        draw_table(c, title, df, start_x + i * (table_w + gap), y_bottom, table_w, [0.12, 0.54, 0.16, 0.18], pitching_icon)
+        draw_table(c, title, df, start_x + i * (table_w + gap), y_bottom, table_w, [0.12, 0.46, 0.18, 0.24], pitching_icon)
 
     draw_page_footer(c, f"{ranking_label.upper()} | PITCHING PAGE")
 
@@ -621,11 +610,6 @@ with tabs[4]:
 
 with tabs[5]:
     if pitching_df is not None:
-        if "BF" in pitching_df.columns and pitching_df["BF"].astype(str).str.strip().eq("").all():
-            st.warning(
-                "The pitching CSV does not include a BF column. Pitcher names and stats will appear, "
-                "but BF will remain blank until the export includes BF (or BFP / Batters Faced)."
-            )
         st.dataframe(pitching_df, hide_index=True)
     else:
         st.info("Upload Pitching CSV")
