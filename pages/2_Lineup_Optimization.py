@@ -993,6 +993,18 @@ with st.sidebar:
         help="Small pitch-type samples are pulled toward team average. Higher values apply more regression."
     )
 
+    minimum_pa = st.number_input(
+        "Minimum PA",
+        min_value=0,
+        max_value=1000,
+        value=0,
+        step=5,
+        help=(
+            "Only hitters with at least this many plate appearances in the relevant split "
+            "will be eligible. Example: 50 means 50+ PA."
+        ),
+    )
+
     lineup_mode = st.radio(
         "Lineup Type",
         ["Overall", "Vs RHP", "Vs LHP", "Vs Uploaded Pitcher"],
@@ -1022,9 +1034,13 @@ raw_df, terminal_df = prepare_pitch_by_pitch(pregame_file)
 if terminal_df is None:
     st.stop()
 
-overall_df = aggregate_stats(terminal_df)
-vs_rhp_df = aggregate_stats(terminal_df, pitcher_hand="R")
-vs_lhp_df = aggregate_stats(terminal_df, pitcher_hand="L")
+overall_df_all = aggregate_stats(terminal_df)
+vs_rhp_df_all = aggregate_stats(terminal_df, pitcher_hand="R")
+vs_lhp_df_all = aggregate_stats(terminal_df, pitcher_hand="L")
+
+overall_df = overall_df_all[overall_df_all["PA"] >= minimum_pa].copy()
+vs_rhp_df = vs_rhp_df_all[vs_rhp_df_all["PA"] >= minimum_pa].copy()
+vs_lhp_df = vs_lhp_df_all[vs_lhp_df_all["PA"] >= minimum_pa].copy()
 
 minimum_players = {
     "Overall": overall_df,
@@ -1033,7 +1049,10 @@ minimum_players = {
 }
 for label, frame in minimum_players.items():
     if len(frame) < 9:
-        st.warning(f"{label} currently has only {len(frame)} hitters with completed PA.")
+        st.warning(
+            f"{label} currently has only {len(frame)} eligible hitters with "
+            f"{int(minimum_pa)}+ PA."
+        )
 
 overall_lineup, overall_pool = build_standard_lineup(overall_df, weights)
 rhp_lineup, rhp_pool = build_standard_lineup(vs_rhp_df, weights)
@@ -1079,6 +1098,7 @@ if lineup_mode == "Vs Uploaded Pitcher":
     render_pitcher_card(pitcher_info)
 
 st.subheader(f"Optimized Lineup — {lineup_mode}")
+st.caption(f"Eligibility filter: {int(minimum_pa)}+ PA in the relevant split.")
 render_lineup_table(selected_lineup, header_color)
 
 with st.expander("Player Pool and Calculated Statistics"):
