@@ -254,58 +254,130 @@ def outcome_flags(result):
     }
 
 
-def parse_successful_steals(raw_df):
-    """Parse named successful steals from atbatDesc.
 
-    BaseStealAtt identifies that a steal attempt occurred, but the active batter
-    is often not the runner. The play description is therefore used to credit
-    the correct runner whenever the runner's name is explicitly available.
+def parse_successful_steals(raw_df):
     """
-    if "atbatDesc" not in raw_df.columns:
+    Infer the runner credited with each successful steal.
+
+    `BaseStealAtt` identifies the destination base, but the hitter listed on
+    that pitch is usually the batter at the plate, not the runner. The CSV also
+    commonly leaves `atbatDesc` blank on steal pitches. We therefore process
+    each game and half-inning chronologically, maintain a basic base-state,
+    and credit the runner occupying the source base:
+
+        2B   -> runner from first base
+        3B   -> runner from second base
+        Home -> runner from third base
+
+    If the expected base is empty because an earlier advancement was not fully
+    described by the feed, the most recent known baserunner in that half-inning
+    is used as a fallback.
+    """
+    required = {
+        "gameId", "inn", "pitchNumInGame", "batterAbbrevName",
+        "pitchResult", "BaseStealAtt"
+    }
+    if not required.issubset(raw_df.columns):
         return {}
 
-    descriptions = raw_df.loc[
-        raw_df.get("BaseStealAtt", pd.Series(index=raw_df.index)).notna(),
-        "atbatDesc"
-    ].dropna().astype(str).drop_duplicates()
-
     steals = {}
-    pattern = re.compile(
-        r"(?:^|[\.\;]\s*)([A-ZÁÉÍÓÚÑÜ][A-Za-zÁÉÍÓÚáéíóúÑñÜü'\-\.]+(?:\s+[A-ZÁÉÍÓÚÑÜ][A-Za-zÁÉÍÓÚáéíóúÑñÜü'\-\.]+){1,4})\s+steals\b",
-        re.IGNORECASE,
-    )
 
-    for description in descriptions:
-        if "caught stealing" in description.lower():
-            continue
-        for match in pattern.finditer(description):
-            player = re.sub(r"\s+", " ", match.group(1)).strip(" .")
-            steals[player] = steals.get(player, 0) + 1
+    for (_, _), inning_df in raw_df.groupby(["gameId", "inn"], sort=False):
+        inning_df = inning_df.sort_values("pitchNumInGame")
+
+        bases = {1: None, 2: None, 3: None}
+        recent_runners = []
+
+        for _, row in inning_df.iterrows():
+            batter = str(row["batterAbbrevName"]).strip()
+
+            # Process the steal before processing the result of the current pitch.
+            if pd.notna(row["BaseStealAtt"]):
+                destination = str(row["BaseStealAtt"]).strip()
+                target_base = {"2B": 2, "3B": 3, "Home": 4}.get(destination)
+                source_base = target_base - 1 if target_base else None
+
+                runner = bases.get(source_base) if source_base else None
+
+                # Fallback for feeds that do not fully describe prior advances.
+                if not runner and recent_runners:
+                    runner = recent_runners[-1]
+
+                if runner:
+                    steals[runner] = steals.get(runner, 0) + 1
+
+                    if source_base in bases and bases[source_base] == runner:
+                        bases[source_base] = None
+
+                    if target_base in bases:
+                        bases[target_base] = runner
+
+            result = str(row["pitchResult"]).strip().lower()
+
+            if not is_terminal_result(result):
+                continue
+
+            if "home run" in result or "homer" in result:
+                bases = {1: None, 2: None, 3: None}
+
+            elif "triple" in result and "triple play" not in result:
+                bases = {1: None, 2: None, 3: batter}
+                recent_runners.append(batter)
+
+            elif "double" in result and "double play" not in result:
+                bases = {1: None, 2: batter, 3: None}
+                recent_runners.append(batter)
+
+            elif (
+                "single" in result
+                or "walk" in result
+                or "hit by pitch" in result
+                or "reached on error" in result
+                or "fielder's choice" in result
+            ):
+                # Apply only the forced movement we can infer safely.
+                if bases[2] and bases[1]:
+                    bases[3] = bases[2]
+
+                if bases[1]:
+                    bases[2] = bases[1]
+
+                bases[1] = batter
+                recent_runners.append(batter)
+
+            elif "double play" in result:
+                bases[1] = None
+
     return steals
 
 
-def abbreviated_name(full_name):
-    parts = str(full_name).strip().split()
-    if len(parts) < 2:
-        return str(full_name).strip()
-    return f"{parts[0][0]}. {parts[-1]}"
-
-
 def assign_sb_to_players(player_names, successful_steals):
-    result = {}
+    """
+    Match the inferred abbreviated runner names to the player names used by
+    the batting tables.
+    """
     normalized_success = {
-        re.sub(r"[^a-z]", "", name.lower()): count
+        re.sub(r"[^a-z]", "", str(name).lower()): count
         for name, count in successful_steals.items()
     }
+
+    assigned = {}
 
     for player in player_names:
         player_key = re.sub(r"[^a-z]", "", str(player).lower())
         total = 0
-        for full_key, count in normalized_success.items():
-            if player_key == full_key or player_key in full_key or full_key in player_key:
+
+        for runner_key, count in normalized_success.items():
+            if (
+                player_key == runner_key
+                or player_key in runner_key
+                or runner_key in player_key
+            ):
                 total += count
-        result[player] = total
-    return result
+
+        assigned[player] = total
+
+    return assigned
 
 
 def prepare_pitch_by_pitch(uploaded_csv):
