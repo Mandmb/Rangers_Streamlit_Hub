@@ -10,7 +10,16 @@ from datetime import date
 from io import BytesIO
 
 from PIL import Image
-from pypdf import PdfReader
+try:
+    from pypdf import PdfReader
+    PDF_READER_AVAILABLE = True
+except ModuleNotFoundError:
+    try:
+        from PyPDF2 import PdfReader
+        PDF_READER_AVAILABLE = True
+    except ModuleNotFoundError:
+        PdfReader = None
+        PDF_READER_AVAILABLE = False
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import landscape, letter
 from reportlab.lib.utils import ImageReader
@@ -413,6 +422,11 @@ def build_pitch_type_tables(terminal_df, hitter_hand_context=None):
 # ============================================================
 
 def extract_pdf_text(uploaded_pdf):
+    if not PDF_READER_AVAILABLE or PdfReader is None:
+        raise RuntimeError(
+            "PDF reading dependency is missing. Add `pypdf` to requirements.txt and redeploy."
+        )
+
     uploaded_pdf.seek(0)
     reader = PdfReader(uploaded_pdf)
     text = "\n".join(page.extract_text() or "" for page in reader.pages)
