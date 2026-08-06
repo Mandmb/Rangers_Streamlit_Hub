@@ -1038,21 +1038,45 @@ overall_df_all = aggregate_stats(terminal_df)
 vs_rhp_df_all = aggregate_stats(terminal_df, pitcher_hand="R")
 vs_lhp_df_all = aggregate_stats(terminal_df, pitcher_hand="L")
 
-overall_df = overall_df_all[overall_df_all["PA"] >= minimum_pa].copy()
-vs_rhp_df = vs_rhp_df_all[vs_rhp_df_all["PA"] >= minimum_pa].copy()
-vs_lhp_df = vs_lhp_df_all[vs_lhp_df_all["PA"] >= minimum_pa].copy()
+# Minimum PA qualification is based on TOTAL PA only.
+eligible_overall = overall_df_all[overall_df_all["PA"] >= minimum_pa].copy()
+eligible_names = eligible_overall["playerFullName"].tolist()
 
-minimum_players = {
-    "Overall": overall_df,
-    "Vs RHP": vs_rhp_df,
-    "Vs LHP": vs_lhp_df,
-}
-for label, frame in minimum_players.items():
-    if len(frame) < 9:
-        st.warning(
-            f"{label} currently has only {len(frame)} eligible hitters with "
-            f"{int(minimum_pa)}+ PA."
-        )
+overall_df = eligible_overall.copy()
+
+def build_eligible_split(split_df, eligible_df):
+    """
+    Keep every hitter who qualifies through total PA.
+
+    If a qualified hitter has no PA in a particular split, retain the player
+    with zero split statistics instead of removing them from the player pool.
+    """
+    base = eligible_df[["playerFullName", "Bats"]].copy()
+
+    split_columns = ["playerFullName", "PA", "AVG", "OBP", "SLG", "ISO", "SB"]
+    available = [column for column in split_columns if column in split_df.columns]
+
+    merged = base.merge(
+        split_df[available],
+        on="playerFullName",
+        how="left",
+    )
+
+    for column in ["PA", "AVG", "OBP", "SLG", "ISO", "SB"]:
+        if column not in merged.columns:
+            merged[column] = 0
+        merged[column] = pd.to_numeric(merged[column], errors="coerce").fillna(0)
+
+    return merged[["playerFullName", "Bats", "PA", "AVG", "OBP", "SLG", "ISO", "SB"]]
+
+vs_rhp_df = build_eligible_split(vs_rhp_df_all, eligible_overall)
+vs_lhp_df = build_eligible_split(vs_lhp_df_all, eligible_overall)
+
+if len(overall_df) < 9:
+    st.warning(
+        f"Only {len(overall_df)} hitters have {int(minimum_pa)}+ total PA. "
+        "At least 9 qualified hitters are required to build a complete lineup."
+    )
 
 overall_lineup, overall_pool = build_standard_lineup(overall_df, weights)
 rhp_lineup, rhp_pool = build_standard_lineup(vs_rhp_df, weights)
@@ -1098,7 +1122,7 @@ if lineup_mode == "Vs Uploaded Pitcher":
     render_pitcher_card(pitcher_info)
 
 st.subheader(f"Optimized Lineup — {lineup_mode}")
-st.caption(f"Eligibility filter: {int(minimum_pa)}+ PA in the relevant split.")
+st.caption(f"Eligibility filter: {int(minimum_pa)}+ total PA across all pitcher hands.")
 render_lineup_table(selected_lineup, header_color)
 
 with st.expander("Player Pool and Calculated Statistics"):
