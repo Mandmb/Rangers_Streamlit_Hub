@@ -489,6 +489,101 @@ def build_pitch_type_tables(terminal_df, hitter_hand_context=None):
     return tables
 
 
+
+# ============================================================
+# PRE-CALCULATED LINEUP OPTIMIZER CSV
+# ============================================================
+
+def prepare_lineup_optimizer_csv(uploaded_csv):
+    """
+    Read the pre-calculated Lineup Optimization CSV.
+
+    Expected fields:
+      playerFullName, batsHand, PA, AVG, OBP, SLG, ISO, SB
+
+    The export may contain a TOTAL row and may also repeat the CSV header as
+    a data row. Both are removed automatically.
+    """
+    try:
+        df = pd.read_csv(uploaded_csv)
+    except Exception as exc:
+        st.error(f"Could not read Lineup Optimizer CSV: {exc}")
+        return None
+
+    df = clean_columns(df)
+
+    required = ["playerFullName", "PA", "AVG", "OBP", "SLG", "ISO", "SB"]
+    missing = [column for column in required if column not in df.columns]
+    if missing:
+        st.error(
+            "This does not look like a Lineup Optimizer CSV. "
+            f"Missing columns: {missing}"
+        )
+        return None
+
+    bats_col = find_column(df, ["batsHand", "BatsHand", "bats", "Bats"])
+    if bats_col is None:
+        df["Bats"] = "R"
+    else:
+        df["Bats"] = df[bats_col].apply(normalize_hand)
+
+    # Remove the summary TOTAL row, blank-name rows, and repeated header rows.
+    df["playerFullName"] = df["playerFullName"].astype(str).str.strip()
+
+    if "playerId" in df.columns:
+        player_id_text = df["playerId"].astype(str).str.strip().str.lower()
+        df = df[player_id_text != "total"].copy()
+
+    bad_names = {
+        "", "nan", "none", "null", "playerfullname", "player full name"
+    }
+    df = df[~df["playerFullName"].str.lower().isin(bad_names)].copy()
+
+    for column in ["PA", "AVG", "OBP", "SLG", "ISO", "SB"]:
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+
+    df = df[df["PA"].notna()].copy()
+
+    for column in ["PA", "AVG", "OBP", "SLG", "ISO", "SB"]:
+        df[column] = df[column].fillna(0)
+
+    # If ISO is missing/blank for an otherwise valid row, reconstruct it.
+    iso_recalc = df["SLG"] - df["AVG"]
+    df["ISO"] = df["ISO"].where(df["ISO"].notna(), iso_recalc)
+
+    return df[
+        ["playerFullName", "Bats", "PA", "AVG", "OBP", "SLG", "ISO", "SB"]
+    ].reset_index(drop=True)
+
+
+def detect_csv_source(uploaded_csv):
+    """
+    Auto-detect whether an uploaded CSV is pitch-by-pitch Pregame data or a
+    pre-calculated Lineup Optimizer export.
+    """
+    try:
+        uploaded_csv.seek(0)
+        sample = pd.read_csv(uploaded_csv, nrows=5)
+        uploaded_csv.seek(0)
+    except Exception:
+        try:
+            uploaded_csv.seek(0)
+        except Exception:
+            pass
+        return None
+
+    columns = {str(column).strip().lower() for column in sample.columns}
+
+    pregame_markers = {"pitchresult", "pitchtype", "batterhand", "pitcherhand"}
+    optimizer_markers = {"playerfullname", "pa", "avg", "obp", "slg", "iso", "sb"}
+
+    if pregame_markers.issubset(columns):
+        return "Pregame Pitch-by-Pitch"
+    if optimizer_markers.issubset(columns):
+        return "Lineup Optimizer Stats"
+    return None
+
+
 # ============================================================
 # PITCHER PDF PARSER
 # ============================================================
@@ -1072,125 +1167,236 @@ with st.sidebar:
         value=0,
         step=5,
         help=(
-            "Only hitters with at least this many plate appearances in the relevant split "
-            "will be eligible. Example: 50 means 50+ PA."
+            "Eligibility is based on TOTAL plate appearances. "
+            "Example: 50 means only hitters with 50+ total PA are eligible."
         ),
-    )
-
-    lineup_mode = st.radio(
-        "Lineup Type",
-        ["Overall", "Vs RHP", "Vs LHP", "Vs Uploaded Pitcher"],
     )
 
 primary_rgb, accent_rgb = extract_team_colors(team_logo)
 
+st.markdown("### Data Source")
+csv_source = st.radio(
+    "CSV Source",
+    ["Pregame Pitch-by-Pitch", "Lineup Optimizer Stats"],
+    horizontal=True,
+    help=(
+        "Pregame Pitch-by-Pitch enables Overall, vs RHP, vs LHP, and opponent-specific lineups. "
+        "Lineup Optimizer Stats uses the already-calculated PA/AVG/OBP/SLG/ISO/SB values for the Overall lineup."
+    ),
+)
+
 col1, col2 = st.columns(2)
 with col1:
-    pregame_file = st.file_uploader(
-        "Pregame Pitch-by-Pitch CSV",
-        type=["csv"],
-        help="Expected columns include batterAbbrevName, batterHand, pitcherHand, pitchType, pitchResult and BaseStealAtt.",
-    )
+    if csv_source == "Pregame Pitch-by-Pitch":
+        hitter_file = st.file_uploader(
+            "Pregame Pitch-by-Pitch CSV",
+            type=["csv"],
+            key="pregame_source_csv",
+            help=(
+                "Expected fields include batterAbbrevName, batterHand, pitcherHand, "
+                "pitchType, pitchResult and BaseStealAtt."
+            ),
+        )
+    else:
+        hitter_file = st.file_uploader(
+            "Lineup Optimizer CSV",
+            type=["csv"],
+            key="optimizer_source_csv",
+            help=(
+                "Expected fields include playerFullName, batsHand, PA, AVG, OBP, "
+                "SLG, ISO and SB."
+            ),
+        )
+
 with col2:
     pitcher_pdf = st.file_uploader(
         "Opponent Pitcher PDF",
         type=["pdf"],
-        help="Required only for the opponent-specific lineup.",
+        help="Used with the Pregame Pitch-by-Pitch source for the opponent-specific lineup.",
     )
 
-if pregame_file is None:
-    st.info("Upload the Pregame pitch-by-pitch CSV to begin.")
+if hitter_file is None:
+    st.info(f"Upload the {csv_source} CSV to begin.")
     st.stop()
-
-raw_df, terminal_df = prepare_pitch_by_pitch(pregame_file)
-if terminal_df is None:
-    st.stop()
-
-overall_df_all = aggregate_stats(terminal_df)
-vs_rhp_df_all = aggregate_stats(terminal_df, pitcher_hand="R")
-vs_lhp_df_all = aggregate_stats(terminal_df, pitcher_hand="L")
-
-# Minimum PA qualification is based on TOTAL PA only.
-eligible_overall = overall_df_all[overall_df_all["PA"] >= minimum_pa].copy()
-eligible_names = eligible_overall["playerFullName"].tolist()
-
-overall_df = eligible_overall.copy()
-
-def build_eligible_split(split_df, eligible_df):
-    """
-    Keep every hitter who qualifies through total PA.
-
-    If a qualified hitter has no PA in a particular split, retain the player
-    with zero split statistics instead of removing them from the player pool.
-    """
-    base = eligible_df[["playerFullName", "Bats"]].copy()
-
-    split_columns = ["playerFullName", "PA", "AVG", "OBP", "SLG", "ISO", "SB"]
-    available = [column for column in split_columns if column in split_df.columns]
-
-    merged = base.merge(
-        split_df[available],
-        on="playerFullName",
-        how="left",
-    )
-
-    for column in ["PA", "AVG", "OBP", "SLG", "ISO", "SB"]:
-        if column not in merged.columns:
-            merged[column] = 0
-        merged[column] = pd.to_numeric(merged[column], errors="coerce").fillna(0)
-
-    return merged[["playerFullName", "Bats", "PA", "AVG", "OBP", "SLG", "ISO", "SB"]]
-
-vs_rhp_df = build_eligible_split(vs_rhp_df_all, eligible_overall)
-vs_lhp_df = build_eligible_split(vs_lhp_df_all, eligible_overall)
-
-if len(overall_df) < 9:
-    st.warning(
-        f"Only {len(overall_df)} hitters have {int(minimum_pa)}+ total PA. "
-        "At least 9 qualified hitters are required to build a complete lineup."
-    )
-
-overall_lineup, overall_pool = build_standard_lineup(overall_df, weights)
-rhp_lineup, rhp_pool = build_standard_lineup(vs_rhp_df, weights)
-lhp_lineup, lhp_pool = build_standard_lineup(vs_lhp_df, weights)
 
 pitcher_info = None
 pitcher_lineup = None
 pitcher_pool = None
+raw_df = None
+terminal_df = None
 
-if pitcher_pdf is not None:
-    pitcher_info = parse_pitcher_pdf(pitcher_pdf)
-    if pitcher_info:
-        split_df = vs_rhp_df if pitcher_info["hand"] == "R" else vs_lhp_df
-        pitch_tables = build_pitch_type_tables(terminal_df, hitter_hand_context=pitcher_info["hand"])
-        pitcher_lineup, pitcher_pool = build_pitcher_specific_lineup(
-            overall_df, split_df, pitch_tables, pitcher_info, weights, regression_pa
+if csv_source == "Pregame Pitch-by-Pitch":
+    raw_df, terminal_df = prepare_pitch_by_pitch(hitter_file)
+    if terminal_df is None:
+        st.stop()
+
+    overall_df_all = aggregate_stats(terminal_df)
+    vs_rhp_df_all = aggregate_stats(terminal_df, pitcher_hand="R")
+    vs_lhp_df_all = aggregate_stats(terminal_df, pitcher_hand="L")
+
+    # Minimum PA qualification is based on TOTAL PA only.
+    eligible_overall = overall_df_all[
+        overall_df_all["PA"] >= minimum_pa
+    ].copy()
+
+    overall_df = eligible_overall.copy()
+
+    def build_eligible_split(split_df, eligible_df):
+        """
+        Every player who qualifies by total PA stays eligible in each split.
+        The split statistics themselves still reflect only that pitcher hand.
+        """
+        base = eligible_df[["playerFullName", "Bats"]].copy()
+        split_columns = [
+            "playerFullName", "PA", "AVG", "OBP", "SLG", "ISO", "SB"
+        ]
+        available = [
+            column for column in split_columns if column in split_df.columns
+        ]
+
+        merged = base.merge(
+            split_df[available],
+            on="playerFullName",
+            how="left",
         )
 
-lineups = {
-    "Overall": overall_lineup,
-    "Vs RHP": rhp_lineup,
-    "Vs LHP": lhp_lineup,
-}
-if pitcher_lineup is not None:
-    lineups["Vs Pitcher"] = pitcher_lineup
+        for column in ["PA", "AVG", "OBP", "SLG", "ISO", "SB"]:
+            if column not in merged.columns:
+                merged[column] = 0
+            merged[column] = pd.to_numeric(
+                merged[column], errors="coerce"
+            ).fillna(0)
+
+        return merged[
+            ["playerFullName", "Bats", "PA", "AVG", "OBP", "SLG", "ISO", "SB"]
+        ]
+
+    vs_rhp_df = build_eligible_split(vs_rhp_df_all, eligible_overall)
+    vs_lhp_df = build_eligible_split(vs_lhp_df_all, eligible_overall)
+
+    if len(overall_df) < 9:
+        st.error(
+            f"Only {len(overall_df)} hitters have {int(minimum_pa)}+ total PA. "
+            "At least 9 qualified hitters are required to build a complete lineup."
+        )
+        st.stop()
+
+    overall_lineup, overall_pool = build_standard_lineup(overall_df, weights)
+    rhp_lineup, rhp_pool = build_standard_lineup(vs_rhp_df, weights)
+    lhp_lineup, lhp_pool = build_standard_lineup(vs_lhp_df, weights)
+
+    if pitcher_pdf is not None:
+        pitcher_info = parse_pitcher_pdf(pitcher_pdf)
+        if pitcher_info:
+            split_df = (
+                vs_rhp_df if pitcher_info["hand"] == "R" else vs_lhp_df
+            )
+            pitch_tables = build_pitch_type_tables(
+                terminal_df,
+                hitter_hand_context=pitcher_info["hand"],
+            )
+            pitcher_lineup, pitcher_pool = build_pitcher_specific_lineup(
+                overall_df,
+                split_df,
+                pitch_tables,
+                pitcher_info,
+                weights,
+                regression_pa,
+            )
+
+    available_modes = ["Overall", "Vs RHP", "Vs LHP", "Vs Uploaded Pitcher"]
+
+else:
+    overall_df_all = prepare_lineup_optimizer_csv(hitter_file)
+    if overall_df_all is None:
+        st.stop()
+
+    overall_df = overall_df_all[
+        overall_df_all["PA"] >= minimum_pa
+    ].copy()
+
+    if len(overall_df) < 9:
+        st.error(
+            f"Only {len(overall_df)} hitters have {int(minimum_pa)}+ total PA. "
+            "At least 9 qualified hitters are required to build a complete lineup."
+        )
+        st.stop()
+
+    overall_lineup, overall_pool = build_standard_lineup(overall_df, weights)
+    rhp_lineup = rhp_pool = None
+    lhp_lineup = lhp_pool = None
+
+    available_modes = ["Overall"]
+
+    if pitcher_pdf is not None:
+        st.info(
+            "The Lineup Optimizer Stats CSV contains overall statistics only. "
+            "Use the Pregame Pitch-by-Pitch source to create vs RHP, vs LHP, "
+            "or opponent-specific lineups."
+        )
+
+# Override the sidebar mode selector with modes supported by the selected data source.
+lineup_mode = st.radio(
+    "Lineup Type",
+    available_modes,
+    horizontal=True,
+    key="supported_lineup_mode",
+)
+
+lineups = {"Overall": overall_lineup}
 
 display_map = {
-    "Overall": (overall_lineup, overall_pool, rgb_to_hex(primary_rgb)),
-    "Vs RHP": (rhp_lineup, rhp_pool, rgb_to_hex(accent_rgb)),
-    "Vs LHP": (lhp_lineup, lhp_pool, rgb_to_hex(primary_rgb)),
-    "Vs Uploaded Pitcher": (pitcher_lineup, pitcher_pool, rgb_to_hex(accent_rgb)),
+    "Overall": (
+        overall_lineup,
+        overall_pool,
+        rgb_to_hex(primary_rgb),
+    )
 }
+
+if csv_source == "Pregame Pitch-by-Pitch":
+    lineups["Vs RHP"] = rhp_lineup
+    lineups["Vs LHP"] = lhp_lineup
+
+    display_map["Vs RHP"] = (
+        rhp_lineup,
+        rhp_pool,
+        rgb_to_hex(accent_rgb),
+    )
+    display_map["Vs LHP"] = (
+        lhp_lineup,
+        lhp_pool,
+        rgb_to_hex(primary_rgb),
+    )
+
+    if pitcher_lineup is not None:
+        lineups["Vs Pitcher"] = pitcher_lineup
+        display_map["Vs Uploaded Pitcher"] = (
+            pitcher_lineup,
+            pitcher_pool,
+            rgb_to_hex(accent_rgb),
+        )
+    else:
+        display_map["Vs Uploaded Pitcher"] = (
+            None,
+            None,
+            rgb_to_hex(accent_rgb),
+        )
 
 selected_lineup, selected_pool, header_color = display_map[lineup_mode]
 
 if lineup_mode == "Vs Uploaded Pitcher":
     if pitcher_pdf is None:
-        st.info("Upload the opponent pitcher PDF to create the pitcher-specific lineup.")
+        st.info(
+            "Upload the opponent pitcher PDF to create the pitcher-specific lineup."
+        )
         st.stop()
+
     if pitcher_info is None or pitcher_lineup is None:
-        st.error("The opponent report could not be parsed well enough to create a lineup.")
+        st.error(
+            "The opponent report could not be parsed well enough to create a lineup."
+        )
         st.stop()
+
     render_pitcher_card(pitcher_info)
 
 st.subheader(f"Optimized Lineup — {lineup_mode}")
@@ -1223,7 +1429,11 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-if pitcher_info and all(key in lineups for key in ["Overall", "Vs RHP", "Vs LHP", "Vs Pitcher"]):
+if (
+    csv_source == "Pregame Pitch-by-Pitch"
+    and pitcher_info
+    and all(key in lineups for key in ["Overall", "Vs RHP", "Vs LHP", "Vs Pitcher"])
+):
     pdf_buffer = generate_pdf(
         lineups=lineups,
         pitcher_info=pitcher_info,
@@ -1242,7 +1452,15 @@ if pitcher_info and all(key in lineups for key in ["Overall", "Vs RHP", "Vs LHP"
         type="primary",
     )
 else:
-    st.caption("Upload an opponent pitcher PDF to enable the four-lineup PDF export.")
+    if csv_source == "Pregame Pitch-by-Pitch":
+        st.caption(
+            "Upload an opponent pitcher PDF to enable the four-lineup PDF export."
+        )
+    else:
+        st.caption(
+            "Four-lineup PDF export requires the Pregame Pitch-by-Pitch source "
+            "because the pre-calculated CSV does not contain pitcher-hand or pitch-type splits."
+        )
 
 st.info(
     "SB is credited when the play description explicitly identifies a successful base stealer. "
