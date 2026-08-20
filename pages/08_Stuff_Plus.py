@@ -39,7 +39,7 @@ st.markdown(
 
 st.title("Stuff Plus")
 st.caption(
-    "Physical pitch-quality model. Upload one CSV per pitch type; scores are normalized so 100 = the uploaded peer-group average. Version: PDF Export."
+    "Physical pitch-quality model. Upload one CSV per pitch type; scores are normalized so 100 = the uploaded peer-group average. Version: PDF Highlight + Spacing."
 )
 
 # ============================================================
@@ -417,6 +417,10 @@ def build_stuff_plus_pdf(combined_df, pitch_order):
     TEXT = colors.HexColor("#1F2937")
     MUTED = colors.HexColor("#667085")
     WHITE = colors.white
+    HIGHLIGHT_YELLOW = colors.HexColor("#FFF4C2")
+    HIGHLIGHT_BLUE = colors.HexColor("#DDEEFF")
+    HIGHLIGHT_GREEN = colors.HexColor("#DFF3DF")
+    HIGHLIGHT_PURPLE = colors.HexColor("#EADDF7")
 
     title_style = ParagraphStyle(
         "pdf_title",
@@ -500,10 +504,31 @@ def build_stuff_plus_pdf(combined_df, pitch_order):
 
     left = 30
     right = 30
-    top_y = page_h - 58
+    # Reserve a little extra room under the title for the highlight legend.
+    top_y = page_h - 78
     bottom_y = 34
     avail_w = page_w - left - right
     avail_h = top_y - bottom_y
+
+    # Highlight legend: number of pitches with Stuff+ > 100.
+    legend_y = page_h - 59
+    c.setFillColor(MUTED)
+    c.setFont("Helvetica-Bold", 6.7)
+    c.drawString(left, legend_y, "Above-average pitches:")
+    legend_items = [
+        ("1", HIGHLIGHT_YELLOW),
+        ("2", HIGHLIGHT_BLUE),
+        ("3", HIGHLIGHT_GREEN),
+        ("4+", HIGHLIGHT_PURPLE),
+    ]
+    lx = left + 83
+    for label, fill in legend_items:
+        c.setFillColor(fill)
+        c.roundRect(lx, legend_y - 4, 18, 10, 2, stroke=0, fill=1)
+        c.setFillColor(TEXT)
+        c.setFont("Helvetica-Bold", 6.2)
+        c.drawCentredString(lx + 9, legend_y - 1, label)
+        lx += 27
 
     n_rows = max(1, len(data))
     n_pitch_cols = max(1, len(active_pitches))
@@ -515,7 +540,7 @@ def build_stuff_plus_pdf(combined_df, pitch_order):
     font_size = max(5.0, min(8.0, row_h * 0.42))
 
     page1_table = Table(data, colWidths=col_widths, rowHeights=[row_h] * n_rows)
-    page1_table.setStyle(TableStyle([
+    page1_style = [
         ("BACKGROUND", (0, 0), (-1, 0), NAVY),
         ("TEXTCOLOR", (0, 0), (-1, 0), WHITE),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
@@ -530,7 +555,28 @@ def build_stuff_plus_pdf(combined_df, pitch_order):
         ("RIGHTPADDING", (0, 0), (-1, -1), 4),
         ("TOPPADDING", (0, 0), (-1, -1), 1),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
-    ]))
+    ]
+
+    # Apply a full-row highlight based on the number of available pitches
+    # that are above the peer average (Stuff+ > 100).
+    for table_row, (_, prow) in enumerate(pivot.iterrows(), start=1):
+        above_avg = sum(
+            1 for pitch in active_pitches
+            if pd.notna(prow.get(pitch, np.nan)) and float(prow.get(pitch)) > 100.0
+        )
+        fill = None
+        if above_avg == 1:
+            fill = HIGHLIGHT_YELLOW
+        elif above_avg == 2:
+            fill = HIGHLIGHT_BLUE
+        elif above_avg == 3:
+            fill = HIGHLIGHT_GREEN
+        elif above_avg >= 4:
+            fill = HIGHLIGHT_PURPLE
+        if fill is not None:
+            page1_style.append(("BACKGROUND", (0, table_row), (-1, table_row), fill))
+
+    page1_table.setStyle(TableStyle(page1_style))
 
     tw, th = page1_table.wrapOn(c, avail_w, avail_h)
     page1_table.drawOn(c, left, top_y - th)
@@ -550,26 +596,23 @@ def build_stuff_plus_pdf(combined_df, pitch_order):
         max_rows = max(max_rows, len(dfp) + 1)
         pitch_tables.append((pitch, dfp))
 
-    # Favor 4 columns x 2 rows for 5–8 pitch types, 3 columns for 4–6,
-    # and fewer columns for smaller uploads. This keeps every leaderboard
-    # on page 2 while preserving readable pitcher names.
+    # Keep leaderboards visually open. We cap the grid at 3 columns instead
+    # of squeezing four narrow tables across the page.
     n_tables = len(pitch_tables)
     if n_tables <= 2:
         grid_cols = n_tables
     elif n_tables <= 4:
         grid_cols = 2
-    elif n_tables <= 6:
-        grid_cols = 3
     else:
-        grid_cols = 4
+        grid_cols = 3
     grid_cols = max(1, grid_cols)
     grid_rows = int(math.ceil(n_tables / grid_cols))
 
-    margin_x = 24
-    gap_x = 8
-    gap_y = 10
-    content_top = page_h - 54
-    content_bottom = 32
+    margin_x = 28
+    gap_x = 16
+    gap_y = 14
+    content_top = page_h - 58
+    content_bottom = 34
     total_w = page_w - 2 * margin_x
     total_h = content_top - content_bottom
     box_w = (total_w - gap_x * (grid_cols - 1)) / grid_cols
@@ -581,15 +624,19 @@ def build_stuff_plus_pdf(combined_df, pitch_order):
         x = margin_x + gc * (box_w + gap_x)
         y_top = content_top - gr * (box_h + gap_y)
 
-        # Pitch title strip
-        title_h = 20
+        # Subtle card background plus a slightly taller title strip gives
+        # each pitch leaderboard its own visual space.
+        c.setFillColor(colors.HexColor("#F7F9FC"))
+        c.roundRect(x, y_top - box_h, box_w, box_h, 6, stroke=0, fill=1)
+
+        title_h = 23
         c.setFillColor(NAVY)
-        c.roundRect(x, y_top - title_h, box_w, title_h, 4, stroke=0, fill=1)
+        c.roundRect(x, y_top - title_h, box_w, title_h, 6, stroke=0, fill=1)
         c.setFillColor(WHITE)
-        c.setFont("Helvetica-Bold", 9)
-        c.drawString(x + 7, y_top - 14, pitch)
-        c.setFont("Helvetica", 6.5)
-        c.drawRightString(x + box_w - 7, y_top - 14, f"{len(dfp)} pitchers")
+        c.setFont("Helvetica-Bold", 9.5)
+        c.drawString(x + 8, y_top - 15.5, pitch)
+        c.setFont("Helvetica", 6.8)
+        c.drawRightString(x + box_w - 8, y_top - 15.5, f"{len(dfp)} pitchers")
 
         table_data = [["Pitcher", "P", "Stuff+"]]
         for _, row in dfp.iterrows():
@@ -597,13 +644,13 @@ def build_stuff_plus_pdf(combined_df, pitch_order):
             stuff_txt = "-" if pd.isna(row.get("Stuff+")) else f"{row['Stuff+']:.1f}"
             table_data.append([str(row["name"]), pitches_txt, stuff_txt])
 
-        available_table_h = box_h - title_h - 3
+        available_table_h = box_h - title_h - 7
         ntr = max(1, len(table_data))
-        table_row_h = min(15, available_table_h / ntr)
-        table_font = max(4.2, min(7.2, table_row_h * 0.46))
+        table_row_h = min(17.5, available_table_h / ntr)
+        table_font = max(4.5, min(7.8, table_row_h * 0.47))
 
-        name_w = box_w * 0.62
-        p_w = box_w * 0.16
+        name_w = box_w * 0.64
+        p_w = box_w * 0.15
         stuff_w = box_w - name_w - p_w
         tbl = Table(
             table_data,
@@ -619,16 +666,18 @@ def build_stuff_plus_pdf(combined_df, pitch_order):
             ("ALIGN", (0, 0), (0, -1), "LEFT"),
             ("ALIGN", (1, 0), (-1, -1), "CENTER"),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("GRID", (0, 0), (-1, -1), 0.3, GRID),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [WHITE, colors.HexColor("#FBFCFE")]),
-            ("LEFTPADDING", (0, 0), (-1, -1), 3),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
-            ("TOPPADDING", (0, 0), (-1, -1), 0.5),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 0.5),
+            # Horizontal rules instead of a full boxed grid makes the rankings
+            # much easier to scan and less visually crowded.
+            ("LINEBELOW", (0, 0), (-1, -1), 0.25, colors.HexColor("#D8DEE7")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [WHITE, colors.HexColor("#FAFBFD")]),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+            ("TOPPADDING", (0, 0), (-1, -1), 1.2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 1.2),
         ]))
 
         tw, th = tbl.wrapOn(c, box_w, available_table_h)
-        tbl.drawOn(c, x, y_top - title_h - th - 2)
+        tbl.drawOn(c, x, y_top - title_h - th - 5)
 
     draw_footer(2)
     c.save()
