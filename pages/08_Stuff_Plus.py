@@ -39,7 +39,7 @@ st.markdown(
 
 st.title("Stuff Plus")
 st.caption(
-    "Physical pitch-quality model. Upload one CSV per pitch type; scores are normalized so 100 = the uploaded peer-group average. Version: Cloud Load Fix."
+    "Physical pitch-quality model. Upload one CSV per pitch type; scores are normalized so 100 = the uploaded peer-group average. Version: PDF Export."
 )
 
 # ============================================================
@@ -386,6 +386,257 @@ def format_table(df):
 
 
 # ============================================================
+# PDF export
+# ============================================================
+
+def _pdf_text(value):
+    if pd.isna(value):
+        return "-"
+    return str(value)
+
+
+def build_stuff_plus_pdf(combined_df, pitch_order):
+    """Create a two-page landscape PDF containing Stuff+ results."""
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    from reportlab.lib.pagesizes import landscape, letter
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.platypus import Table, TableStyle, Paragraph
+    from reportlab.pdfgen import canvas
+
+    buffer = io.BytesIO()
+    page_size = landscape(letter)
+    page_w, page_h = page_size
+    c = canvas.Canvas(buffer, pagesize=page_size)
+
+    NAVY = colors.HexColor("#003278")
+    RED = colors.HexColor("#C0111F")
+    LIGHT_BLUE = colors.HexColor("#EAF1F8")
+    GRID = colors.HexColor("#B8C2CC")
+    TEXT = colors.HexColor("#1F2937")
+    MUTED = colors.HexColor("#667085")
+    WHITE = colors.white
+
+    title_style = ParagraphStyle(
+        "pdf_title",
+        fontName="Helvetica-Bold",
+        fontSize=18,
+        textColor=NAVY,
+        leading=20,
+    )
+    subtitle_style = ParagraphStyle(
+        "pdf_subtitle",
+        fontName="Helvetica",
+        fontSize=8,
+        textColor=MUTED,
+        leading=10,
+    )
+    cell_left = ParagraphStyle(
+        "cell_left",
+        fontName="Helvetica",
+        fontSize=7,
+        textColor=TEXT,
+        alignment=TA_LEFT,
+        leading=8,
+    )
+    cell_center = ParagraphStyle(
+        "cell_center",
+        fontName="Helvetica",
+        fontSize=7,
+        textColor=TEXT,
+        alignment=TA_CENTER,
+        leading=8,
+    )
+
+    def draw_header(page_title, subtitle):
+        c.setFillColor(NAVY)
+        c.rect(0, page_h - 42, page_w, 42, stroke=0, fill=1)
+        c.setFillColor(WHITE)
+        c.setFont("Helvetica-Bold", 18)
+        c.drawString(30, page_h - 27, page_title)
+        c.setFillColor(colors.HexColor("#DCE7F5"))
+        c.setFont("Helvetica", 7.5)
+        c.drawRightString(page_w - 30, page_h - 26, subtitle)
+
+    def draw_footer(page_num):
+        c.setStrokeColor(colors.HexColor("#D0D5DD"))
+        c.line(30, 22, page_w - 30, 22)
+        c.setFillColor(MUTED)
+        c.setFont("Helvetica", 6.5)
+        c.drawString(30, 10, "Stuff+ | 100 = uploaded peer-group average")
+        c.drawRightString(page_w - 30, 10, f"Page {page_num} of 2")
+
+    # --------------------------------------------------------
+    # PAGE 1 — Pitcher-by-pitch Stuff+ matrix
+    # --------------------------------------------------------
+    draw_header("Stuff Plus Results", "Pitcher-by-pitch Stuff+ overview")
+
+    active_pitches = [p for p in pitch_order if p in combined_df["pitch_type"].unique()]
+    pivot = (
+        combined_df.pivot_table(
+            index="name",
+            columns="pitch_type",
+            values="Stuff+",
+            aggfunc="mean",
+        )
+        .reindex(columns=active_pitches)
+        .reset_index()
+    )
+
+    # Sort by the average Stuff+ of each pitcher's available arsenal.
+    numeric_cols = [p for p in active_pitches if p in pivot.columns]
+    pivot["_avg"] = pivot[numeric_cols].mean(axis=1, skipna=True)
+    pivot = pivot.sort_values(["_avg", "name"], ascending=[False, True]).drop(columns="_avg")
+
+    headers = ["Pitcher"] + active_pitches
+    data = [headers]
+    for _, row in pivot.iterrows():
+        vals = [row["name"]]
+        for pitch in active_pitches:
+            v = row.get(pitch, np.nan)
+            vals.append("-" if pd.isna(v) else f"{v:.1f}")
+        data.append(vals)
+
+    left = 30
+    right = 30
+    top_y = page_h - 58
+    bottom_y = 34
+    avail_w = page_w - left - right
+    avail_h = top_y - bottom_y
+
+    n_rows = max(1, len(data))
+    n_pitch_cols = max(1, len(active_pitches))
+    pitcher_w = max(120, min(190, avail_w * 0.27))
+    stat_w = (avail_w - pitcher_w) / n_pitch_cols
+    col_widths = [pitcher_w] + [stat_w] * n_pitch_cols
+
+    row_h = min(20, avail_h / n_rows)
+    font_size = max(5.0, min(8.0, row_h * 0.42))
+
+    page1_table = Table(data, colWidths=col_widths, rowHeights=[row_h] * n_rows)
+    page1_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), NAVY),
+        ("TEXTCOLOR", (0, 0), (-1, 0), WHITE),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), font_size),
+        ("FONTNAME", (0, 1), (0, -1), "Helvetica-Bold"),
+        ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+        ("ALIGN", (0, 0), (0, -1), "LEFT"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("GRID", (0, 0), (-1, -1), 0.35, GRID),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [WHITE, colors.HexColor("#F8FAFC")]),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 1),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
+    ]))
+
+    tw, th = page1_table.wrapOn(c, avail_w, avail_h)
+    page1_table.drawOn(c, left, top_y - th)
+    draw_footer(1)
+    c.showPage()
+
+    # --------------------------------------------------------
+    # PAGE 2 — Ranked leaderboard table for each pitch
+    # --------------------------------------------------------
+    draw_header("Stuff Plus Leaderboards", "Ranked highest to lowest by Stuff+")
+
+    pitch_tables = []
+    max_rows = 0
+    for pitch in active_pitches:
+        dfp = combined_df[combined_df["pitch_type"] == pitch].copy()
+        dfp = dfp.sort_values(["Stuff+", "pitches", "name"], ascending=[False, False, True], na_position="last")
+        max_rows = max(max_rows, len(dfp) + 1)
+        pitch_tables.append((pitch, dfp))
+
+    # Favor 4 columns x 2 rows for 5–8 pitch types, 3 columns for 4–6,
+    # and fewer columns for smaller uploads. This keeps every leaderboard
+    # on page 2 while preserving readable pitcher names.
+    n_tables = len(pitch_tables)
+    if n_tables <= 2:
+        grid_cols = n_tables
+    elif n_tables <= 4:
+        grid_cols = 2
+    elif n_tables <= 6:
+        grid_cols = 3
+    else:
+        grid_cols = 4
+    grid_cols = max(1, grid_cols)
+    grid_rows = int(math.ceil(n_tables / grid_cols))
+
+    margin_x = 24
+    gap_x = 8
+    gap_y = 10
+    content_top = page_h - 54
+    content_bottom = 32
+    total_w = page_w - 2 * margin_x
+    total_h = content_top - content_bottom
+    box_w = (total_w - gap_x * (grid_cols - 1)) / grid_cols
+    box_h = (total_h - gap_y * (grid_rows - 1)) / grid_rows
+
+    for i, (pitch, dfp) in enumerate(pitch_tables):
+        gr = i // grid_cols
+        gc = i % grid_cols
+        x = margin_x + gc * (box_w + gap_x)
+        y_top = content_top - gr * (box_h + gap_y)
+
+        # Pitch title strip
+        title_h = 20
+        c.setFillColor(NAVY)
+        c.roundRect(x, y_top - title_h, box_w, title_h, 4, stroke=0, fill=1)
+        c.setFillColor(WHITE)
+        c.setFont("Helvetica-Bold", 9)
+        c.drawString(x + 7, y_top - 14, pitch)
+        c.setFont("Helvetica", 6.5)
+        c.drawRightString(x + box_w - 7, y_top - 14, f"{len(dfp)} pitchers")
+
+        table_data = [["Pitcher", "P", "Stuff+"]]
+        for _, row in dfp.iterrows():
+            pitches_txt = "-" if pd.isna(row.get("pitches")) else f"{int(round(row['pitches']))}"
+            stuff_txt = "-" if pd.isna(row.get("Stuff+")) else f"{row['Stuff+']:.1f}"
+            table_data.append([str(row["name"]), pitches_txt, stuff_txt])
+
+        available_table_h = box_h - title_h - 3
+        ntr = max(1, len(table_data))
+        table_row_h = min(15, available_table_h / ntr)
+        table_font = max(4.2, min(7.2, table_row_h * 0.46))
+
+        name_w = box_w * 0.62
+        p_w = box_w * 0.16
+        stuff_w = box_w - name_w - p_w
+        tbl = Table(
+            table_data,
+            colWidths=[name_w, p_w, stuff_w],
+            rowHeights=[table_row_h] * ntr,
+        )
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), LIGHT_BLUE),
+            ("TEXTCOLOR", (0, 0), (-1, 0), NAVY),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTNAME", (0, 1), (0, -1), "Helvetica"),
+            ("FONTSIZE", (0, 0), (-1, -1), table_font),
+            ("ALIGN", (0, 0), (0, -1), "LEFT"),
+            ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("GRID", (0, 0), (-1, -1), 0.3, GRID),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [WHITE, colors.HexColor("#FBFCFE")]),
+            ("LEFTPADDING", (0, 0), (-1, -1), 3),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+            ("TOPPADDING", (0, 0), (-1, -1), 0.5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 0.5),
+        ]))
+
+        tw, th = tbl.wrapOn(c, box_w, available_table_h)
+        tbl.drawOn(c, x, y_top - title_h - th - 2)
+
+    draw_footer(2)
+    c.save()
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+# ============================================================
 # Upload section
 # ============================================================
 
@@ -657,13 +908,31 @@ csv_bytes = combined[download_cols].sort_values(
     ["name", "Stuff+"], ascending=[True, False]
 ).to_csv(index=False).encode("utf-8")
 
-st.download_button(
-    "Download Stuff+ Results CSV",
-    data=csv_bytes,
-    file_name="stuff_plus_results.csv",
-    mime="text/csv",
-    width="content",
-)
+export_col1, export_col2 = st.columns(2)
+
+with export_col1:
+    st.download_button(
+        "Download Stuff+ Results CSV",
+        data=csv_bytes,
+        file_name="stuff_plus_results.csv",
+        mime="text/csv",
+        width="stretch",
+    )
+
+with export_col2:
+    try:
+        pdf_bytes = build_stuff_plus_pdf(combined, PITCH_TYPES)
+        st.download_button(
+            "Download Stuff+ Results PDF",
+            data=pdf_bytes,
+            file_name="stuff_plus_results.pdf",
+            mime="application/pdf",
+            width="stretch",
+        )
+    except ImportError:
+        st.error("PDF export requires ReportLab. Add `reportlab` to requirements.txt.")
+    except Exception as exc:
+        st.error(f"Could not build PDF: {exc}")
 
 # ============================================================
 # Methodology
