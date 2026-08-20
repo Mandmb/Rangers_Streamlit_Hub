@@ -39,7 +39,7 @@ st.markdown(
 
 st.title("Stuff Plus")
 st.caption(
-    "Physical pitch-quality model. Upload one CSV per pitch type; scores are normalized so 100 = the uploaded peer-group average. Version: PDF Highlight + Spacing."
+    "Physical pitch-quality model. Upload one CSV per pitch type; scores are normalized so 100 = the uploaded peer-group average. Version: 3-Page PDF Leaderboards."
 )
 
 # ============================================================
@@ -396,7 +396,7 @@ def _pdf_text(value):
 
 
 def build_stuff_plus_pdf(combined_df, pitch_order):
-    """Create a two-page landscape PDF containing Stuff+ results."""
+    """Create a three-page landscape PDF containing Stuff+ results."""
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_CENTER, TA_LEFT
     from reportlab.lib.pagesizes import landscape, letter
@@ -469,7 +469,7 @@ def build_stuff_plus_pdf(combined_df, pitch_order):
         c.setFillColor(MUTED)
         c.setFont("Helvetica", 6.5)
         c.drawString(30, 10, "Stuff+ | 100 = uploaded peer-group average")
-        c.drawRightString(page_w - 30, 10, f"Page {page_num} of 2")
+        c.drawRightString(page_w - 30, 10, f"Page {page_num} of 3")
 
     # --------------------------------------------------------
     # PAGE 1 — Pitcher-by-pitch Stuff+ matrix
@@ -584,102 +584,118 @@ def build_stuff_plus_pdf(combined_df, pitch_order):
     c.showPage()
 
     # --------------------------------------------------------
-    # PAGE 2 — Ranked leaderboard table for each pitch
+    # PAGES 2-3 — Ranked leaderboard tables by pitch group
     # --------------------------------------------------------
-    draw_header("Stuff Plus Leaderboards", "Ranked highest to lowest by Stuff+")
+    def draw_leaderboard_page(page_num, page_title, requested_pitches, grid_cols):
+        draw_header(page_title, "Ranked highest to lowest by Stuff+")
 
-    pitch_tables = []
-    max_rows = 0
-    for pitch in active_pitches:
-        dfp = combined_df[combined_df["pitch_type"] == pitch].copy()
-        dfp = dfp.sort_values(["Stuff+", "pitches", "name"], ascending=[False, False, True], na_position="last")
-        max_rows = max(max_rows, len(dfp) + 1)
-        pitch_tables.append((pitch, dfp))
+        page_pitches = [p for p in requested_pitches if p in active_pitches]
+        pitch_tables = []
+        for pitch in page_pitches:
+            dfp = combined_df[combined_df["pitch_type"] == pitch].copy()
+            dfp = dfp.sort_values(
+                ["Stuff+", "pitches", "name"],
+                ascending=[False, False, True],
+                na_position="last",
+            )
+            pitch_tables.append((pitch, dfp))
 
-    # Keep leaderboards visually open. We cap the grid at 3 columns instead
-    # of squeezing four narrow tables across the page.
-    n_tables = len(pitch_tables)
-    if n_tables <= 2:
-        grid_cols = n_tables
-    elif n_tables <= 4:
-        grid_cols = 2
-    else:
-        grid_cols = 3
-    grid_cols = max(1, grid_cols)
-    grid_rows = int(math.ceil(n_tables / grid_cols))
+        if not pitch_tables:
+            c.setFillColor(MUTED)
+            c.setFont("Helvetica", 11)
+            c.drawCentredString(page_w / 2, page_h / 2, "No uploaded pitch types for this page.")
+            draw_footer(page_num)
+            c.showPage()
+            return
 
-    margin_x = 28
-    gap_x = 16
-    gap_y = 14
-    content_top = page_h - 58
-    content_bottom = 34
-    total_w = page_w - 2 * margin_x
-    total_h = content_top - content_bottom
-    box_w = (total_w - gap_x * (grid_cols - 1)) / grid_cols
-    box_h = (total_h - gap_y * (grid_rows - 1)) / grid_rows
+        grid_cols = max(1, min(grid_cols, len(pitch_tables)))
+        grid_rows = int(math.ceil(len(pitch_tables) / grid_cols))
 
-    for i, (pitch, dfp) in enumerate(pitch_tables):
-        gr = i // grid_cols
-        gc = i % grid_cols
-        x = margin_x + gc * (box_w + gap_x)
-        y_top = content_top - gr * (box_h + gap_y)
+        margin_x = 30
+        gap_x = 22
+        gap_y = 18
+        content_top = page_h - 64
+        content_bottom = 36
+        total_w = page_w - 2 * margin_x
+        total_h = content_top - content_bottom
+        box_w = (total_w - gap_x * (grid_cols - 1)) / grid_cols
+        box_h = (total_h - gap_y * (grid_rows - 1)) / grid_rows
 
-        # Subtle card background plus a slightly taller title strip gives
-        # each pitch leaderboard its own visual space.
-        c.setFillColor(colors.HexColor("#F7F9FC"))
-        c.roundRect(x, y_top - box_h, box_w, box_h, 6, stroke=0, fill=1)
+        for i, (pitch, dfp) in enumerate(pitch_tables):
+            gr = i // grid_cols
+            gc = i % grid_cols
+            x = margin_x + gc * (box_w + gap_x)
+            y_top = content_top - gr * (box_h + gap_y)
 
-        title_h = 23
-        c.setFillColor(NAVY)
-        c.roundRect(x, y_top - title_h, box_w, title_h, 6, stroke=0, fill=1)
-        c.setFillColor(WHITE)
-        c.setFont("Helvetica-Bold", 9.5)
-        c.drawString(x + 8, y_top - 15.5, pitch)
-        c.setFont("Helvetica", 6.8)
-        c.drawRightString(x + box_w - 8, y_top - 15.5, f"{len(dfp)} pitchers")
+            c.setFillColor(colors.HexColor("#F8FAFC"))
+            c.roundRect(x, y_top - box_h, box_w, box_h, 7, stroke=0, fill=1)
 
-        table_data = [["Pitcher", "P", "Stuff+"]]
-        for _, row in dfp.iterrows():
-            pitches_txt = "-" if pd.isna(row.get("pitches")) else f"{int(round(row['pitches']))}"
-            stuff_txt = "-" if pd.isna(row.get("Stuff+")) else f"{row['Stuff+']:.1f}"
-            table_data.append([str(row["name"]), pitches_txt, stuff_txt])
+            title_h = 27
+            c.setFillColor(NAVY)
+            c.roundRect(x, y_top - title_h, box_w, title_h, 7, stroke=0, fill=1)
+            c.setFillColor(WHITE)
+            c.setFont("Helvetica-Bold", 11)
+            c.drawString(x + 10, y_top - 18, pitch)
+            c.setFont("Helvetica", 7.3)
+            c.drawRightString(x + box_w - 10, y_top - 18, f"{len(dfp)} pitchers")
 
-        available_table_h = box_h - title_h - 7
-        ntr = max(1, len(table_data))
-        table_row_h = min(17.5, available_table_h / ntr)
-        table_font = max(4.5, min(7.8, table_row_h * 0.47))
+            table_data = [["Pitcher", "P", "Stuff+"]]
+            for _, row in dfp.iterrows():
+                pitches_txt = "-" if pd.isna(row.get("pitches")) else f"{int(round(row['pitches']))}"
+                stuff_txt = "-" if pd.isna(row.get("Stuff+")) else f"{row['Stuff+']:.1f}"
+                table_data.append([str(row["name"]), pitches_txt, stuff_txt])
 
-        name_w = box_w * 0.64
-        p_w = box_w * 0.15
-        stuff_w = box_w - name_w - p_w
-        tbl = Table(
-            table_data,
-            colWidths=[name_w, p_w, stuff_w],
-            rowHeights=[table_row_h] * ntr,
-        )
-        tbl.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), LIGHT_BLUE),
-            ("TEXTCOLOR", (0, 0), (-1, 0), NAVY),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("FONTNAME", (0, 1), (0, -1), "Helvetica"),
-            ("FONTSIZE", (0, 0), (-1, -1), table_font),
-            ("ALIGN", (0, 0), (0, -1), "LEFT"),
-            ("ALIGN", (1, 0), (-1, -1), "CENTER"),
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            # Horizontal rules instead of a full boxed grid makes the rankings
-            # much easier to scan and less visually crowded.
-            ("LINEBELOW", (0, 0), (-1, -1), 0.25, colors.HexColor("#D8DEE7")),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [WHITE, colors.HexColor("#FAFBFD")]),
-            ("LEFTPADDING", (0, 0), (-1, -1), 5),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-            ("TOPPADDING", (0, 0), (-1, -1), 1.2),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 1.2),
-        ]))
+            available_table_h = box_h - title_h - 10
+            ntr = max(1, len(table_data))
+            table_row_h = min(22, available_table_h / ntr)
+            table_font = max(5.5, min(9.0, table_row_h * 0.45))
 
-        tw, th = tbl.wrapOn(c, box_w, available_table_h)
-        tbl.drawOn(c, x, y_top - title_h - th - 5)
+            name_w = box_w * 0.66
+            p_w = box_w * 0.14
+            stuff_w = box_w - name_w - p_w
+            tbl = Table(
+                table_data,
+                colWidths=[name_w, p_w, stuff_w],
+                rowHeights=[table_row_h] * ntr,
+            )
+            tbl.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), LIGHT_BLUE),
+                ("TEXTCOLOR", (0, 0), (-1, 0), NAVY),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), table_font),
+                ("ALIGN", (0, 0), (0, -1), "LEFT"),
+                ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LINEBELOW", (0, 0), (-1, -1), 0.25, colors.HexColor("#D8DEE7")),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [WHITE, colors.HexColor("#FBFCFE")]),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            ]))
 
-    draw_footer(2)
+            tw, th = tbl.wrapOn(c, box_w, available_table_h)
+            tbl.drawOn(c, x, y_top - title_h - th - 6)
+
+        draw_footer(page_num)
+        c.showPage()
+
+    # Page 2: three primary pitch leaderboards, one tall column each.
+    draw_leaderboard_page(
+        2,
+        "Stuff Plus Leaderboards - Fastball / Slider / Changeup",
+        ["Fastball", "Slider", "Changeup"],
+        grid_cols=3,
+    )
+
+    # Page 3: remaining four pitch leaderboards in a spacious 2 x 2 grid.
+    draw_leaderboard_page(
+        3,
+        "Stuff Plus Leaderboards - Other Pitches",
+        ["Sinker", "Cutter", "Sweeper", "Curveball"],
+        grid_cols=2,
+    )
+
     c.save()
     buffer.seek(0)
     return buffer.getvalue()
