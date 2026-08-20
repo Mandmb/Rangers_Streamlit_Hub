@@ -39,7 +39,7 @@ st.markdown(
 
 st.title("Stuff Plus")
 st.caption(
-    "Physical pitch-quality model. Upload one CSV per pitch type; scores are normalized so 100 = the uploaded peer-group average."
+    "Physical pitch-quality model. Upload one CSV per pitch type; scores are normalized so 100 = the uploaded peer-group average. Version: Cloud Load Fix."
 )
 
 # ============================================================
@@ -134,6 +134,7 @@ def normalize_hand(series):
     return s
 
 
+@st.cache_data(show_spinner=False)
 def standardize_file(df, pitch_type):
     out = pd.DataFrame(index=df.index)
 
@@ -201,10 +202,26 @@ def glove_side_break(df):
 def build_fastball_reference(fastball_df):
     if fastball_df is None or fastball_df.empty:
         return None
-    cols = ["player_id", "name", "velo", "ivb", "hb", "rel_height", "rel_side", "extension", "vaa", "haa"]
+
+    cols = [
+        "player_id", "name", "velo", "ivb", "hb",
+        "rel_height", "rel_side", "extension", "vaa", "haa"
+    ]
     fb = fastball_df[cols].copy()
-    fb = fb.rename(columns={c: f"fb_{c}" for c in cols if c not in ["player_id", "name"]})
-    return fb
+
+    # Guarantee ONE fastball reference row per pitcher. This prevents
+    # many-to-many merges from exploding in size on Streamlit Cloud.
+    fb = (
+        fb.sort_values("player_id")
+          .drop_duplicates(subset=["player_id"], keep="first")
+          .reset_index(drop=True)
+    )
+
+    rename = {
+        c: f"fb_{c}" for c in cols
+        if c not in ["player_id", "name"]
+    }
+    return fb.rename(columns=rename)
 
 
 def add_physical_features(df, pitch_type, fb_reference=None):
@@ -251,35 +268,43 @@ def add_physical_features(df, pitch_type, fb_reference=None):
     x["shape_component"] = safe_z(winsorize(x["shape_raw"]))
 
     # Fastball-relative characteristics for secondaries.
+    # Use Series.map instead of dataframe merges. This is much faster and,
+    # importantly, cannot create a many-to-many row explosion.
     x["fb_sep_component"] = 0.0
     if fb_reference is not None and pitch_type not in {"Fastball", "Sinker"}:
-        merged = x.merge(fb_reference, on="player_id", how="left", suffixes=("", "_ref"))
+        ref = fb_reference.drop_duplicates("player_id").set_index("player_id")
 
-        # Fallback by name if IDs don't match.
-        missing_fb = merged["fb_velo"].isna()
-        if missing_fb.any():
-            fb_by_name = fb_reference.drop(columns=["player_id"]).drop_duplicates("name")
-            fallback = x.loc[missing_fb].merge(fb_by_name, on="name", how="left")
-            for c in [c for c in fb_reference.columns if c.startswith("fb_")]:
-                merged.loc[missing_fb, c] = fallback[c].values
+        fb_velo = x["player_id"].map(ref["fb_velo"])
+        fb_ivb = x["player_id"].map(ref["fb_ivb"])
+        fb_hb = x["player_id"].map(ref["fb_hb"])
+        fb_rel_height = x["player_id"].map(ref["fb_rel_height"])
+        fb_rel_side = x["player_id"].map(ref["fb_rel_side"])
 
-        merged["velo_sep"] = merged["fb_velo"] - merged["velo"]
-        merged["ivb_sep"] = (merged["fb_ivb"] - merged["ivb"]).abs()
-        merged["hb_sep"] = (merged["fb_hb"] - merged["hb"]).abs()
+        # Fallback by player name when an ID is unavailable or mismatched.
+        if fb_velo.isna().any():
+            name_ref = fb_reference.drop_duplicates("name").set_index("name")
+            miss = fb_velo.isna()
+            fb_velo.loc[miss] = x.loc[miss, "name"].map(name_ref["fb_velo"])
+            fb_ivb.loc[miss] = x.loc[miss, "name"].map(name_ref["fb_ivb"])
+            fb_hb.loc[miss] = x.loc[miss, "name"].map(name_ref["fb_hb"])
+            fb_rel_height.loc[miss] = x.loc[miss, "name"].map(name_ref["fb_rel_height"])
+            fb_rel_side.loc[miss] = x.loc[miss, "name"].map(name_ref["fb_rel_side"])
 
-        release_dist = np.sqrt(
-            (merged["fb_rel_height"] - merged["rel_height"]) ** 2 +
-            (merged["fb_rel_side"] - merged["rel_side"]) ** 2
+        velo_sep = fb_velo - x["velo"]
+        ivb_sep = (fb_ivb - x["ivb"]).abs()
+        hb_sep = (fb_hb - x["hb"]).abs()
+        release_match = -np.sqrt(
+            (fb_rel_height - x["rel_height"]) ** 2 +
+            (fb_rel_side - x["rel_side"]) ** 2
         )
-        merged["release_match"] = -release_dist
 
         sep = (
-            0.40 * safe_z(winsorize(merged["velo_sep"])) +
-            0.25 * safe_z(winsorize(merged["ivb_sep"])) +
-            0.25 * safe_z(winsorize(merged["hb_sep"])) +
-            0.10 * safe_z(winsorize(merged["release_match"]))
+            0.40 * safe_z(winsorize(velo_sep)) +
+            0.25 * safe_z(winsorize(ivb_sep)) +
+            0.25 * safe_z(winsorize(hb_sep)) +
+            0.10 * safe_z(winsorize(release_match))
         )
-        x["fb_sep_component"] = sep.values
+        x["fb_sep_component"] = sep.fillna(0.0)
 
     return x
 
@@ -390,7 +415,8 @@ for pitch_type, file in uploaded.items():
     if file is None:
         continue
     try:
-        raw = pd.read_csv(file)
+        file.seek(0)
+        raw = pd.read_csv(io.BytesIO(file.getvalue()))
         parsed[pitch_type] = standardize_file(raw, pitch_type)
     except Exception as exc:
         errors.append(f"{pitch_type}: {exc}")
@@ -508,7 +534,7 @@ leaderboard_display = leaderboard[
 st.markdown("#### Overall pitch leaderboard")
 st.dataframe(
     leaderboard_display,
-    use_container_width=True,
+    width="stretch",
     hide_index=True,
     column_config={
         "Stuff+": st.column_config.NumberColumn(format="%.1f"),
@@ -531,7 +557,7 @@ for tab, pitch_type in zip(tabs, [pt for pt in selected_pitch_types if pt in sco
             st.markdown(f"##### {pitch_type} leaderboard")
             st.dataframe(
                 format_table(df),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config={
                     "Stuff+": st.column_config.NumberColumn(format="%.1f"),
@@ -579,7 +605,7 @@ for tab, pitch_type in zip(tabs, [pt for pt in selected_pitch_types if pt in sco
             detail_df = pd.DataFrame(
                 [{"Metric": k, "Value": v} for k, v in detail.items() if pd.notna(v)]
             )
-            st.dataframe(detail_df, use_container_width=True, hide_index=True)
+            st.dataframe(detail_df, width="stretch", hide_index=True)
 
             if pitch_type not in {"Fastball", "Sinker"} and fb_reference is not None:
                 st.caption(
@@ -614,7 +640,7 @@ if not arsenal.empty:
         "extension": "Ext",
         "vaa": "VAA",
     })
-    st.dataframe(arsenal_table, use_container_width=True, hide_index=True)
+    st.dataframe(arsenal_table, width="stretch", hide_index=True)
 
 # ============================================================
 # Download
@@ -636,7 +662,7 @@ st.download_button(
     data=csv_bytes,
     file_name="stuff_plus_results.csv",
     mime="text/csv",
-    use_container_width=False,
+    width="content",
 )
 
 # ============================================================
