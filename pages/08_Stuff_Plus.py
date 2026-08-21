@@ -39,7 +39,7 @@ st.markdown(
 
 st.title("Stuff Plus")
 st.caption(
-    "Physical pitch-quality model. Upload one CSV per pitch type; scores are normalized so 100 = the uploaded peer-group average. Version: 3-Page PDF Leaderboards."
+    "Physical pitch-quality model. Upload one CSV per pitch type; scores are normalized so 100 = the uploaded peer-group average. Version: Category Overview."
 )
 
 # ============================================================
@@ -472,11 +472,26 @@ def build_stuff_plus_pdf(combined_df, pitch_order):
         c.drawRightString(page_w - 30, 10, f"Page {page_num} of 3")
 
     # --------------------------------------------------------
-    # PAGE 1 — Pitcher-by-pitch Stuff+ matrix
+    # PAGE 1 — Pitcher-by-pitch Stuff+ matrix with categories
     # --------------------------------------------------------
-    draw_header("Stuff Plus Results", "Pitcher-by-pitch Stuff+ overview")
+    draw_header("Stuff Plus Results", "Pitcher arsenal overview by pitch family")
 
     active_pitches = [p for p in pitch_order if p in combined_df["pitch_type"].unique()]
+
+    # Always keep the same category structure on page 1 so the report is
+    # consistent even when a particular pitch type is not uploaded.
+    category_defs = [
+        ("Fast Pitches", ["Fastball", "Sinker", "Cutter"], "Fast Pitches+"),
+        ("Breaking Ball", ["Slider", "Sweeper", "Curveball"], "Breaking Ball+"),
+        ("Offspeed", ["Changeup", "Splitter"], "Offspeed+"),
+    ]
+    overview_pitches = [
+        "Fastball", "Sinker", "Cutter",
+        "Slider", "Sweeper", "Curveball",
+        "Changeup", "Splitter",
+    ]
+
+    # Build the pitch-level Stuff+ matrix.
     pivot = (
         combined_df.pivot_table(
             index="name",
@@ -484,97 +499,165 @@ def build_stuff_plus_pdf(combined_df, pitch_order):
             values="Stuff+",
             aggfunc="mean",
         )
-        .reindex(columns=active_pitches)
+        .reindex(columns=overview_pitches)
         .reset_index()
     )
 
-    # Sort by the average Stuff+ of each pitcher's available arsenal.
-    numeric_cols = [p for p in active_pitches if p in pivot.columns]
-    pivot["_avg"] = pivot[numeric_cols].mean(axis=1, skipna=True)
-    pivot = pivot.sort_values(["_avg", "name"], ascending=[False, True]).drop(columns="_avg")
+    # Overall average = simple mean of the Stuff+ values for each pitch type
+    # that the individual pitcher throws. Each pitch type receives equal weight.
+    pivot["Avg Stuff+"] = pivot[overview_pitches].mean(axis=1, skipna=True)
 
-    headers = ["Pitcher"] + active_pitches
-    data = [headers]
+    # Category Stuff+ = simple mean of the pitch-type Stuff+ values available
+    # within that pitch family for the individual pitcher.
+    for category_name, pitches, category_col in category_defs:
+        pivot[category_col] = pivot[pitches].mean(axis=1, skipna=True)
+
+    pivot = pivot.sort_values(["Avg Stuff+", "name"], ascending=[False, True])
+
+    # Two-tier header. Pitcher and Avg Stuff+ span both header rows.
+    header_top = [
+        "Pitcher", "Avg Stuff+",
+        "Fast Pitches", "", "", "",
+        "Breaking Ball", "", "", "",
+        "Offspeed", "", "",
+    ]
+    header_bottom = [
+        "", "",
+        "Fastball", "Sinker", "Cutter", "Category+",
+        "Slider", "Sweeper", "Curveball", "Category+",
+        "Changeup", "Splitter", "Category+",
+    ]
+
+    data = [header_top, header_bottom]
     for _, row in pivot.iterrows():
-        vals = [row["name"]]
-        for pitch in active_pitches:
-            v = row.get(pitch, np.nan)
-            vals.append("-" if pd.isna(v) else f"{v:.1f}")
+        vals = [
+            str(row["name"]),
+            "-" if pd.isna(row["Avg Stuff+"]) else f'{row["Avg Stuff+"]:.1f}',
+        ]
+        for _, pitches, category_col in category_defs:
+            for pitch in pitches:
+                v = row.get(pitch, np.nan)
+                vals.append("-" if pd.isna(v) else f"{v:.1f}")
+            cv = row.get(category_col, np.nan)
+            vals.append("-" if pd.isna(cv) else f"{cv:.1f}")
         data.append(vals)
 
-    left = 30
-    right = 30
-    # Reserve a little extra room under the title for the highlight legend.
-    top_y = page_h - 78
+    left = 24
+    right = 24
+    top_y = page_h - 80
     bottom_y = 34
     avail_w = page_w - left - right
     avail_h = top_y - bottom_y
 
-    # Highlight legend: number of pitches with Stuff+ > 100.
+    # Legend now reflects CATEGORY scores only.
     legend_y = page_h - 59
     c.setFillColor(MUTED)
     c.setFont("Helvetica-Bold", 6.7)
-    c.drawString(left, legend_y, "Above-average pitches:")
-    legend_items = [
-        ("1", HIGHLIGHT_YELLOW),
-        ("2", HIGHLIGHT_BLUE),
-        ("3", HIGHLIGHT_GREEN),
-        ("4+", HIGHLIGHT_PURPLE),
-    ]
-    lx = left + 83
-    for label, fill in legend_items:
-        c.setFillColor(fill)
-        c.roundRect(lx, legend_y - 4, 18, 10, 2, stroke=0, fill=1)
-        c.setFillColor(TEXT)
-        c.setFont("Helvetica-Bold", 6.2)
-        c.drawCentredString(lx + 9, legend_y - 1, label)
-        lx += 27
+    c.drawString(left, legend_y, "Category highlights:")
+
+    lx = left + 72
+    c.setFillColor(HIGHLIGHT_YELLOW)
+    c.roundRect(lx, legend_y - 4, 54, 10, 2, stroke=0, fill=1)
+    c.setFillColor(TEXT)
+    c.setFont("Helvetica-Bold", 5.9)
+    c.drawCentredString(lx + 27, legend_y - 1, "2 above avg")
+
+    lx += 62
+    c.setFillColor(HIGHLIGHT_GREEN)
+    c.roundRect(lx, legend_y - 4, 54, 10, 2, stroke=0, fill=1)
+    c.setFillColor(TEXT)
+    c.drawCentredString(lx + 27, legend_y - 1, "3 above avg")
+
+    lx += 66
+    c.setFillColor(MUTED)
+    c.setFont("Helvetica", 6.3)
+    c.drawString(lx, legend_y, "Bold pitch score = Stuff+ > 100")
 
     n_rows = max(1, len(data))
-    n_pitch_cols = max(1, len(active_pitches))
-    pitcher_w = max(120, min(190, avail_w * 0.27))
-    stat_w = (avail_w - pitcher_w) / n_pitch_cols
-    col_widths = [pitcher_w] + [stat_w] * n_pitch_cols
 
-    row_h = min(20, avail_h / n_rows)
-    font_size = max(5.0, min(8.0, row_h * 0.42))
+    # 13 columns total: Pitcher, Avg, 8 pitch types, 3 category scores.
+    pitcher_w = 112
+    avg_w = 48
+    category_w = 48
+    remaining_w = avail_w - pitcher_w - avg_w - (3 * category_w)
+    pitch_w = remaining_w / 8
+    col_widths = [
+        pitcher_w, avg_w,
+        pitch_w, pitch_w, pitch_w, category_w,
+        pitch_w, pitch_w, pitch_w, category_w,
+        pitch_w, pitch_w, category_w,
+    ]
+
+    row_h = min(19, avail_h / n_rows)
+    font_size = max(4.8, min(7.4, row_h * 0.40))
 
     page1_table = Table(data, colWidths=col_widths, rowHeights=[row_h] * n_rows)
     page1_style = [
+        # Top-level category header.
         ("BACKGROUND", (0, 0), (-1, 0), NAVY),
         ("TEXTCOLOR", (0, 0), (-1, 0), WHITE),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTNAME", (0, 0), (-1, 1), "Helvetica-Bold"),
         ("FONTSIZE", (0, 0), (-1, -1), font_size),
-        ("FONTNAME", (0, 1), (0, -1), "Helvetica-Bold"),
         ("ALIGN", (1, 0), (-1, -1), "CENTER"),
         ("ALIGN", (0, 0), (0, -1), "LEFT"),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("GRID", (0, 0), (-1, -1), 0.35, GRID),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [WHITE, colors.HexColor("#F8FAFC")]),
-        ("LEFTPADDING", (0, 0), (-1, -1), 4),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+
+        # Merge the family names and the two row-spanning identity columns.
+        ("SPAN", (0, 0), (0, 1)),
+        ("SPAN", (1, 0), (1, 1)),
+        ("SPAN", (2, 0), (5, 0)),
+        ("SPAN", (6, 0), (9, 0)),
+        ("SPAN", (10, 0), (12, 0)),
+
+        # Second-level pitch headers.
+        ("BACKGROUND", (2, 1), (5, 1), colors.HexColor("#DCE7F5")),
+        ("BACKGROUND", (6, 1), (9, 1), colors.HexColor("#E9E1F5")),
+        ("BACKGROUND", (10, 1), (12, 1), colors.HexColor("#E3F1E7")),
+        ("TEXTCOLOR", (2, 1), (-1, 1), NAVY),
+
+        # Make category-score columns visually distinct.
+        ("BACKGROUND", (5, 2), (5, -1), colors.HexColor("#F2F6FB")),
+        ("BACKGROUND", (9, 2), (9, -1), colors.HexColor("#F6F1FA")),
+        ("BACKGROUND", (12, 2), (12, -1), colors.HexColor("#F2F8F3")),
+        ("FONTNAME", (5, 2), (5, -1), "Helvetica-Bold"),
+        ("FONTNAME", (9, 2), (9, -1), "Helvetica-Bold"),
+        ("FONTNAME", (12, 2), (12, -1), "Helvetica-Bold"),
+        ("FONTNAME", (1, 2), (1, -1), "Helvetica-Bold"),
+
+        ("FONTNAME", (0, 2), (0, -1), "Helvetica-Bold"),
+        ("GRID", (0, 0), (-1, -1), 0.30, GRID),
+        ("ROWBACKGROUNDS", (0, 2), (-1, -1), [WHITE, colors.HexColor("#F8FAFC")]),
+        ("LEFTPADDING", (0, 0), (-1, -1), 3),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 3),
         ("TOPPADDING", (0, 0), (-1, -1), 1),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
     ]
 
-    # Apply a full-row highlight based on the number of available pitches
-    # that are above the peer average (Stuff+ > 100).
-    for table_row, (_, prow) in enumerate(pivot.iterrows(), start=1):
-        above_avg = sum(
-            1 for pitch in active_pitches
-            if pd.notna(prow.get(pitch, np.nan)) and float(prow.get(pitch)) > 100.0
+    # Category-based row highlighting ONLY:
+    # 2 category scores > 100 => light yellow
+    # 3 category scores > 100 => light green
+    category_cols = ["Fast Pitches+", "Breaking Ball+", "Offspeed+"]
+    pitch_col_positions = {
+        "Fastball": 2, "Sinker": 3, "Cutter": 4,
+        "Slider": 6, "Sweeper": 7, "Curveball": 8,
+        "Changeup": 10, "Splitter": 11,
+    }
+
+    for table_row, (_, prow) in enumerate(pivot.iterrows(), start=2):
+        above_categories = sum(
+            1 for col in category_cols
+            if pd.notna(prow.get(col, np.nan)) and float(prow.get(col)) > 100.0
         )
-        fill = None
-        if above_avg == 1:
-            fill = HIGHLIGHT_YELLOW
-        elif above_avg == 2:
-            fill = HIGHLIGHT_BLUE
-        elif above_avg == 3:
-            fill = HIGHLIGHT_GREEN
-        elif above_avg >= 4:
-            fill = HIGHLIGHT_PURPLE
-        if fill is not None:
-            page1_style.append(("BACKGROUND", (0, table_row), (-1, table_row), fill))
+        if above_categories == 2:
+            page1_style.append(("BACKGROUND", (0, table_row), (-1, table_row), HIGHLIGHT_YELLOW))
+        elif above_categories == 3:
+            page1_style.append(("BACKGROUND", (0, table_row), (-1, table_row), HIGHLIGHT_GREEN))
+
+        # Any individual PITCH with Stuff+ > 100 is bolded.
+        for pitch, col_idx in pitch_col_positions.items():
+            value = prow.get(pitch, np.nan)
+            if pd.notna(value) and float(value) > 100.0:
+                page1_style.append(("FONTNAME", (col_idx, table_row), (col_idx, table_row), "Helvetica-Bold"))
 
     page1_table.setStyle(TableStyle(page1_style))
 
