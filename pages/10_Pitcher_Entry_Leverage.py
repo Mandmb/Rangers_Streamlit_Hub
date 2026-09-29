@@ -150,206 +150,126 @@ def baseball_ip_from_outs(outs):
 
 
 def build_pdf_report(view, inning_pivot, workload_table, lev_table, mid_cut, high_cut):
-    '''Create a clean downloadable PDF version of the current filtered report.'''
+    """Create a polished one-page PDF with the three core bullpen usage sections."""
     buffer = BytesIO()
     page_w, page_h = landscape(letter)
     doc = SimpleDocTemplate(
         buffer,
         pagesize=landscape(letter),
-        rightMargin=0.35 * inch,
-        leftMargin=0.35 * inch,
-        topMargin=0.45 * inch,
-        bottomMargin=0.4 * inch,
-        title="Pitcher Entry & Leverage Report",
+        rightMargin=0.34 * inch,
+        leftMargin=0.34 * inch,
+        topMargin=0.34 * inch,
+        bottomMargin=0.30 * inch,
+        title="Pitcher Workload, Entry Inning & Leverage",
     )
 
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle(
         "RangersTitle", parent=styles["Title"], fontName="Helvetica-Bold",
-        fontSize=19, leading=22, textColor=colors.HexColor(RANGERS_BLUE),
-        alignment=TA_LEFT, spaceAfter=4,
+        fontSize=18, leading=20, textColor=colors.HexColor(RANGERS_BLUE),
+        alignment=TA_LEFT, spaceAfter=2,
     )
     subtitle_style = ParagraphStyle(
         "Subtitle", parent=styles["Normal"], fontName="Helvetica",
-        fontSize=8.5, leading=11, textColor=colors.HexColor("#555555"), spaceAfter=8,
+        fontSize=7.2, leading=8.5, textColor=colors.HexColor("#666666"), spaceAfter=5,
     )
     section_style = ParagraphStyle(
         "Section", parent=styles["Heading2"], fontName="Helvetica-Bold",
-        fontSize=11, leading=13, textColor=colors.HexColor(RANGERS_BLUE),
-        spaceBefore=6, spaceAfter=5,
-    )
-    small_style = ParagraphStyle(
-        "Small", parent=styles["Normal"], fontName="Helvetica",
-        fontSize=7.2, leading=9.2, textColor=colors.HexColor("#333333"),
-    )
-    tiny_style = ParagraphStyle(
-        "Tiny", parent=styles["Normal"], fontName="Helvetica",
-        fontSize=6.2, leading=7.5, textColor=colors.HexColor("#333333"),
+        fontSize=10, leading=11, textColor=colors.HexColor(RANGERS_BLUE),
+        spaceBefore=3, spaceAfter=3,
     )
 
     def header_footer(canvas, doc):
         canvas.saveState()
         canvas.setStrokeColor(colors.HexColor(RANGERS_RED))
-        canvas.setLineWidth(1.2)
-        canvas.line(0.35 * inch, 0.30 * inch, page_w - 0.35 * inch, 0.30 * inch)
-        canvas.setFont("Helvetica", 6.5)
+        canvas.setLineWidth(1.1)
+        canvas.line(0.34 * inch, 0.23 * inch, page_w - 0.34 * inch, 0.23 * inch)
+        canvas.setFont("Helvetica", 6)
         canvas.setFillColor(colors.HexColor("#666666"))
-        canvas.drawString(0.35 * inch, 0.16 * inch, "Texas Rangers - Pitcher Entry & Leverage")
-        canvas.drawRightString(page_w - 0.35 * inch, 0.16 * inch, f"Page {doc.page}")
+        canvas.drawString(0.34 * inch, 0.10 * inch, "Texas Rangers - Bullpen Usage Report")
+        canvas.drawRightString(page_w - 0.34 * inch, 0.10 * inch, "Entry usage and leverage")
         canvas.restoreState()
 
+    def style_table(tbl, header_bg=RANGERS_BLUE, font_size=6.5, row_pad=2.7):
+        tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(header_bg)),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTNAME", (0, 1), (0, -1), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), font_size),
+            ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+            ("ALIGN", (0, 0), (0, -1), "LEFT"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#D6DADE")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F5F7F9")]),
+            ("TOPPADDING", (0, 0), (-1, -1), row_pad),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), row_pad),
+        ]))
+        return tbl
+
     story = []
-    story.append(Paragraph("Pitcher Entry & Leverage Report", title_style))
+    story.append(Paragraph("Pitcher Workload, Entry Inning & Leverage", title_style))
     story.append(Paragraph(
-        f"Filtered report | {view['Pitcher'].nunique()} pitcher(s) | {len(view)} appearance(s) | "
-        f"Leverage thresholds: Low &lt; {mid_cut:.1f}, Mid {mid_cut:.1f} to &lt; {high_cut:.1f}, High &gt;= {high_cut:.1f}",
-        subtitle_style
+        f"{view['Pitcher'].nunique()} pitcher(s) | {len(view)} appearance(s) | "
+        f"Leverage: Low &lt; {mid_cut:.1f}, Mid {mid_cut:.1f} to &lt; {high_cut:.1f}, High &gt;= {high_cut:.1f}",
+        subtitle_style,
     ))
 
-    # KPI strip
-    avg_inn = view["Inning"].dropna().mean()
-    avg_ip_outing = view["Outs Recorded"].sum() / 3 / len(view) if len(view) else 0
-    kpis = [
-        ["Pitchers", "Appearances", "High Leverage", "Avg. Entry Inning", "Avg. IP / Outing"],
-        [
-            str(view["Pitcher"].nunique()),
-            str(len(view)),
-            str(int((view["Leverage"] == "High").sum())),
-            f"{avg_inn:.1f}" if pd.notna(avg_inn) else "-",
-            f"{avg_ip_outing:.2f}",
-        ],
-    ]
-    kpi_table = Table(kpis, colWidths=[1.88 * inch] * 5, rowHeights=[0.28 * inch, 0.34 * inch])
-    kpi_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(RANGERS_BLUE)),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, 0), 7.5),
-        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-        ("FONTNAME", (0, 1), (-1, 1), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 1), (-1, 1), 13),
-        ("TEXTCOLOR", (0, 1), (-1, 1), colors.HexColor("#222222")),
-        ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#D0D5DA")),
-        ("INNERGRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#D0D5DA")),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-    ]))
-    story.append(kpi_table)
-    story.append(Spacer(1, 0.12 * inch))
-
+    # 1) Pitcher Workload
     story.append(Paragraph("Pitcher Workload", section_style))
     wt = workload_table.reset_index().copy()
-    wt_data = [[str(c) for c in wt.columns]] + [[str(v) for v in row] for row in wt.astype(object).where(pd.notna(wt), "").values.tolist()]
-    wt_widths = [2.0 * inch, 1.05 * inch, 1.0 * inch, 1.2 * inch]
-    workload_pdf_table = Table(wt_data, repeatRows=1, colWidths=wt_widths)
-    workload_pdf_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(RANGERS_BLUE)),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 6.8),
-        ("ALIGN", (1, 0), (-1, -1), "CENTER"),
-        ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#D7DBDF")),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F6F7F8")]),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
-    ]))
-    story.append(workload_pdf_table)
-    story.append(Spacer(1, 0.12 * inch))
+    wt_data = [[str(c) for c in wt.columns]] + [
+        [str(v) for v in row] for row in wt.astype(object).where(pd.notna(wt), "").values.tolist()
+    ]
+    wt_font = 6.6 if len(wt) <= 12 else 5.7
+    wt_pad = 2.8 if len(wt) <= 12 else 1.8
+    wt_tbl = Table(wt_data, colWidths=[2.65*inch, 1.20*inch, 1.10*inch, 1.45*inch])
+    story.append(style_table(wt_tbl, font_size=wt_font, row_pad=wt_pad))
+    story.append(Spacer(1, 0.07 * inch))
 
+    # 2) Entry Inning Usage
     story.append(Paragraph("Entry Inning Usage", section_style))
     ip = inning_pivot.reset_index().copy()
     ip_cols = [str(c) for c in ip.columns]
-    ip_data = [ip_cols] + [[str(v) for v in row] for row in ip.astype(object).where(pd.notna(ip), "").values.tolist()]
-    available = 9.4 * inch
-    first_w = 1.55 * inch
-    other_w = max(0.42 * inch, (available - first_w) / max(1, len(ip_cols) - 1))
-    ip_table = Table(ip_data, repeatRows=1, colWidths=[first_w] + [other_w] * (len(ip_cols) - 1))
-    ip_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(RANGERS_BLUE)),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 6.8),
-        ("ALIGN", (1, 0), (-1, -1), "CENTER"),
-        ("ALIGN", (0, 0), (0, -1), "LEFT"),
-        ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#D7DBDF")),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F6F7F8")]),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
-    ]))
-    story.append(ip_table)
-    story.append(Spacer(1, 0.12 * inch))
+    ip_data = [ip_cols] + [
+        [str(v) for v in row] for row in ip.astype(object).where(pd.notna(ip), "").values.tolist()
+    ]
+    available = 10.15 * inch
+    first_w = 2.15 * inch
+    other_w = max(0.40 * inch, (available - first_w) / max(1, len(ip_cols) - 1))
+    ip_font = 6.3 if len(ip) <= 12 else 5.4
+    ip_pad = 2.5 if len(ip) <= 12 else 1.7
+    ip_tbl = Table(ip_data, colWidths=[first_w] + [other_w] * (len(ip_cols) - 1))
+    story.append(style_table(ip_tbl, font_size=ip_font, row_pad=ip_pad))
+    story.append(Spacer(1, 0.07 * inch))
 
+    # 3) Leverage at Entry
     story.append(Paragraph("Leverage at Entry", section_style))
     lt = lev_table.reset_index().copy()
-    lt_data = [[str(c) for c in lt.columns]] + [[str(v) for v in row] for row in lt.astype(object).where(pd.notna(lt), "").values.tolist()]
-    lt_widths = [1.8 * inch] + [0.82 * inch] * (len(lt.columns) - 1)
-    lev_pdf_table = Table(lt_data, repeatRows=1, colWidths=lt_widths)
-    lev_pdf_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(RANGERS_BLUE)),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 6.8),
-        ("ALIGN", (1, 0), (-1, -1), "CENTER"),
-        ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#D7DBDF")),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F6F7F8")]),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
-    ]))
-    # Highlight leverage count columns if present.
-    for name, bg in [("Low", "#E4E7EA"), ("Mid", "#FBE7A1"), ("High", "#F2C1C6")]:
+    lt_data = [[str(c) for c in lt.columns]] + [
+        [str(v) for v in row] for row in lt.astype(object).where(pd.notna(lt), "").values.tolist()
+    ]
+    first_lev_w = 2.15 * inch
+    remaining = 10.15 * inch - first_lev_w
+    lev_other_w = remaining / max(1, len(lt.columns) - 1)
+    lev_font = 6.2 if len(lt) <= 12 else 5.3
+    lev_pad = 2.4 if len(lt) <= 12 else 1.6
+    lev_tbl = Table(lt_data, colWidths=[first_lev_w] + [lev_other_w] * (len(lt.columns) - 1))
+    style_table(lev_tbl, font_size=lev_font, row_pad=lev_pad)
+
+    # Soft highlights for leverage counts and percentages.
+    for name, bg in [
+        ("Low", "#E5E8EB"), ("Mid", "#FBE7A1"), ("High", "#F3C4C8"),
+        ("Low %", "#EEF0F2"), ("Mid %", "#FFF3C8"), ("High %", "#F9DEE1"),
+    ]:
         if name in lt.columns:
             idx = list(lt.columns).index(name)
-            lev_pdf_table.setStyle(TableStyle([("BACKGROUND", (idx, 1), (idx, -1), colors.HexColor(bg))]))
-    story.append(lev_pdf_table)
-    story.append(Spacer(1, 0.08 * inch))
-    story.append(Paragraph(
-        "Leverage uses the game state at the pitcher's first pitch: score differential, inning, runners on base, runners in scoring position, and outs. "
-        "This is an internal transparent leverage model, not official MLB Leverage Index (LI).",
-        small_style
-    ))
-
-    story.append(PageBreak())
-    story.append(Paragraph("Appearance Detail", title_style))
-    detail = view[[
-        "Pitcher", "Date", "Opponent", "Entry", "Outs", "Situation",
-        "Outs Recorded", "IP", "Team Runs", "Opponent Runs", "Score Diff", "Leverage Score", "Leverage"
-    ]].sort_values(["Pitcher", "Date"], ascending=[True, False]).copy()
-
-    headers = ["Pitcher", "Date", "Opponent", "Entry", "Outs", "Situation", "Outs Rec.", "IP", "For", "Against", "Diff", "Lev. Score", "Leverage"]
-    body = [headers]
-    for _, r in detail.iterrows():
-        body.append([
-            Paragraph(str(r["Pitcher"]), tiny_style),
-            str(r["Date"]), str(r["Opponent"]), str(r["Entry"]), str(r["Outs"]),
-            Paragraph(str(r["Situation"]), tiny_style),
-            str(r["Outs Recorded"]), str(r["IP"]),
-            str(r["Team Runs"]), str(r["Opponent Runs"]), str(r["Score Diff"]),
-            f"{float(r['Leverage Score']):.2f}", str(r["Leverage"])
-        ])
-
-    detail_widths = [1.02*inch, 0.62*inch, 0.82*inch, 0.45*inch, 0.35*inch, 1.18*inch, 0.48*inch, 0.38*inch, 0.34*inch, 0.42*inch, 0.36*inch, 0.52*inch, 0.55*inch]
-    dt = Table(body, repeatRows=1, colWidths=detail_widths)
-    dt.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(RANGERS_BLUE)),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 6.2),
-        ("ALIGN", (3, 0), (-1, -1), "CENTER"),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#D7DBDF")),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F7F8F9")]),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-        ("TOPPADDING", (0, 0), (-1, -1), 3),
-    ]))
-    lev_col = headers.index("Leverage")
-    for row_idx, lev in enumerate(detail["Leverage"].tolist(), start=1):
-        bg = {"Low": "#E4E7EA", "Mid": "#FBE7A1", "High": "#F2C1C6"}.get(lev, "#FFFFFF")
-        dt.setStyle(TableStyle([("BACKGROUND", (lev_col, row_idx), (lev_col, row_idx), colors.HexColor(bg))]))
-    story.append(dt)
+            lev_tbl.setStyle(TableStyle([("BACKGROUND", (idx, 1), (idx, -1), colors.HexColor(bg))]))
+    story.append(lev_tbl)
 
     doc.build(story, onFirstPage=header_footer, onLaterPages=header_footer)
     buffer.seek(0)
     return buffer.getvalue()
-
 
 def process_file(uploaded, mid_cut, high_cut):
     df = pd.read_csv(uploaded)
@@ -613,7 +533,7 @@ with btn1:
     st.download_button(
         "Download PDF Report",
         data=pdf_bytes,
-        file_name="pitcher_entry_leverage_report.pdf",
+        file_name="pitcher_bullpen_usage_report.pdf",
         mime="application/pdf",
         use_container_width=True,
     )
