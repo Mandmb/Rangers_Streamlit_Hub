@@ -10,9 +10,8 @@ from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from reportlab.lib.pagesizes import letter, landscape
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
-from reportlab.platypus import (
-    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, KeepTogether
-)
+from reportlab.pdfgen import canvas
+from reportlab.platypus import Table, TableStyle
 
 st.set_page_config(page_title="Pitcher Entry & Leverage", page_icon="⚾", layout="wide")
 
@@ -150,49 +149,57 @@ def baseball_ip_from_outs(outs):
 
 
 def build_pdf_report(view, inning_pivot, workload_table, lev_table, mid_cut, high_cut):
-    """Create a polished one-page PDF with the three core bullpen usage sections."""
+    """Create a polished single-page landscape PDF with the three core bullpen usage sections."""
     buffer = BytesIO()
     page_w, page_h = landscape(letter)
-    doc = SimpleDocTemplate(
-        buffer,
-        pagesize=landscape(letter),
-        rightMargin=0.34 * inch,
-        leftMargin=0.34 * inch,
-        topMargin=0.34 * inch,
-        bottomMargin=0.30 * inch,
-        title="Pitcher Workload, Entry Inning & Leverage",
+    c = canvas.Canvas(buffer, pagesize=(page_w, page_h))
+    c.setTitle("Pitcher Workload, Entry Inning & Leverage")
+
+    margin_x = 18
+    footer_h = 20
+    header_h = 45
+    section_gap = 8
+    content_w = page_w - (2 * margin_x)
+    content_top = page_h - header_h
+    content_bottom = footer_h + 8
+    usable_h = content_top - content_bottom
+    block_h = (usable_h - section_gap) / 2
+
+    # Header
+    c.setFillColor(colors.HexColor(RANGERS_BLUE))
+    c.setFont("Helvetica-Bold", 17)
+    c.drawString(margin_x, page_h - 23, "Pitcher Workload, Entry Inning & Leverage")
+    c.setFillColor(colors.HexColor("#666666"))
+    c.setFont("Helvetica", 6.6)
+    c.drawString(
+        margin_x,
+        page_h - 34,
+        f"{view['Pitcher'].nunique()} pitcher(s) | {len(view)} appearance(s) | "
+        f"Leverage: Low < {mid_cut:.1f}, Mid {mid_cut:.1f} to < {high_cut:.1f}, High >= {high_cut:.1f}",
     )
 
-    styles = getSampleStyleSheet()
-    title_style = ParagraphStyle(
-        "RangersTitle", parent=styles["Title"], fontName="Helvetica-Bold",
-        fontSize=18, leading=20, textColor=colors.HexColor(RANGERS_BLUE),
-        alignment=TA_LEFT, spaceAfter=2,
-    )
-    subtitle_style = ParagraphStyle(
-        "Subtitle", parent=styles["Normal"], fontName="Helvetica",
-        fontSize=7.2, leading=8.5, textColor=colors.HexColor("#666666"), spaceAfter=5,
-    )
-    section_style = ParagraphStyle(
-        "Section", parent=styles["Heading2"], fontName="Helvetica-Bold",
-        fontSize=10, leading=11, textColor=colors.HexColor(RANGERS_BLUE),
-        spaceBefore=3, spaceAfter=3,
-    )
+    # Footer
+    c.setStrokeColor(colors.HexColor(RANGERS_RED))
+    c.setLineWidth(1.0)
+    c.line(margin_x, 17, page_w - margin_x, 17)
+    c.setFillColor(colors.HexColor("#666666"))
+    c.setFont("Helvetica", 5.5)
+    c.drawString(margin_x, 7, "Texas Rangers - Bullpen Usage Report")
+    c.drawRightString(page_w - margin_x, 7, "Entry usage and leverage")
 
-    def header_footer(canvas, doc):
-        canvas.saveState()
-        canvas.setStrokeColor(colors.HexColor(RANGERS_RED))
-        canvas.setLineWidth(1.1)
-        canvas.line(0.34 * inch, 0.23 * inch, page_w - 0.34 * inch, 0.23 * inch)
-        canvas.setFont("Helvetica", 6)
-        canvas.setFillColor(colors.HexColor("#666666"))
-        canvas.drawString(0.34 * inch, 0.10 * inch, "Texas Rangers - Bullpen Usage Report")
-        canvas.drawRightString(page_w - 0.34 * inch, 0.10 * inch, "Entry usage and leverage")
-        canvas.restoreState()
+    def draw_section_title(text, x, y, width):
+        c.setFillColor(colors.HexColor(RANGERS_BLUE))
+        c.setFont("Helvetica-Bold", 9.2)
+        c.drawString(x, y, text)
+        c.setStrokeColor(colors.HexColor("#D8DDE3"))
+        c.setLineWidth(0.45)
+        c.line(x, y - 3, x + width, y - 3)
 
-    def style_table(tbl, header_bg=RANGERS_BLUE, font_size=6.5, row_pad=2.7):
-        tbl.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(header_bg)),
+    def make_table(data, col_widths, row_height, font_size, highlight_cols=None):
+        row_heights = [row_height] * len(data)
+        tbl = Table(data, colWidths=col_widths, rowHeights=row_heights)
+        commands = [
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(RANGERS_BLUE)),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
             ("FONTNAME", (0, 1), (0, -1), "Helvetica-Bold"),
@@ -200,74 +207,105 @@ def build_pdf_report(view, inning_pivot, workload_table, lev_table, mid_cut, hig
             ("ALIGN", (1, 0), (-1, -1), "CENTER"),
             ("ALIGN", (0, 0), (0, -1), "LEFT"),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#D6DADE")),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#D6DADE")),
             ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F5F7F9")]),
-            ("TOPPADDING", (0, 0), (-1, -1), row_pad),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), row_pad),
-        ]))
+            ("LEFTPADDING", (0, 0), (-1, -1), 2.2),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 2.2),
+            ("TOPPADDING", (0, 0), (-1, -1), 0),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ]
+        if highlight_cols:
+            for idx, bg in highlight_cols.items():
+                commands.append(("BACKGROUND", (idx, 1), (idx, -1), colors.HexColor(bg)))
+        tbl.setStyle(TableStyle(commands))
         return tbl
 
-    story = []
-    story.append(Paragraph("Pitcher Workload, Entry Inning & Leverage", title_style))
-    story.append(Paragraph(
-        f"{view['Pitcher'].nunique()} pitcher(s) | {len(view)} appearance(s) | "
-        f"Leverage: Low &lt; {mid_cut:.1f}, Mid {mid_cut:.1f} to &lt; {high_cut:.1f}, High &gt;= {high_cut:.1f}",
-        subtitle_style,
-    ))
-
-    # 1) Pitcher Workload
-    story.append(Paragraph("Pitcher Workload", section_style))
+    # Prepare data
     wt = workload_table.reset_index().copy()
     wt_data = [[str(c) for c in wt.columns]] + [
         [str(v) for v in row] for row in wt.astype(object).where(pd.notna(wt), "").values.tolist()
     ]
-    wt_font = 6.6 if len(wt) <= 12 else 5.7
-    wt_pad = 2.8 if len(wt) <= 12 else 1.8
-    wt_tbl = Table(wt_data, colWidths=[2.65*inch, 1.20*inch, 1.10*inch, 1.45*inch])
-    story.append(style_table(wt_tbl, font_size=wt_font, row_pad=wt_pad))
-    story.append(Spacer(1, 0.07 * inch))
 
-    # 2) Entry Inning Usage
-    story.append(Paragraph("Entry Inning Usage", section_style))
-    ip = inning_pivot.reset_index().copy()
-    ip_cols = [str(c) for c in ip.columns]
-    ip_data = [ip_cols] + [
-        [str(v) for v in row] for row in ip.astype(object).where(pd.notna(ip), "").values.tolist()
-    ]
-    available = 10.15 * inch
-    first_w = 2.15 * inch
-    other_w = max(0.40 * inch, (available - first_w) / max(1, len(ip_cols) - 1))
-    ip_font = 6.3 if len(ip) <= 12 else 5.4
-    ip_pad = 2.5 if len(ip) <= 12 else 1.7
-    ip_tbl = Table(ip_data, colWidths=[first_w] + [other_w] * (len(ip_cols) - 1))
-    story.append(style_table(ip_tbl, font_size=ip_font, row_pad=ip_pad))
-    story.append(Spacer(1, 0.07 * inch))
-
-    # 3) Leverage at Entry
-    story.append(Paragraph("Leverage at Entry", section_style))
     lt = lev_table.reset_index().copy()
     lt_data = [[str(c) for c in lt.columns]] + [
         [str(v) for v in row] for row in lt.astype(object).where(pd.notna(lt), "").values.tolist()
     ]
-    first_lev_w = 2.15 * inch
-    remaining = 10.15 * inch - first_lev_w
-    lev_other_w = remaining / max(1, len(lt.columns) - 1)
-    lev_font = 6.2 if len(lt) <= 12 else 5.3
-    lev_pad = 2.4 if len(lt) <= 12 else 1.6
-    lev_tbl = Table(lt_data, colWidths=[first_lev_w] + [lev_other_w] * (len(lt.columns) - 1))
-    style_table(lev_tbl, font_size=lev_font, row_pad=lev_pad)
 
-    # Soft highlights for leverage counts and percentages.
+    ip = inning_pivot.reset_index().copy()
+    ip_data = [[str(c) for c in ip.columns]] + [
+        [str(v) for v in row] for row in ip.astype(object).where(pd.notna(ip), "").values.tolist()
+    ]
+
+    n_rows = max(len(wt_data), len(lt_data), len(ip_data))
+
+    # TOP HALF: Workload and leverage side-by-side. This layout is what keeps the
+    # report on a single page even with a full bullpen of pitchers.
+    top_y = content_top
+    top_table_y = top_y - 18
+    top_table_h = block_h - 20
+    top_gap = 10
+    workload_w = content_w * 0.34
+    leverage_w = content_w - workload_w - top_gap
+
+    draw_section_title("Pitcher Workload", margin_x, top_y - 9, workload_w)
+    draw_section_title("Leverage at Entry", margin_x + workload_w + top_gap, top_y - 9, leverage_w)
+
+    wt_row_h = min(12.0, top_table_h / max(1, len(wt_data)))
+    wt_font = max(4.4, min(6.0, wt_row_h * 0.48))
+    wt_first = workload_w * 0.44
+    wt_rest = (workload_w - wt_first) / max(1, len(wt.columns) - 1)
+    wt_tbl = make_table(
+        wt_data,
+        [wt_first] + [wt_rest] * (len(wt.columns) - 1),
+        wt_row_h,
+        wt_font,
+    )
+    wt_h = wt_row_h * len(wt_data)
+    wt_tbl.wrapOn(c, workload_w, wt_h)
+    wt_tbl.drawOn(c, margin_x, top_table_y - wt_h)
+
+    lev_row_h = min(12.0, top_table_h / max(1, len(lt_data)))
+    lev_font = max(4.0, min(5.4, lev_row_h * 0.43))
+    lev_first = leverage_w * 0.24
+    lev_rest = (leverage_w - lev_first) / max(1, len(lt.columns) - 1)
+    lev_highlights = {}
     for name, bg in [
         ("Low", "#E5E8EB"), ("Mid", "#FBE7A1"), ("High", "#F3C4C8"),
         ("Low %", "#EEF0F2"), ("Mid %", "#FFF3C8"), ("High %", "#F9DEE1"),
     ]:
         if name in lt.columns:
-            idx = list(lt.columns).index(name)
-            lev_tbl.setStyle(TableStyle([("BACKGROUND", (idx, 1), (idx, -1), colors.HexColor(bg))]))
-    story.append(lev_tbl)
+            lev_highlights[list(lt.columns).index(name)] = bg
+    lev_tbl = make_table(
+        lt_data,
+        [lev_first] + [lev_rest] * (len(lt.columns) - 1),
+        lev_row_h,
+        lev_font,
+        lev_highlights,
+    )
+    lev_h = lev_row_h * len(lt_data)
+    lev_tbl.wrapOn(c, leverage_w, lev_h)
+    lev_tbl.drawOn(c, margin_x + workload_w + top_gap, top_table_y - lev_h)
 
-    doc.build(story, onFirstPage=header_footer, onLaterPages=header_footer)
+    # BOTTOM HALF: Entry inning usage across the full page width.
+    bottom_top = content_bottom + block_h
+    draw_section_title("Entry Inning Usage", margin_x, bottom_top - 9, content_w)
+    entry_table_y = bottom_top - 18
+    entry_table_h = block_h - 20
+    ip_row_h = min(11.5, entry_table_h / max(1, len(ip_data)))
+    ip_font = max(4.0, min(5.5, ip_row_h * 0.46))
+    ip_first = content_w * 0.205
+    ip_rest = (content_w - ip_first) / max(1, len(ip.columns) - 1)
+    ip_tbl = make_table(
+        ip_data,
+        [ip_first] + [ip_rest] * (len(ip.columns) - 1),
+        ip_row_h,
+        ip_font,
+    )
+    ip_h = ip_row_h * len(ip_data)
+    ip_tbl.wrapOn(c, content_w, ip_h)
+    ip_tbl.drawOn(c, margin_x, entry_table_y - ip_h)
+
+    c.save()
     buffer.seek(0)
     return buffer.getvalue()
 
