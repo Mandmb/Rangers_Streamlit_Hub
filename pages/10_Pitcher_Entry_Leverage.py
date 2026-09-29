@@ -129,7 +129,27 @@ def classify_leverage(score, mid_cut, high_cut):
     return "Low"
 
 
-def build_pdf_report(view, inning_pivot, lev_table, mid_cut, high_cut):
+def outs_recorded_from_result(value):
+    """Return pitcher outs credited by the terminal pitch result."""
+    if pd.isna(value):
+        return 0
+    s = str(value).strip().lower()
+    if "double play" in s:
+        return 2
+    one_out_results = (
+        "strikeout", "ground out", "fly out", "line out", "pop out",
+        "bunt pop out", "fielder's choice"
+    )
+    return 1 if any(term in s for term in one_out_results) else 0
+
+
+def baseball_ip_from_outs(outs):
+    """Format total innings pitched in baseball notation (e.g. 4 outs = 1.1 IP)."""
+    outs = int(outs or 0)
+    return f"{outs // 3}.{outs % 3}"
+
+
+def build_pdf_report(view, inning_pivot, workload_table, lev_table, mid_cut, high_cut):
     '''Create a clean downloadable PDF version of the current filtered report.'''
     buffer = BytesIO()
     page_w, page_h = landscape(letter)
@@ -188,16 +208,18 @@ def build_pdf_report(view, inning_pivot, lev_table, mid_cut, high_cut):
 
     # KPI strip
     avg_inn = view["Inning"].dropna().mean()
+    avg_ip_outing = view["Outs Recorded"].sum() / 3 / len(view) if len(view) else 0
     kpis = [
-        ["Pitchers", "Appearances", "High Leverage", "Avg. Entry Inning"],
+        ["Pitchers", "Appearances", "High Leverage", "Avg. Entry Inning", "Avg. IP / Outing"],
         [
             str(view["Pitcher"].nunique()),
             str(len(view)),
             str(int((view["Leverage"] == "High").sum())),
             f"{avg_inn:.1f}" if pd.notna(avg_inn) else "-",
+            f"{avg_ip_outing:.2f}",
         ],
     ]
-    kpi_table = Table(kpis, colWidths=[2.35 * inch] * 4, rowHeights=[0.28 * inch, 0.34 * inch])
+    kpi_table = Table(kpis, colWidths=[1.88 * inch] * 5, rowHeights=[0.28 * inch, 0.34 * inch])
     kpi_table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(RANGERS_BLUE)),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
@@ -212,6 +234,25 @@ def build_pdf_report(view, inning_pivot, lev_table, mid_cut, high_cut):
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
     ]))
     story.append(kpi_table)
+    story.append(Spacer(1, 0.12 * inch))
+
+    story.append(Paragraph("Pitcher Workload", section_style))
+    wt = workload_table.reset_index().copy()
+    wt_data = [[str(c) for c in wt.columns]] + [[str(v) for v in row] for row in wt.astype(object).where(pd.notna(wt), "").values.tolist()]
+    wt_widths = [2.0 * inch, 1.05 * inch, 1.0 * inch, 1.2 * inch]
+    workload_pdf_table = Table(wt_data, repeatRows=1, colWidths=wt_widths)
+    workload_pdf_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(RANGERS_BLUE)),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 6.8),
+        ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+        ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#D7DBDF")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F6F7F8")]),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    story.append(workload_pdf_table)
     story.append(Spacer(1, 0.12 * inch))
 
     story.append(Paragraph("Entry Inning Usage", section_style))
@@ -270,21 +311,22 @@ def build_pdf_report(view, inning_pivot, lev_table, mid_cut, high_cut):
     story.append(Paragraph("Appearance Detail", title_style))
     detail = view[[
         "Pitcher", "Date", "Opponent", "Entry", "Outs", "Situation",
-        "Team Runs", "Opponent Runs", "Score Diff", "Leverage Score", "Leverage"
+        "Outs Recorded", "IP", "Team Runs", "Opponent Runs", "Score Diff", "Leverage Score", "Leverage"
     ]].sort_values(["Pitcher", "Date"], ascending=[True, False]).copy()
 
-    headers = ["Pitcher", "Date", "Opponent", "Entry", "Outs", "Situation", "For", "Against", "Diff", "Lev. Score", "Leverage"]
+    headers = ["Pitcher", "Date", "Opponent", "Entry", "Outs", "Situation", "Outs Rec.", "IP", "For", "Against", "Diff", "Lev. Score", "Leverage"]
     body = [headers]
     for _, r in detail.iterrows():
         body.append([
             Paragraph(str(r["Pitcher"]), tiny_style),
             str(r["Date"]), str(r["Opponent"]), str(r["Entry"]), str(r["Outs"]),
             Paragraph(str(r["Situation"]), tiny_style),
+            str(r["Outs Recorded"]), str(r["IP"]),
             str(r["Team Runs"]), str(r["Opponent Runs"]), str(r["Score Diff"]),
             f"{float(r['Leverage Score']):.2f}", str(r["Leverage"])
         ])
 
-    detail_widths = [1.15*inch, 0.72*inch, 1.0*inch, 0.55*inch, 0.42*inch, 1.58*inch, 0.42*inch, 0.50*inch, 0.42*inch, 0.58*inch, 0.62*inch]
+    detail_widths = [1.02*inch, 0.62*inch, 0.82*inch, 0.45*inch, 0.35*inch, 1.18*inch, 0.48*inch, 0.38*inch, 0.34*inch, 0.42*inch, 0.36*inch, 0.52*inch, 0.55*inch]
     dt = Table(body, repeatRows=1, colWidths=detail_widths)
     dt.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(RANGERS_BLUE)),
@@ -319,6 +361,7 @@ def process_file(uploaded, mid_cut, high_cut):
     c_inn = get_col(df, "inn", "inning")
     c_outs = get_col(df, "outs")
     c_sit = get_col(df, "Situation", "situation")
+    c_pitch_result = get_col(df, "pitchResult", "pitchresult")
     c_runs = get_col(df, "currentRuns", "currentruns")
     c_opp_runs = get_col(df, "opponentCurrentRuns", "opponentcurrentruns")
     c_team = get_col(df, "team")
@@ -329,6 +372,7 @@ def process_file(uploaded, mid_cut, high_cut):
         "inning": c_inn,
         "outs": c_outs,
         "Situation": c_sit,
+        "pitchResult": c_pitch_result,
         "currentRuns": c_runs,
         "opponentCurrentRuns": c_opp_runs,
     }
@@ -351,10 +395,19 @@ def process_file(uploaded, mid_cut, high_cut):
         temp["_pitch_order"] = range(len(temp))
 
     temp["_row_order"] = range(len(temp))
+    temp["_outs_recorded"] = temp[c_pitch_result].apply(outs_recorded_from_result)
     temp = temp.sort_values(["_pitcher", "_game_key", "_pitch_order", "_row_order"], na_position="last")
+
+    # Calculate workload for the full appearance before reducing to the first pitch.
+    outing_outs = (
+        temp.groupby(["_pitcher", "_game_key"], as_index=False, sort=False)["_outs_recorded"]
+        .sum()
+        .rename(columns={"_outs_recorded": "_outing_outs"})
+    )
 
     # One entry record per pitcher/game: first pitch thrown in that game.
     first = temp.groupby(["_pitcher", "_game_key"], as_index=False, sort=False).first()
+    first = first.merge(outing_outs, on=["_pitcher", "_game_key"], how="left")
 
     records = []
     for _, row in first.iterrows():
@@ -382,6 +435,8 @@ def process_file(uploaded, mid_cut, high_cut):
             "Team Runs": int(team_runs) if pd.notna(team_runs) else None,
             "Opponent Runs": int(opp_runs) if pd.notna(opp_runs) else None,
             "Score Diff": int(diff) if diff is not None else None,
+            "Outs Recorded": int(row.get("_outing_outs", 0) or 0),
+            "IP": baseball_ip_from_outs(row.get("_outing_outs", 0)),
             "Leverage Score": lev_score,
             "Leverage": classify_leverage(lev_score, mid_cut, high_cut),
             "Source File": getattr(uploaded, "name", "CSV"),
@@ -434,11 +489,23 @@ if view.empty:
     st.warning("No appearances match the selected pitcher filter.")
     st.stop()
 
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Pitchers", view["Pitcher"].nunique())
 c2.metric("Appearances", len(view))
 c3.metric("High leverage", int((view["Leverage"] == "High").sum()))
 c4.metric("Avg. entry inning", f"{view['Inning'].dropna().mean():.1f}" if view["Inning"].notna().any() else "—")
+overall_avg_ip = view["Outs Recorded"].sum() / 3 / len(view) if len(view) else 0
+c5.metric("Avg. IP / outing", f"{overall_avg_ip:.2f}")
+
+st.subheader("Pitcher Workload")
+workload_table = (
+    view.groupby("Pitcher")
+    .agg(Appearances=("Game", "count"), **{"Total Outs": ("Outs Recorded", "sum")})
+)
+workload_table["Total IP"] = workload_table["Total Outs"].apply(baseball_ip_from_outs)
+workload_table["Avg. IP / Outing"] = (workload_table["Total Outs"] / 3 / workload_table["Appearances"]).round(2)
+workload_table = workload_table[["Appearances", "Total IP", "Avg. IP / Outing"]]
+st.dataframe(workload_table, use_container_width=True)
 
 st.subheader("Entry Inning Usage")
 inning_counts = (
@@ -530,7 +597,7 @@ This is a **transparent internal leverage model**, not an official MLB Leverage 
 st.subheader("Appearance Detail")
 detail_cols = [
     "Pitcher", "Date", "Opponent", "Entry", "Outs", "Situation",
-    "Team Runs", "Opponent Runs", "Score Diff", "Leverage Score", "Leverage"
+    "Outs Recorded", "IP", "Team Runs", "Opponent Runs", "Score Diff", "Leverage Score", "Leverage"
 ]
 st.dataframe(
     view[detail_cols].sort_values(["Pitcher", "Date"], ascending=[True, False]),
@@ -539,7 +606,7 @@ st.dataframe(
 )
 
 summary_csv = view[detail_cols + ["Game", "Source File"]].to_csv(index=False).encode("utf-8")
-pdf_bytes = build_pdf_report(view, inning_pivot, lev_table, mid_cut, high_cut)
+pdf_bytes = build_pdf_report(view, inning_pivot, workload_table, lev_table, mid_cut, high_cut)
 
 btn1, btn2 = st.columns(2)
 with btn1:
