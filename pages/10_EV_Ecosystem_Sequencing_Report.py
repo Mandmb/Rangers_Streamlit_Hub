@@ -87,15 +87,17 @@ st.markdown(
 COLUMN_ALIASES = {
     "pitcher": [
         "Pitcher", "PitcherName", "pitcher_name", "PlayerName",
-        "player_name", "PitcherFullName", "Pitcher Full Name"
+        "player_name", "PitcherFullName", "Pitcher Full Name",
+        "fullName", "pitcherAbbrevName"
     ],
     "pitch_type": [
         "PitchType", "TaggedPitchType", "AutoPitchType", "pitch_type",
-        "Pitch Type", "Pitch_Type"
+        "Pitch Type", "Pitch_Type", "pitchType", "pitchTypeFull"
     ],
     "velo": [
         "RelSpeed", "Velocity", "release_speed", "PitchSpeed",
-        "Pitch Velocity", "Velo", "ReleaseSpeed"
+        "Pitch Velocity", "Velo", "ReleaseSpeed",
+        "releaseVelocity", "Vel"
     ],
     "plate_x": [
         "PlateLocSide", "plate_x", "PlateX", "px", "Plate Loc Side",
@@ -107,51 +109,66 @@ COLUMN_ALIASES = {
     ],
     "batter_side": [
         "BatterSide", "BatterSideCode", "Stand", "stand",
-        "Batter Side", "BatterHand", "BatterHandedness"
+        "Batter Side", "BatterHand", "BatterHandedness",
+        "batterHand"
     ],
     "pitcher_hand": [
         "PitcherThrows", "PitcherHand", "PitcherSide", "Throws",
-        "Pitcher Hand"
+        "Pitcher Hand", "pitcherHand"
     ],
     "game_date": [
-        "Date", "GameDate", "game_date", "Game Date"
+        "Date", "GameDate", "game_date", "Game Date", "gameDate", "date"
     ],
     "game_id": [
-        "GameID", "GameId", "game_pk", "Game", "Game ID"
+        "GameID", "GameId", "game_pk", "Game", "Game ID", "gameId"
     ],
     "pa_id": [
         "PAofInning", "PA_ID", "PlateAppearance", "PlateAppearanceID",
-        "AtBatNo", "AtBatNumber", "AB", "pa_id"
+        "AtBatNo", "AtBatNumber", "AB", "pa_id", "abNumInGame"
     ],
     "pitch_no": [
         "PitchofPA", "PitchNo", "PitchNumber", "Pitch #", "pitch_number",
-        "PitchOfPA", "PitchNoInPA"
+        "PitchOfPA", "PitchNoInPA", "pitchNumInAB", "pitchNumInGame"
     ],
     "inning": [
-        "Inning", "inning"
+        "Inning", "inning", "inn"
     ],
     "top_bottom": [
         "TopBottom", "InningHalf", "Top/Bottom", "inning_topbot"
     ],
     "release_x": [
-        "RelSide", "release_pos_x", "ReleaseSide", "Release X", "ReleaseX"
+        "RelSide", "release_pos_x", "ReleaseSide", "Release X", "ReleaseX", "RelSd"
     ],
     "release_z": [
         "RelHeight", "release_pos_z", "ReleaseHeight", "Release Z", "ReleaseZ"
     ],
     "horz_break": [
         "HorzBreak", "pfx_x", "HorizontalBreak", "Horizontal Break",
-        "InducedHorzBreak"
+        "InducedHorzBreak", "Horizontal Movement"
     ],
     "vert_break": [
         "InducedVertBreak", "pfx_z", "VerticalBreak", "IVB",
-        "Induced Vertical Break"
+        "Induced Vertical Break", "Vertical Movement"
     ],
 }
 
 
 def normalized_name(value):
     return re.sub(r"[^a-z0-9]+", "", str(value).lower())
+
+
+def person_match_key(value):
+    """
+    Conservative pitcher-name matching across PDF and CSV sources.
+    Examples:
+      "Gabriel Ynoa" -> "gabrielynoa"
+      "#19 Kelly Austin" -> "kellyaustin"
+    """
+    s = str(value).strip().lower()
+    s = re.sub(r"^#?\d+\s+", "", s)
+    s = re.sub(r"\([^)]*\)", "", s)
+    s = re.sub(r"[^a-z0-9]+", "", s)
+    return s
 
 
 def detect_columns(df: pd.DataFrame) -> Dict[str, Optional[str]]:
@@ -875,10 +892,11 @@ with left:
     )
 
 with right:
-    raw_csv_file = st.file_uploader(
-        "2) Pitch-by-Pitch CSV",
+    raw_csv_files = st.file_uploader(
+        "2) Pitch-by-Pitch CSVs",
         type=["csv"],
-        help="Required for actual pitch locations, velocity, ecosystems, EvMPH and sequence analysis.",
+        accept_multiple_files=True,
+        help="Upload one or many pitcher Pitch Info CSVs. Only pitchers found in BOTH the Pitch Chart PDF and the CSV uploads will be included.",
     )
 
 chart_pitchers = []
@@ -904,14 +922,35 @@ if pitch_chart_file is not None:
         except Exception as e:
             st.error(f"Could not parse Pitch Chart PDF: {e}")
 
-if raw_csv_file is not None:
-    try:
-        raw_df = pd.read_csv(raw_csv_file)
-    except UnicodeDecodeError:
-        raw_df = pd.read_csv(raw_csv_file, encoding="latin-1")
-    except Exception as e:
-        st.error(f"Could not read CSV: {e}")
+if raw_csv_files:
+    frames = []
+    load_errors = []
+
+    for uploaded_csv in raw_csv_files:
+        try:
+            try:
+                temp_df = pd.read_csv(uploaded_csv)
+            except UnicodeDecodeError:
+                uploaded_csv.seek(0)
+                temp_df = pd.read_csv(uploaded_csv, encoding="latin-1")
+
+            temp_df["_source_file"] = uploaded_csv.name
+            frames.append(temp_df)
+        except Exception as e:
+            load_errors.append(f"{uploaded_csv.name}: {e}")
+
+    if load_errors:
+        st.error("Some CSV files could not be read:\n\n" + "\n".join(load_errors))
+
+    if not frames:
         st.stop()
+
+    # Combine all uploaded pitcher files. Union of columns is allowed.
+    raw_df = pd.concat(frames, ignore_index=True, sort=False)
+
+    st.success(
+        f"{len(frames)} CSV file(s) loaded • {len(raw_df):,} pitch rows combined."
+    )
 
     st.subheader("CSV field detection")
     detected = detect_columns(raw_df)
@@ -935,41 +974,131 @@ if raw_csv_file is not None:
             corrected[key] = None if selected == "—" else selected
         detected = corrected
 
+    # ---- Match pitchers BEFORE report generation ----
+    pdf_names = []
+    if chart_pitchers:
+        pdf_names = [p.name for p in chart_pitchers]
+
+    csv_pitcher_col = detected.get("pitcher")
+    if not csv_pitcher_col:
+        st.error("Could not identify the pitcher-name column in the uploaded CSV files.")
+        st.stop()
+
+    csv_names = (
+        raw_df[csv_pitcher_col]
+        .dropna()
+        .astype(str)
+        .str.strip()
+        .loc[lambda s: s.ne("")]
+        .drop_duplicates()
+        .tolist()
+    )
+
+    pdf_key_to_name = {person_match_key(n): n for n in pdf_names}
+    csv_key_to_name = {person_match_key(n): n for n in csv_names}
+
+    matching_keys = sorted(set(pdf_key_to_name) & set(csv_key_to_name))
+
+    # If there is no parsed PDF yet, do not produce a report packet.
+    if pitch_chart_file is None:
+        st.warning("Upload the Pitch Chart PDF too. Reports are generated only for pitchers present in both sources.")
+        st.stop()
+
+    if fitz is None:
+        st.warning("The PDF cannot be parsed until PyMuPDF is installed.")
+        st.stop()
+
+    if not chart_pitchers:
+        st.warning("No pitcher names were detected in the Pitch Chart PDF.")
+        st.stop()
+
+    matched_rows = []
+    for key in matching_keys:
+        matched_rows.append({
+            "Pitcher in PDF": pdf_key_to_name[key],
+            "Pitcher in CSV": csv_key_to_name[key],
+        })
+
+    st.subheader("Matched pitchers")
+    if matched_rows:
+        st.success(
+            f"{len(matched_rows)} pitcher(s) found in BOTH the Pitch Chart PDF and the uploaded CSV files."
+        )
+        st.dataframe(pd.DataFrame(matched_rows), use_container_width=True, hide_index=True)
+    else:
+        st.error("No pitcher names match between the Pitch Chart PDF and the uploaded CSV files.")
+        st.stop()
+
+    # Filter the combined raw data to matched pitchers only.
+    raw_df["_pitcher_match_key"] = raw_df[csv_pitcher_col].map(person_match_key)
+    matched_raw_df = raw_df[raw_df["_pitcher_match_key"].isin(matching_keys)].copy()
+
+    # Convert the CSV pitcher name to the PDF name so the generated PDF uses one consistent name.
+    canonical_pdf_name = {k: pdf_key_to_name[k] for k in matching_keys}
+    matched_raw_df[csv_pitcher_col] = matched_raw_df["_pitcher_match_key"].map(canonical_pdf_name)
+
+    # Filter chart_pitchers to matched pitchers only.
+    matched_chart_pitchers = [
+        p for p in chart_pitchers
+        if person_match_key(p.name) in matching_keys
+    ]
+
+    # Helpful source audit.
+    if "_source_file" in matched_raw_df.columns:
+        audit = (
+            matched_raw_df.groupby([csv_pitcher_col, "_source_file"])
+            .size()
+            .reset_index(name="Pitch Rows")
+            .rename(columns={csv_pitcher_col: "Pitcher", "_source_file": "CSV File"})
+        )
+        with st.expander("Matched CSV files", expanded=False):
+            st.dataframe(audit, use_container_width=True, hide_index=True)
+
     missing = [k for k in required_keys if not detected.get(k)]
     if missing:
-        st.error("Missing required CSV fields: " + ", ".join(missing))
+        st.error(
+            "The matched CSV data is missing required fields for ecosystem calculations: "
+            + ", ".join(missing)
+        )
+        st.caption(
+            "The attached Pitch Info format has pitcher, pitch type, velocity, handedness and sequence fields, "
+            "but the app still needs true plate-location X/Z fields to calculate the ecosystem circles."
+        )
         st.stop()
 
     try:
-        prepared = prepare_pitch_data(raw_df, detected)
+        prepared = prepare_pitch_data(matched_raw_df, detected)
     except Exception as e:
         st.error(str(e))
         st.stop()
 
     if prepared.empty:
-        st.error("No usable pitch rows were found after cleaning the CSV.")
+        st.error("No usable pitch rows were found for the matched pitchers after cleaning the CSVs.")
+        st.stop()
+
+    # Guard against placeholder location columns (for example x=0 on every row).
+    x_unique = prepared["_x"].dropna().nunique()
+    z_unique = prepared["_z"].dropna().nunique()
+    if x_unique <= 2 or z_unique <= 2:
+        st.error(
+            "The selected plate-location columns do not contain usable pitch locations. "
+            "Choose the real horizontal and vertical plate-location fields in the field-mapping section."
+        )
         st.stop()
 
     eco = build_ecosystem_summary(prepared)
-    seq = build_sequences(raw_df, prepared, detected)
+    seq = build_sequences(matched_raw_df, prepared, detected)
     seqsum = sequence_summary(seq)
 
     # Metrics
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Pitchers", prepared["_pitcher"].nunique())
-    m2.metric("Pitches", f"{len(prepared):,}")
+    m1.metric("Matched Pitchers", prepared["_pitcher"].nunique())
+    m2.metric("Matched Pitches", f"{len(prepared):,}")
     m3.metric("Pitch Types", prepared["_pitch_type"].nunique())
     if not seq.empty:
         m4.metric("Consecutive Pairs", f"{len(seq):,}")
     else:
         m4.metric("Consecutive Pairs", "Not available")
-
-    # Matching check
-    if chart_pitchers:
-        chart_names = {p.name.lower() for p in chart_pitchers}
-        csv_names = {p.lower() for p in prepared["_pitcher"].unique()}
-        overlap = chart_names & csv_names
-        st.caption(f"Pitcher-name matches between PDF and CSV: {len(overlap)} of {len(csv_names)} CSV pitchers.")
 
     st.subheader("Ecosystem preview")
     pitcher_options = list(prepared["_pitcher"].drop_duplicates())
@@ -985,22 +1114,23 @@ if raw_csv_file is not None:
             view[c] = view[c].round(1)
         st.dataframe(view, use_container_width=True, hide_index=True)
 
-    st.subheader("Generate report packet")
+    st.subheader("Generate matched-pitcher report packet")
     st.caption(
-        "The exported PDF contains 3 pages per pitcher: EV Ecosystem, EV Differential Matrix, and Sequencing Plan."
+        "Only pitchers present in BOTH the Pitch Chart PDF and the uploaded CSV files are included. "
+        "Each matched pitcher receives 3 pages: EV Ecosystem, EV Differential Matrix, and Sequencing Plan."
     )
 
-    if st.button("Generate EV Ecosystem PDF", type="primary", use_container_width=True):
-        with st.spinner("Building pitcher-by-pitcher report..."):
-            pdf_output = build_pdf_report(prepared, eco, seqsum, chart_pitchers)
+    if st.button("Generate Matched Pitchers PDF", type="primary", use_container_width=True):
+        with st.spinner("Building matched pitcher reports..."):
+            pdf_output = build_pdf_report(prepared, eco, seqsum, matched_chart_pitchers)
         st.session_state["ev_pdf_output"] = pdf_output
-        st.success(f"Report created for {prepared['_pitcher'].nunique()} pitchers.")
+        st.success(f"Report created for {prepared['_pitcher'].nunique()} matched pitcher(s).")
 
     if "ev_pdf_output" in st.session_state:
         st.download_button(
-            "⬇️ Download EV Ecosystem & Sequencing Report",
+            "⬇️ Download Matched EV Ecosystem & Sequencing Report",
             data=st.session_state["ev_pdf_output"],
-            file_name="EV_Ecosystem_Sequencing_Report.pdf",
+            file_name="Matched_EV_Ecosystem_Sequencing_Report.pdf",
             mime="application/pdf",
             use_container_width=True,
         )
@@ -1008,24 +1138,34 @@ if raw_csv_file is not None:
     with st.expander("Methodology / important limitations"):
         st.markdown(
             """
+            - **Pitcher inclusion:** only pitchers present in both the uploaded Pitch Chart PDF and at least one uploaded CSV.
             - **Pitch ecosystem:** density-mode of plate location for each pitch type, separated vs RHH/LHH.
             - **Public EV estimate:** uses the published up/in ↔ down/away reactionary-speed concept and
               approximately **2.75 mph per six inches** along the EV axis.
             - **6 EvMPH band:** used as a sequencing reference because Husband's public material discusses
               hitters performing best within roughly a 6 EvMPH speed bubble.
             - **True pitch tunneling is not inferred from landing location alone.** Genuine tunnel analysis needs
-              pitch-flight / trajectory information. If those fields are not available, this page deliberately
-              keeps tunnel claims out of the calculated report rather than inventing them.
+              pitch-flight / trajectory information.
             - Perry Husband's full Effective Velocity system is more sophisticated than this public approximation.
             """
         )
 
 else:
     st.markdown("---")
-    if pitch_chart_file is not None:
+    if pitch_chart_file is not None and fitz is None:
         st.warning(
-            "The Pitch Chart has been read successfully. Upload the matching pitch-by-pitch CSV to calculate "
+            "The PDF was uploaded, but it has NOT been parsed because PyMuPDF is not installed. "
+            "Add `pymupdf` to requirements.txt, redeploy, then upload the report again."
+        )
+    elif pitch_chart_file is not None and chart_pitchers:
+        st.warning(
+            "The Pitch Chart was parsed successfully. Upload the matching pitch-by-pitch CSV to calculate "
             "velocity, ecosystem centers, EvMPH and sequence relationships for every pitcher."
+        )
+    elif pitch_chart_file is not None:
+        st.warning(
+            "The PDF was uploaded, but no pitcher pages were detected. Make sure this is the standardized "
+            "Pitch Chart report format."
         )
     else:
         st.caption("Start by uploading the Pitch Chart report and the matching pitch-level CSV.")
