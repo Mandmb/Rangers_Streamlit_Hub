@@ -171,7 +171,7 @@ def build_pdf_report(view, inning_pivot, workload_table, lev_table, margin_table
 
     Page 1: workload + leverage + entry inning usage.
     Page 2: score margin at entry.
-    Page 3: starter/reliever role tables plus starter-only usage rankings
+    Page 3: starter/reliever role tables plus reliever-only usage rankings
     for Low, Mid, and High leverage based on historical deployment.
     """
     buffer = BytesIO()
@@ -397,7 +397,7 @@ def build_pdf_report(view, inning_pivot, workload_table, lev_table, margin_table
     c.showPage()
 
     # ---------------- Page 3 ----------------
-    draw_header("Role split & starter leverage usage")
+    draw_header("Role split & reliever leverage usage")
     draw_footer(3)
 
     reliever_names = set(str(x) for x in workload_table.index if str(x) not in starter_names)
@@ -408,20 +408,20 @@ def build_pdf_report(view, inning_pivot, workload_table, lev_table, margin_table
     starters_df = starters_df.sort_values(["Avg. IP / Outing", "Appearances"], ascending=[False, False])
     relievers_df = relievers_df.sort_values(["Appearances", "Avg. IP / Outing"], ascending=[False, False])
 
-    # Starter leverage rankings: historical usage count first, then share of outings.
-    starter_work = workload_table.loc[workload_table.index.astype(str).isin(starter_names)].copy()
+    # Reliever leverage rankings: historical usage count first, then share of outings.
+    reliever_work = workload_table.loc[workload_table.index.astype(str).isin(reliever_names)].copy()
     rank_tables = {}
     for lev in ["Low", "Mid", "High"]:
         rows = []
-        for pitcher in starter_work.index:
-            total_apps = int(starter_work.loc[pitcher, "Appearances"])
+        for pitcher in reliever_work.index:
+            total_apps = int(reliever_work.loc[pitcher, "Appearances"])
             used = int(lev_table.loc[pitcher, lev]) if pitcher in lev_table.index and lev in lev_table.columns else 0
             pct = round((used / total_apps * 100), 1) if total_apps else 0.0
             rows.append({
                 "Pitcher": str(pitcher),
                 "Uses": used,
                 "Usage %": pct,
-                "Avg IP": float(starter_work.loc[pitcher, "Avg. IP / Outing"]),
+                "Avg IP": float(reliever_work.loc[pitcher, "Avg. IP / Outing"]),
             })
         rdf = pd.DataFrame(rows, columns=["Pitcher", "Uses", "Usage %", "Avg IP"])
         if not rdf.empty:
@@ -458,10 +458,10 @@ def build_pdf_report(view, inning_pivot, workload_table, lev_table, margin_table
     role_table(relievers_df, margin_x + role_w + role_gap, role_w, role_h - 18)
 
     ranking_top = role_top - role_h - 12
-    draw_section_title("Starter Leverage Usage Rankings", margin_x, ranking_top, content_w)
+    draw_section_title("Reliever Leverage Usage Rankings", margin_x, ranking_top, content_w)
     c.setFillColor(colors.HexColor("#666666"))
     c.setFont("Helvetica", 6.3)
-    c.drawString(margin_x, ranking_top - 13, "Ranked by number of historical appearances in each leverage bucket; Usage % is that bucket's share of the starter's outings.")
+    c.drawString(margin_x, ranking_top - 13, "Ranked by number of historical appearances in each leverage bucket; Usage % is that bucket's share of the reliever's outings.")
 
     card_gap = 10
     card_w = (content_w - 2 * card_gap) / 3
@@ -478,7 +478,7 @@ def build_pdf_report(view, inning_pivot, workload_table, lev_table, margin_table
         rh = min(12.5, (remaining_h - 10) / max(1, len(data)))
         fs = max(4.2, min(5.7, rh * 0.45))
         widths = [card_w*0.11, card_w*0.43, card_w*0.14, card_w*0.17, card_w*0.15]
-        tbl = make_table(data, widths, rh, fs, starter_names=starter_names)
+        tbl = make_table(data, widths, rh, fs)
         h = rh * len(data)
         tbl.wrapOn(c, card_w, h)
         tbl.drawOn(c, x, table_y - 8 - h)
@@ -748,7 +748,7 @@ margin_table["Total"] = margin_table.sum(axis=1)
 st.caption("Counts show the score margin from the pitcher's team perspective when he threw his first pitch of the appearance.")
 st.dataframe(style_starter_names(margin_table, starter_names), use_container_width=True)
 
-st.subheader("Role Split & Starter Leverage Usage")
+st.subheader("Role Split & Reliever Leverage Usage")
 reliever_names = set(workload_table.index.astype(str)) - starter_names
 role_left, role_right = st.columns(2)
 with role_left:
@@ -762,11 +762,11 @@ with role_right:
     relievers_web = relievers_web.sort_values(["Appearances", "Avg. IP / Outing"], ascending=[False, False])
     st.dataframe(relievers_web, use_container_width=True)
 
-st.caption("Starter leverage rankings are based on historical usage: appearances in that leverage bucket first, then the share of the pitcher's total outings in that bucket.")
+st.caption("Reliever leverage rankings are based on historical usage: appearances in that leverage bucket first, then the share of the pitcher's total outings in that bucket. Starters are excluded from these three rankings.")
 rank_cols = st.columns(3)
 for col_obj, lev in zip(rank_cols, ["Low", "Mid", "High"]):
     rows = []
-    for pitcher in starters_web.index:
+    for pitcher in relievers_web.index:
         total_apps = int(workload_table.loc[pitcher, "Appearances"])
         used = int(lev_table.loc[pitcher, lev]) if pitcher in lev_table.index else 0
         pct = round((used / total_apps * 100), 1) if total_apps else 0.0
