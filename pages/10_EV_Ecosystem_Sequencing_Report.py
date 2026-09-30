@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 import streamlit as st
+from PIL import Image
 
 try:
     import fitz  # PyMuPDF
@@ -313,6 +314,170 @@ def parse_pitch_chart_pdf(pdf_bytes: bytes) -> List[PitchChartPitcher]:
     return pitchers
 
 
+
+# =========================================================
+# ECOSYSTEM LOCATION EXTRACTION FROM PITCH CHART PDF
+# =========================================================
+# The imported Pitch Chart uses a stable 3x2 panel layout on each side.
+# We use the colored scatter points in each panel, which lets us ignore the
+# black hitter silhouette and black strike-zone lines.
+PANEL_LAYOUT = {
+    "R": {
+        "Fastball":      (0.034, 0.414, 0.160, 0.674),
+        "Sinker":        (0.167, 0.414, 0.296, 0.674),
+        "Cutter":        (0.302, 0.414, 0.429, 0.674),
+        "Slider/Sweeper":(0.034, 0.682, 0.160, 0.943),
+        "Curveball":     (0.167, 0.682, 0.296, 0.943),
+        "Changeup":      (0.302, 0.682, 0.429, 0.943),
+    },
+    "L": {
+        "Fastball":      (0.569, 0.414, 0.697, 0.674),
+        "Sinker":        (0.704, 0.414, 0.831, 0.674),
+        "Cutter":        (0.837, 0.414, 0.966, 0.674),
+        "Slider/Sweeper":(0.569, 0.682, 0.697, 0.943),
+        "Curveball":     (0.704, 0.682, 0.831, 0.943),
+        "Changeup":      (0.837, 0.682, 0.966, 0.943),
+    },
+}
+
+# Strike-zone rectangle position within each small pitch panel.
+# Calibrated to the standardized report template.
+ZONE_REL = (0.36, 0.47, 0.62, 0.64)  # left, top, right, bottom
+
+
+def _panel_pitch_aliases(panel_name):
+    if panel_name == "Fastball":
+        return ["4-Seam", "Fastball"]
+    if panel_name == "Slider/Sweeper":
+        return ["Slider", "Sweeper"]
+    return [panel_name]
+
+
+def _colored_pixel_mode(panel_rgb: np.ndarray):
+    """
+    Find the densest colored scatter cluster in a pitch panel.
+    Returns normalized panel coordinates (x, y, radius) or None.
+    """
+    if panel_rgb.size == 0:
+        return None
+    arr = panel_rgb.astype(np.int16)
+    mx = arr.max(axis=2)
+    mn = arr.min(axis=2)
+    chroma = mx - mn
+
+    h, w = arr.shape[:2]
+    yy, xx = np.indices((h, w))
+
+    # Colored scatter points have appreciable chroma; black zone/batter do not.
+    # Exclude the header/legend area and extreme outer edges.
+    mask = (
+        (chroma >= 28) & (mx <= 245) &
+        (yy >= int(h * 0.28)) & (yy <= int(h * 0.90)) &
+        (xx >= int(w * 0.08)) & (xx <= int(w * 0.92))
+    )
+    ys, xs = np.where(mask)
+    if len(xs) < 8:
+        return None
+
+    # Densest 2D histogram bin, smoothed by neighboring bins.
+    bins_x, bins_y = 24, 28
+    hist, xedges, yedges = np.histogram2d(xs, ys, bins=[bins_x, bins_y], range=[[0, w], [0, h]])
+    pad = np.pad(hist, 1)
+    smooth = np.zeros_like(hist)
+    for dx in range(3):
+        for dy in range(3):
+            smooth += pad[dx:dx+bins_x, dy:dy+bins_y]
+    bi, bj = np.unravel_index(np.argmax(smooth), smooth.shape)
+    cx0 = (xedges[bi] + xedges[bi+1]) / 2
+    cy0 = (yedges[bj] + yedges[bj+1]) / 2
+
+    # Refine around the local mode.
+    rx = max(10, w * 0.16)
+    ry = max(10, h * 0.16)
+    local = (np.abs(xs - cx0) <= rx) & (np.abs(ys - cy0) <= ry)
+    lxs, lys = xs[local], ys[local]
+    if len(lxs) < 5:
+        lxs, lys = xs, ys
+
+    cx = float(np.median(lxs))
+    cy = float(np.median(lys))
+    dist = np.sqrt((lxs-cx)**2 + (lys-cy)**2)
+    rad_px = float(np.clip(np.quantile(dist, 0.60) if len(dist) else 10, 7, max(w, h)*0.22))
+    return cx / w, cy / h, rad_px / w
+
+
+def _panel_norm_to_plate(nx, ny, nr):
+    """Map panel-image position into approximate plate coordinates using the drawn strike zone."""
+    zl, zt, zr, zb = ZONE_REL
+    plate_half_width = 17.0 / 24.0  # 8.5 inches in feet
+    x = ((nx - zl) / (zr - zl)) * (2 * plate_half_width) - plate_half_width
+
+    # Standardized displayed zone approximation: bottom 1.5 ft, top 3.5 ft.
+    z = 3.5 - ((ny - zt) / (zb - zt)) * 2.0
+
+    # Convert image radius to an approximate plate-location radius in feet.
+    radius_ft = max(0.18, min(0.60, nr / (zr-zl) * (2*plate_half_width)))
+    return float(x), float(z), float(radius_ft)
+
+
+def extract_ecosystems_from_pitch_chart(pdf_bytes: bytes, chart_pitchers: List[PitchChartPitcher]) -> pd.DataFrame:
+    """
+    Extract approximate ecosystem centers directly from the colored scatter plots
+    in the imported Pitch Chart PDF. This is the fallback when the Pitch Info CSV
+    does not contain plate_x / plate_z.
+    """
+    if fitz is None:
+        return pd.DataFrame()
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    rows = []
+    pitcher_by_page = {p.page_num: p for p in chart_pitchers}
+
+    for page_no in range(1, len(doc)+1):
+        pitcher = pitcher_by_page.get(page_no)
+        if not pitcher:
+            continue
+        page = doc[page_no-1]
+        pix = page.get_pixmap(matrix=fitz.Matrix(1.45, 1.45), alpha=False)
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        arr = np.asarray(img)
+        Hh, Ww = arr.shape[:2]
+
+        for side in ["R", "L"]:
+            for panel_name, (x1r, y1r, x2r, y2r) in PANEL_LAYOUT[side].items():
+                x1, x2 = int(x1r*Ww), int(x2r*Ww)
+                y1, y2 = int(y1r*Hh), int(y2r*Hh)
+                panel = arr[y1:y2, x1:x2]
+                mode = _colored_pixel_mode(panel)
+                if mode is None:
+                    continue
+                nx, ny, nr = mode
+                px, pz, pr = _panel_norm_to_plate(nx, ny, nr)
+
+                aliases = _panel_pitch_aliases(panel_name)
+                # Keep only pitch types that the PDF text says this pitcher actually throws
+                counts = pitcher.pitch_counts_rhh if side == "R" else pitcher.pitch_counts_lhh
+                used_aliases = [pt for pt in aliases if counts.get(pt, 0) > 0]
+                if not used_aliases:
+                    # Some report pages can have scatter without parsed count text; preserve panel identity.
+                    used_aliases = aliases[:1]
+
+                for pt in used_aliases:
+                    rows.append({
+                        "Pitcher": pitcher.name,
+                        "BatterSide": side,
+                        "PitchType": pt,
+                        "EcoX": px,
+                        "EcoZ": pz,
+                        "EcoRadius": pr,
+                        "LocationSource": "Pitch Chart PDF",
+                    })
+    return pd.DataFrame(rows)
+
+
+def _ecosystem_lookup_key(pitch_type):
+    pt = normalize_pitch_type(pitch_type)
+    return pt
+
 # =========================================================
 # ECOSYSTEM + PUBLIC EV ESTIMATE
 # =========================================================
@@ -390,9 +555,13 @@ def ecosystem_radius(x, z, cx, cz):
     return float(np.clip(np.nanquantile(d, 0.50), 0.20, 0.55))
 
 
-def prepare_pitch_data(df: pd.DataFrame, cols: Dict[str, Optional[str]]) -> pd.DataFrame:
+def prepare_pitch_data(
+    df: pd.DataFrame,
+    cols: Dict[str, Optional[str]],
+    pdf_ecosystems: Optional[pd.DataFrame] = None,
+) -> pd.DataFrame:
     d = df.copy()
-    required = ["pitcher", "pitch_type", "velo", "plate_x", "plate_z", "batter_side"]
+    required = ["pitcher", "pitch_type", "velo", "batter_side"]
     missing = [k for k in required if not cols.get(k)]
     if missing:
         raise ValueError("Missing required fields: " + ", ".join(missing))
@@ -400,14 +569,54 @@ def prepare_pitch_data(df: pd.DataFrame, cols: Dict[str, Optional[str]]) -> pd.D
     d["_pitcher"] = d[cols["pitcher"]].astype(str).str.strip()
     d["_pitch_type"] = d[cols["pitch_type"]].map(normalize_pitch_type)
     d["_velo"] = safe_numeric(d[cols["velo"]])
-    d["_x"] = safe_numeric(d[cols["plate_x"]])
-    d["_z"] = safe_numeric(d[cols["plate_z"]])
     d["_bside"] = d[cols["batter_side"]].map(normalize_side)
 
     if cols.get("pitcher_hand"):
         d["_phand"] = d[cols["pitcher_hand"]].map(normalize_side)
     else:
         d["_phand"] = None
+
+    use_csv_location = bool(cols.get("plate_x") and cols.get("plate_z"))
+    if use_csv_location:
+        d["_x"] = safe_numeric(d[cols["plate_x"]])
+        d["_z"] = safe_numeric(d[cols["plate_z"]])
+        # Reject obvious placeholder coordinates.
+        if d["_x"].dropna().nunique() <= 2 or d["_z"].dropna().nunique() <= 2:
+            use_csv_location = False
+
+    if not use_csv_location:
+        d["_x"] = np.nan
+        d["_z"] = np.nan
+        d["_eco_radius"] = np.nan
+        if pdf_ecosystems is None or pdf_ecosystems.empty:
+            raise ValueError(
+                "No usable plate-location fields were found in the CSV, and no ecosystem locations "
+                "could be extracted from the Pitch Chart PDF."
+            )
+
+        lookup = {}
+        for _, r in pdf_ecosystems.iterrows():
+            key = (person_match_key(r["Pitcher"]), str(r["BatterSide"]), normalize_pitch_type(r["PitchType"]))
+            lookup[key] = (float(r["EcoX"]), float(r["EcoZ"]), float(r["EcoRadius"]))
+
+        xs, zs, rs = [], [], []
+        for pitcher, side, pt in zip(d["_pitcher"], d["_bside"], d["_pitch_type"]):
+            key = (person_match_key(pitcher), side, normalize_pitch_type(pt))
+            val = lookup.get(key)
+            # Shared Slider/Sweeper panel fallback.
+            if val is None and pt in {"Slider", "Sweeper"}:
+                alt = "Sweeper" if pt == "Slider" else "Slider"
+                val = lookup.get((person_match_key(pitcher), side, alt))
+            if val is None and pt in {"4-Seam", "Fastball"}:
+                alt = "Fastball" if pt == "4-Seam" else "4-Seam"
+                val = lookup.get((person_match_key(pitcher), side, alt))
+            if val is None:
+                xs.append(np.nan); zs.append(np.nan); rs.append(np.nan)
+            else:
+                xs.append(val[0]); zs.append(val[1]); rs.append(val[2])
+        d["_x"], d["_z"], d["_eco_radius"] = xs, zs, rs
+
+    d["_location_source"] = "CSV pitch location" if use_csv_location else "Pitch Chart ecosystem"
 
     d = d[
         d["_pitcher"].notna() &
@@ -427,13 +636,20 @@ def prepare_pitch_data(df: pd.DataFrame, cols: Dict[str, Optional[str]]) -> pd.D
 def build_ecosystem_summary(d: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for (pitcher, side, pitch_type), g in d.groupby(["_pitcher", "_bside", "_pitch_type"]):
-        if len(g) < 2:
+        if len(g) < 1:
             continue
-        cx, cz = kde_mode_xy(g["_x"].to_numpy(), g["_z"].to_numpy())
-        r = ecosystem_radius(g["_x"].to_numpy(), g["_z"].to_numpy(), cx, cz)
-        dist = np.sqrt((g["_x"] - cx)**2 + (g["_z"] - cz)**2)
-        in_eco = dist <= r
-        # Estimate the EV at ecosystem using median velocity + ecosystem center location.
+
+        if g["_location_source"].iloc[0] == "Pitch Chart ecosystem":
+            cx = float(g["_x"].median())
+            cz = float(g["_z"].median())
+            r = float(g["_eco_radius"].dropna().median()) if "_eco_radius" in g and g["_eco_radius"].notna().any() else 0.30
+            in_eco_pct = 100.0  # rows inherit the ecosystem center by design
+        else:
+            cx, cz = kde_mode_xy(g["_x"].to_numpy(), g["_z"].to_numpy())
+            r = ecosystem_radius(g["_x"].to_numpy(), g["_z"].to_numpy(), cx, cz)
+            dist = np.sqrt((g["_x"] - cx)**2 + (g["_z"] - cz)**2)
+            in_eco_pct = float((dist <= r).mean() * 100)
+
         avg_v = float(g["_velo"].median())
         eco_ev = public_ev_estimate(avg_v, cx, cz, side)
         rows.append({
@@ -448,8 +664,9 @@ def build_ecosystem_summary(d: pd.DataFrame) -> pd.DataFrame:
             "EcoZ": cz,
             "EcoRadius": r,
             "EcoEV": eco_ev,
-            "InEcoPct": float(in_eco.mean() * 100),
+            "InEcoPct": in_eco_pct,
             "AvgPitchEV": float(g["_ev"].mean()),
+            "LocationSource": g["_location_source"].iloc[0],
         })
     out = pd.DataFrame(rows)
     if len(out):
@@ -877,9 +1094,9 @@ st.markdown(
 )
 
 st.info(
-    "A Pitch Chart PDF by itself does not contain the raw velocity or full pitch-flight data needed "
-    "to calculate true Effective Velocity and tunneling. The PDF is used to identify the pitchers "
-    "and their pitch inventory. For the full report, upload the raw pitch-level CSV as well."
+    "The Pitch Chart PDF supplies the pitcher-specific location ecosystems. The Pitch Info CSV supplies "
+    "velocity, pitch type, hitter side and pitch order. When the CSV has no plate X/Z fields, the app "
+    "combines both sources: ecosystem location from the PDF + velocity/sequencing from the CSV."
 )
 
 left, right = st.columns(2)
@@ -1022,8 +1239,8 @@ if raw_csv_files:
     # Allow user to correct auto-detection.
     options = ["—"] + list(raw_df.columns)
 
-    required_keys = ["pitcher", "pitch_type", "velo", "plate_x", "plate_z", "batter_side"]
-    optional_keys = ["pitcher_hand", "game_date", "game_id", "inning", "top_bottom", "pa_id", "pitch_no",
+    required_keys = ["pitcher", "pitch_type", "velo", "batter_side"]
+    optional_keys = ["plate_x", "plate_z", "pitcher_hand", "game_date", "game_id", "inning", "top_bottom", "pa_id", "pitch_no",
                      "release_x", "release_z", "horz_break", "vert_break"]
 
     with st.expander("Review / correct detected columns", expanded=False):
@@ -1124,32 +1341,49 @@ if raw_csv_files:
     missing = [k for k in required_keys if not detected.get(k)]
     if missing:
         st.error(
-            "The matched CSV data is missing required fields for ecosystem calculations: "
-            + ", ".join(missing)
-        )
-        st.caption(
-            "The attached Pitch Info format has pitcher, pitch type, velocity, handedness and sequence fields, "
-            "but the app still needs true plate-location X/Z fields to calculate the ecosystem circles."
+            "The matched CSV data is missing required fields: " + ", ".join(missing)
         )
         st.stop()
 
+    # Extract ecosystem centers from the Pitch Chart itself. This is especially
+    # important for the Pitch Info CSV format, which does not provide plate_x / plate_z.
+    with st.spinner("Reading pitch ecosystems from the Pitch Chart scatter plots..."):
+        pdf_ecosystems = extract_ecosystems_from_pitch_chart(pdf_bytes, matched_chart_pitchers)
+
+    usable_csv_xy = bool(detected.get("plate_x") and detected.get("plate_z"))
+    if usable_csv_xy:
+        try:
+            ux = pd.to_numeric(matched_raw_df[detected["plate_x"]], errors="coerce").dropna().nunique()
+            uz = pd.to_numeric(matched_raw_df[detected["plate_z"]], errors="coerce").dropna().nunique()
+            usable_csv_xy = ux > 2 and uz > 2
+        except Exception:
+            usable_csv_xy = False
+
+    if not usable_csv_xy:
+        if pdf_ecosystems.empty:
+            st.error(
+                "The CSV does not contain usable plate-location X/Z fields, and the app could not read "
+                "ecosystem locations from the imported Pitch Chart."
+            )
+            st.stop()
+        st.success(
+            "The Pitch Info CSV does not contain plate_x / plate_z, so the app is using the colored "
+            "pitch-location scatter plots in the Pitch Chart PDF to identify each pitch's ecosystem."
+        )
+        st.caption(
+            "Velocity and pitch order come from the CSV. Ecosystem location comes from the PDF. "
+            "Therefore EvMPH is estimated at the pitch's ecosystem location rather than at every individual pitch location."
+        )
+
     try:
-        prepared = prepare_pitch_data(matched_raw_df, detected)
+        prepared = prepare_pitch_data(matched_raw_df, detected, pdf_ecosystems=pdf_ecosystems)
     except Exception as e:
         st.error(str(e))
         st.stop()
 
     if prepared.empty:
-        st.error("No usable pitch rows were found for the matched pitchers after cleaning the CSVs.")
-        st.stop()
-
-    # Guard against placeholder location columns (for example x=0 on every row).
-    x_unique = prepared["_x"].dropna().nunique()
-    z_unique = prepared["_z"].dropna().nunique()
-    if x_unique <= 2 or z_unique <= 2:
         st.error(
-            "The selected plate-location columns do not contain usable pitch locations. "
-            "Choose the real horizontal and vertical plate-location fields in the field-mapping section."
+            "No usable matched pitch rows remained after combining CSV velocity/sequence data with PDF ecosystem locations."
         )
         st.stop()
 
@@ -1206,7 +1440,7 @@ if raw_csv_files:
         st.markdown(
             """
             - **Pitcher inclusion:** only pitchers present in both the uploaded Pitch Chart PDF and at least one uploaded CSV.
-            - **Pitch ecosystem:** density-mode of plate location for each pitch type, separated vs RHH/LHH.
+            - **Pitch ecosystem:** if raw plate X/Z is unavailable, the app reads the colored scatter distribution directly from the imported Pitch Chart PDF, separated vs RHH/LHH.
             - **Public EV estimate:** uses the published up/in ↔ down/away reactionary-speed concept and
               approximately **2.75 mph per six inches** along the EV axis.
             - **6 EvMPH band:** used as a sequencing reference because Husband's public material discusses
