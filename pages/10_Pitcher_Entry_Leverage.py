@@ -184,7 +184,6 @@ def build_pdf_report(view, inning_pivot, workload_table, lev_table, mid_cut, hig
     c.line(margin_x, 17, page_w - margin_x, 17)
     c.setFillColor(colors.HexColor("#666666"))
     c.setFont("Helvetica", 5.5)
-    c.drawString(margin_x, 7, "Texas Rangers - Bullpen Usage Report")
     c.drawRightString(page_w - margin_x, 7, "Entry usage and leverage")
 
     def draw_section_title(text, x, y, width):
