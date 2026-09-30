@@ -165,7 +165,12 @@ def baseball_ip_from_outs(outs):
 
 
 def build_pdf_report(view, inning_pivot, workload_table, lev_table, margin_table, mid_cut, high_cut):
-    """Create a polished single-page landscape PDF with the three core bullpen usage sections."""
+    """Create a polished two-page landscape PDF.
+
+    Page 1 keeps the original clean layout: workload + leverage on top,
+    entry inning usage across the bottom. Page 2 is dedicated to score
+    margin at entry so the table can be larger and easier to read.
+    """
     buffer = BytesIO()
     page_w, page_h = landscape(letter)
     c = canvas.Canvas(buffer, pagesize=(page_w, page_h))
@@ -174,38 +179,33 @@ def build_pdf_report(view, inning_pivot, workload_table, lev_table, margin_table
     margin_x = 18
     footer_h = 20
     header_h = 45
-    section_gap = 6
+    section_gap = 8
     content_w = page_w - (2 * margin_x)
     content_top = page_h - header_h
     content_bottom = footer_h + 8
     usable_h = content_top - content_bottom
 
-    # Three horizontal bands keep all four tables on one landscape page:
-    # workload + leverage on top, inning usage in the middle, score margin at bottom.
-    top_h = usable_h * 0.38
-    middle_h = usable_h * 0.31
-    bottom_h = usable_h - top_h - middle_h - (2 * section_gap)
+    def draw_header(subtitle=None):
+        c.setFillColor(colors.HexColor(RANGERS_BLUE))
+        c.setFont("Helvetica-Bold", 17)
+        c.drawString(margin_x, page_h - 23, "Pitcher Workload, Entry Inning & Leverage")
+        c.setFillColor(colors.HexColor("#666666"))
+        c.setFont("Helvetica", 6.6)
+        base = (
+            f"{view['Pitcher'].nunique()} pitcher(s) | {len(view)} appearance(s) | "
+            f"Leverage: Low < {mid_cut:.1f}, Mid {mid_cut:.1f} to < {high_cut:.1f}, High >= {high_cut:.1f}"
+        )
+        if subtitle:
+            base += f" | {subtitle}"
+        c.drawString(margin_x, page_h - 34, base)
 
-    # Header
-    c.setFillColor(colors.HexColor(RANGERS_BLUE))
-    c.setFont("Helvetica-Bold", 17)
-    c.drawString(margin_x, page_h - 23, "Pitcher Workload, Entry Inning & Leverage")
-    c.setFillColor(colors.HexColor("#666666"))
-    c.setFont("Helvetica", 6.6)
-    c.drawString(
-        margin_x,
-        page_h - 34,
-        f"{view['Pitcher'].nunique()} pitcher(s) | {len(view)} appearance(s) | "
-        f"Leverage: Low < {mid_cut:.1f}, Mid {mid_cut:.1f} to < {high_cut:.1f}, High >= {high_cut:.1f}",
-    )
-
-    # Footer
-    c.setStrokeColor(colors.HexColor(RANGERS_RED))
-    c.setLineWidth(1.0)
-    c.line(margin_x, 17, page_w - margin_x, 17)
-    c.setFillColor(colors.HexColor("#666666"))
-    c.setFont("Helvetica", 5.5)
-    c.drawRightString(page_w - margin_x, 7, "Entry usage and leverage")
+    def draw_footer(page_num):
+        c.setStrokeColor(colors.HexColor(RANGERS_RED))
+        c.setLineWidth(1.0)
+        c.line(margin_x, 17, page_w - margin_x, 17)
+        c.setFillColor(colors.HexColor("#666666"))
+        c.setFont("Helvetica", 5.5)
+        c.drawRightString(page_w - margin_x, 7, f"Page {page_num}")
 
     def draw_section_title(text, x, y, width):
         c.setFillColor(colors.HexColor(RANGERS_BLUE))
@@ -240,29 +240,35 @@ def build_pdf_report(view, inning_pivot, workload_table, lev_table, margin_table
         tbl.setStyle(TableStyle(commands))
         return tbl
 
-    # Prepare data
+    # Prepare data once.
     wt = workload_table.reset_index().copy()
-    wt_data = [[str(c) for c in wt.columns]] + [
+    wt_data = [[str(col) for col in wt.columns]] + [
         [str(v) for v in row] for row in wt.astype(object).where(pd.notna(wt), "").values.tolist()
     ]
 
     lt = lev_table.reset_index().copy()
-    lt_data = [[str(c) for c in lt.columns]] + [
+    lt_data = [[str(col) for col in lt.columns]] + [
         [str(v) for v in row] for row in lt.astype(object).where(pd.notna(lt), "").values.tolist()
     ]
 
     ip = inning_pivot.reset_index().copy()
-    ip_data = [[str(c) for c in ip.columns]] + [
+    ip_data = [[str(col) for col in ip.columns]] + [
         [str(v) for v in row] for row in ip.astype(object).where(pd.notna(ip), "").values.tolist()
     ]
 
     mt = margin_table.reset_index().copy()
-    mt_data = [[str(c) for c in mt.columns]] + [
+    mt_data = [[str(col) for col in mt.columns]] + [
         [str(v) for v in row] for row in mt.astype(object).where(pd.notna(mt), "").values.tolist()
     ]
 
-    # TOP BAND: Workload and leverage side-by-side.
-    # report on a single page even with a full bullpen of pitchers.
+    # ---------------- Page 1 ----------------
+    draw_header()
+    draw_footer(1)
+
+    # Original clean page-1 proportions: workload + leverage on top,
+    # entry inning usage across the lower portion.
+    top_h = usable_h * 0.54
+    bottom_h = usable_h - top_h - section_gap
     top_y = content_top
     top_table_y = top_y - 18
     top_table_h = top_h - 20
@@ -274,7 +280,7 @@ def build_pdf_report(view, inning_pivot, workload_table, lev_table, margin_table
     draw_section_title("Leverage at Entry", margin_x + workload_w + top_gap, top_y - 9, leverage_w)
 
     wt_row_h = min(12.0, top_table_h / max(1, len(wt_data)))
-    wt_font = max(4.4, min(6.0, wt_row_h * 0.48))
+    wt_font = max(4.6, min(6.1, wt_row_h * 0.49))
     wt_first = workload_w * 0.44
     wt_rest = (workload_w - wt_first) / max(1, len(wt.columns) - 1)
     wt_tbl = make_table(
@@ -288,7 +294,7 @@ def build_pdf_report(view, inning_pivot, workload_table, lev_table, margin_table
     wt_tbl.drawOn(c, margin_x, top_table_y - wt_h)
 
     lev_row_h = min(12.0, top_table_h / max(1, len(lt_data)))
-    lev_font = max(4.0, min(5.4, lev_row_h * 0.43))
+    lev_font = max(4.2, min(5.6, lev_row_h * 0.45))
     lev_first = leverage_w * 0.24
     lev_rest = (leverage_w - lev_first) / max(1, len(lt.columns) - 1)
     lev_highlights = {}
@@ -309,13 +315,12 @@ def build_pdf_report(view, inning_pivot, workload_table, lev_table, margin_table
     lev_tbl.wrapOn(c, leverage_w, lev_h)
     lev_tbl.drawOn(c, margin_x + workload_w + top_gap, top_table_y - lev_h)
 
-    # MIDDLE BAND: Entry inning usage across the full width.
-    middle_top = content_top - top_h - section_gap
-    draw_section_title("Entry Inning Usage", margin_x, middle_top - 9, content_w)
-    entry_table_y = middle_top - 18
-    entry_table_h = middle_h - 20
-    ip_row_h = min(8.5, entry_table_h / max(1, len(ip_data)))
-    ip_font = max(3.25, min(4.7, ip_row_h * 0.47))
+    entry_top = content_top - top_h - section_gap
+    draw_section_title("Entry Inning Usage", margin_x, entry_top - 9, content_w)
+    entry_table_y = entry_top - 18
+    entry_table_h = bottom_h - 20
+    ip_row_h = min(10.5, entry_table_h / max(1, len(ip_data)))
+    ip_font = max(3.7, min(5.0, ip_row_h * 0.48))
     ip_first = content_w * 0.205
     ip_rest = (content_w - ip_first) / max(1, len(ip.columns) - 1)
     ip_tbl = make_table(
@@ -328,14 +333,27 @@ def build_pdf_report(view, inning_pivot, workload_table, lev_table, margin_table
     ip_tbl.wrapOn(c, content_w, ip_h)
     ip_tbl.drawOn(c, margin_x, entry_table_y - ip_h)
 
-    # BOTTOM BAND: Score margin at entry.
-    margin_top = middle_top - middle_h - section_gap
-    draw_section_title("Score Margin at Entry", margin_x, margin_top - 9, content_w)
-    margin_table_y = margin_top - 18
-    margin_table_h = bottom_h - 20
-    mt_row_h = min(8.5, margin_table_h / max(1, len(mt_data)))
-    mt_font = max(3.2, min(4.6, mt_row_h * 0.47))
-    mt_first = content_w * 0.205
+    c.showPage()
+
+    # ---------------- Page 2 ----------------
+    draw_header("Score margin at entry")
+    draw_footer(2)
+
+    page2_title_y = content_top - 9
+    draw_section_title("Score Margin at Entry", margin_x, page2_title_y, content_w)
+    c.setFillColor(colors.HexColor("#666666"))
+    c.setFont("Helvetica", 6.8)
+    c.drawString(
+        margin_x,
+        page2_title_y - 13,
+        "Counts show the score margin from the pitcher's team perspective when he threw his first pitch of the appearance.",
+    )
+
+    margin_table_y = page2_title_y - 27
+    margin_table_h = margin_table_y - content_bottom
+    mt_row_h = min(18.0, margin_table_h / max(1, len(mt_data)))
+    mt_font = max(5.0, min(7.4, mt_row_h * 0.42))
+    mt_first = content_w * 0.20
     mt_rest = (content_w - mt_first) / max(1, len(mt.columns) - 1)
     margin_highlights = {}
     for name, bg in [
