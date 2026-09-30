@@ -128,6 +128,22 @@ def classify_leverage(score, mid_cut, high_cut):
     return "Low"
 
 
+def score_margin_bucket(team_runs, opp_runs):
+    """Bucket the score state from the pitcher's team perspective at entry."""
+    if pd.isna(team_runs) or pd.isna(opp_runs):
+        return None
+    diff = int(team_runs) - int(opp_runs)
+    if diff <= -5:
+        return "Trail 5+"
+    if diff < 0:
+        return f"Trail {abs(diff)}"
+    if diff == 0:
+        return "Tied"
+    if diff >= 5:
+        return "Lead 5+"
+    return f"Lead {diff}"
+
+
 def outs_recorded_from_result(value):
     """Return pitcher outs credited by the terminal pitch result."""
     if pd.isna(value):
@@ -148,7 +164,7 @@ def baseball_ip_from_outs(outs):
     return f"{outs // 3}.{outs % 3}"
 
 
-def build_pdf_report(view, inning_pivot, workload_table, lev_table, mid_cut, high_cut):
+def build_pdf_report(view, inning_pivot, workload_table, lev_table, margin_table, mid_cut, high_cut):
     """Create a polished single-page landscape PDF with the three core bullpen usage sections."""
     buffer = BytesIO()
     page_w, page_h = landscape(letter)
@@ -158,12 +174,17 @@ def build_pdf_report(view, inning_pivot, workload_table, lev_table, mid_cut, hig
     margin_x = 18
     footer_h = 20
     header_h = 45
-    section_gap = 8
+    section_gap = 6
     content_w = page_w - (2 * margin_x)
     content_top = page_h - header_h
     content_bottom = footer_h + 8
     usable_h = content_top - content_bottom
-    block_h = (usable_h - section_gap) / 2
+
+    # Three horizontal bands keep all four tables on one landscape page:
+    # workload + leverage on top, inning usage in the middle, score margin at bottom.
+    top_h = usable_h * 0.38
+    middle_h = usable_h * 0.31
+    bottom_h = usable_h - top_h - middle_h - (2 * section_gap)
 
     # Header
     c.setFillColor(colors.HexColor(RANGERS_BLUE))
@@ -235,13 +256,16 @@ def build_pdf_report(view, inning_pivot, workload_table, lev_table, mid_cut, hig
         [str(v) for v in row] for row in ip.astype(object).where(pd.notna(ip), "").values.tolist()
     ]
 
-    n_rows = max(len(wt_data), len(lt_data), len(ip_data))
+    mt = margin_table.reset_index().copy()
+    mt_data = [[str(c) for c in mt.columns]] + [
+        [str(v) for v in row] for row in mt.astype(object).where(pd.notna(mt), "").values.tolist()
+    ]
 
-    # TOP HALF: Workload and leverage side-by-side. This layout is what keeps the
+    # TOP BAND: Workload and leverage side-by-side.
     # report on a single page even with a full bullpen of pitchers.
     top_y = content_top
     top_table_y = top_y - 18
-    top_table_h = block_h - 20
+    top_table_h = top_h - 20
     top_gap = 10
     workload_w = content_w * 0.34
     leverage_w = content_w - workload_w - top_gap
@@ -285,13 +309,13 @@ def build_pdf_report(view, inning_pivot, workload_table, lev_table, mid_cut, hig
     lev_tbl.wrapOn(c, leverage_w, lev_h)
     lev_tbl.drawOn(c, margin_x + workload_w + top_gap, top_table_y - lev_h)
 
-    # BOTTOM HALF: Entry inning usage across the full page width.
-    bottom_top = content_bottom + block_h
-    draw_section_title("Entry Inning Usage", margin_x, bottom_top - 9, content_w)
-    entry_table_y = bottom_top - 18
-    entry_table_h = block_h - 20
-    ip_row_h = min(11.5, entry_table_h / max(1, len(ip_data)))
-    ip_font = max(4.0, min(5.5, ip_row_h * 0.46))
+    # MIDDLE BAND: Entry inning usage across the full width.
+    middle_top = content_top - top_h - section_gap
+    draw_section_title("Entry Inning Usage", margin_x, middle_top - 9, content_w)
+    entry_table_y = middle_top - 18
+    entry_table_h = middle_h - 20
+    ip_row_h = min(8.5, entry_table_h / max(1, len(ip_data)))
+    ip_font = max(3.25, min(4.7, ip_row_h * 0.47))
     ip_first = content_w * 0.205
     ip_rest = (content_w - ip_first) / max(1, len(ip.columns) - 1)
     ip_tbl = make_table(
@@ -303,6 +327,35 @@ def build_pdf_report(view, inning_pivot, workload_table, lev_table, mid_cut, hig
     ip_h = ip_row_h * len(ip_data)
     ip_tbl.wrapOn(c, content_w, ip_h)
     ip_tbl.drawOn(c, margin_x, entry_table_y - ip_h)
+
+    # BOTTOM BAND: Score margin at entry.
+    margin_top = middle_top - middle_h - section_gap
+    draw_section_title("Score Margin at Entry", margin_x, margin_top - 9, content_w)
+    margin_table_y = margin_top - 18
+    margin_table_h = bottom_h - 20
+    mt_row_h = min(8.5, margin_table_h / max(1, len(mt_data)))
+    mt_font = max(3.2, min(4.6, mt_row_h * 0.47))
+    mt_first = content_w * 0.205
+    mt_rest = (content_w - mt_first) / max(1, len(mt.columns) - 1)
+    margin_highlights = {}
+    for name, bg in [
+        ("Trail 5+", "#F8D7DA"), ("Trail 4", "#F8D7DA"), ("Trail 3", "#F8D7DA"),
+        ("Trail 2", "#F8D7DA"), ("Trail 1", "#F8D7DA"), ("Tied", "#FFF3CD"),
+        ("Lead 1", "#DDEEDB"), ("Lead 2", "#DDEEDB"), ("Lead 3", "#DDEEDB"),
+        ("Lead 4", "#DDEEDB"), ("Lead 5+", "#DDEEDB"),
+    ]:
+        if name in mt.columns:
+            margin_highlights[list(mt.columns).index(name)] = bg
+    mt_tbl = make_table(
+        mt_data,
+        [mt_first] + [mt_rest] * (len(mt.columns) - 1),
+        mt_row_h,
+        mt_font,
+        margin_highlights,
+    )
+    mt_h = mt_row_h * len(mt_data)
+    mt_tbl.wrapOn(c, content_w, mt_h)
+    mt_tbl.drawOn(c, margin_x, margin_table_y - mt_h)
 
     c.save()
     buffer.seek(0)
@@ -373,7 +426,9 @@ def process_file(uploaded, mid_cut, high_cut):
         team_runs = pd.to_numeric(row[c_runs], errors="coerce")
         opp_runs = pd.to_numeric(row[c_opp_runs], errors="coerce")
         outs = pd.to_numeric(row[c_outs], errors="coerce")
-        diff = abs(team_runs - opp_runs) if pd.notna(team_runs) and pd.notna(opp_runs) else None
+        signed_diff = (team_runs - opp_runs) if pd.notna(team_runs) and pd.notna(opp_runs) else None
+        diff = abs(signed_diff) if signed_diff is not None else None
+        margin_bucket = score_margin_bucket(team_runs, opp_runs)
         lev_score = leverage_score(inning_num, diff if diff is not None else 99, runners, risp, outs)
 
         records.append({
@@ -392,6 +447,8 @@ def process_file(uploaded, mid_cut, high_cut):
             "Team Runs": int(team_runs) if pd.notna(team_runs) else None,
             "Opponent Runs": int(opp_runs) if pd.notna(opp_runs) else None,
             "Score Diff": int(diff) if diff is not None else None,
+            "Score Margin": int(signed_diff) if signed_diff is not None else None,
+            "Margin at Entry": margin_bucket or "",
             "Outs Recorded": int(row.get("_outing_outs", 0) or 0),
             "IP": baseball_ip_from_outs(row.get("_outing_outs", 0)),
             "Leverage Score": lev_score,
@@ -536,6 +593,20 @@ for col in lev_order:
     lev_table[f"{col} %"] = (lev_table[col] / lev_table["Total"] * 100).round(1)
 st.dataframe(lev_table, use_container_width=True)
 
+st.subheader("Score Margin at Entry")
+margin_order = [
+    "Trail 5+", "Trail 4", "Trail 3", "Trail 2", "Trail 1",
+    "Tied",
+    "Lead 1", "Lead 2", "Lead 3", "Lead 4", "Lead 5+",
+]
+margin_table = (
+    view.pivot_table(index="Pitcher", columns="Margin at Entry", values="Game", aggfunc="count", fill_value=0)
+    .reindex(columns=margin_order, fill_value=0)
+)
+margin_table["Total"] = margin_table.sum(axis=1)
+st.caption("Counts show the score margin from the pitcher's team perspective when he threw his first pitch of the appearance.")
+st.dataframe(margin_table, use_container_width=True)
+
 with st.expander("How leverage is calculated", expanded=False):
     st.markdown(
         f"""
@@ -554,7 +625,7 @@ This is a **transparent internal leverage model**, not an official MLB Leverage 
 st.subheader("Appearance Detail")
 detail_cols = [
     "Pitcher", "Date", "Opponent", "Entry", "Outs", "Situation",
-    "Outs Recorded", "IP", "Team Runs", "Opponent Runs", "Score Diff", "Leverage Score", "Leverage"
+    "Outs Recorded", "IP", "Team Runs", "Opponent Runs", "Score Margin", "Margin at Entry", "Leverage Score", "Leverage"
 ]
 st.dataframe(
     view[detail_cols].sort_values(["Pitcher", "Date"], ascending=[True, False]),
@@ -563,7 +634,7 @@ st.dataframe(
 )
 
 summary_csv = view[detail_cols + ["Game", "Source File"]].to_csv(index=False).encode("utf-8")
-pdf_bytes = build_pdf_report(view, inning_pivot, workload_table, lev_table, mid_cut, high_cut)
+pdf_bytes = build_pdf_report(view, inning_pivot, workload_table, lev_table, margin_table, mid_cut, high_cut)
 
 btn1, btn2 = st.columns(2)
 with btn1:
