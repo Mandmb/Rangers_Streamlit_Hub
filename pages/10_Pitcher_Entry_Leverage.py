@@ -18,6 +18,8 @@ st.set_page_config(page_title="Pitcher Entry & Leverage", page_icon="⚾", layou
 RANGERS_BLUE = "#002D72"
 RANGERS_RED = "#BA0C2F"
 DARK_GRAY = "#857874"
+STARTER_GREEN = "#D9EAD3"
+STARTER_GREEN_TEXT = "#1B5E20"
 
 st.markdown(
     """
@@ -215,7 +217,7 @@ def build_pdf_report(view, inning_pivot, workload_table, lev_table, margin_table
         c.setLineWidth(0.45)
         c.line(x, y - 3, x + width, y - 3)
 
-    def make_table(data, col_widths, row_height, font_size, highlight_cols=None):
+    def make_table(data, col_widths, row_height, font_size, highlight_cols=None, starter_names=None):
         row_heights = [row_height] * len(data)
         tbl = Table(data, colWidths=col_widths, rowHeights=row_heights)
         commands = [
@@ -237,10 +239,22 @@ def build_pdf_report(view, inning_pivot, workload_table, lev_table, margin_table
         if highlight_cols:
             for idx, bg in highlight_cols.items():
                 commands.append(("BACKGROUND", (idx, 1), (idx, -1), colors.HexColor(bg)))
+        if starter_names:
+            starter_names = set(starter_names)
+            for row_idx, row in enumerate(data[1:], start=1):
+                if row and str(row[0]) in starter_names:
+                    commands.extend([
+                        ("BACKGROUND", (0, row_idx), (0, row_idx), colors.HexColor(STARTER_GREEN)),
+                        ("TEXTCOLOR", (0, row_idx), (0, row_idx), colors.HexColor(STARTER_GREEN_TEXT)),
+                        ("FONTNAME", (0, row_idx), (0, row_idx), "Helvetica-Bold"),
+                    ])
         tbl.setStyle(TableStyle(commands))
         return tbl
 
-    # Prepare data once.
+    # Prepare data once. Pitchers averaging 3+ IP per outing are treated as starters.
+    starter_names = set(
+        workload_table.index[workload_table["Avg. IP / Outing"] >= 3.0].astype(str).tolist()
+    )
     wt = workload_table.reset_index().copy()
     wt_data = [[str(col) for col in wt.columns]] + [
         [str(v) for v in row] for row in wt.astype(object).where(pd.notna(wt), "").values.tolist()
@@ -288,6 +302,7 @@ def build_pdf_report(view, inning_pivot, workload_table, lev_table, margin_table
         [wt_first] + [wt_rest] * (len(wt.columns) - 1),
         wt_row_h,
         wt_font,
+        starter_names=starter_names,
     )
     wt_h = wt_row_h * len(wt_data)
     wt_tbl.wrapOn(c, workload_w, wt_h)
@@ -310,6 +325,7 @@ def build_pdf_report(view, inning_pivot, workload_table, lev_table, margin_table
         lev_row_h,
         lev_font,
         lev_highlights,
+        starter_names=starter_names,
     )
     lev_h = lev_row_h * len(lt_data)
     lev_tbl.wrapOn(c, leverage_w, lev_h)
@@ -328,6 +344,7 @@ def build_pdf_report(view, inning_pivot, workload_table, lev_table, margin_table
         [ip_first] + [ip_rest] * (len(ip.columns) - 1),
         ip_row_h,
         ip_font,
+        starter_names=starter_names,
     )
     ip_h = ip_row_h * len(ip_data)
     ip_tbl.wrapOn(c, content_w, ip_h)
@@ -370,6 +387,7 @@ def build_pdf_report(view, inning_pivot, workload_table, lev_table, margin_table
         mt_row_h,
         mt_font,
         margin_highlights,
+        starter_names=starter_names,
     )
     mt_h = mt_row_h * len(mt_data)
     mt_tbl.wrapOn(c, content_w, mt_h)
@@ -378,6 +396,19 @@ def build_pdf_report(view, inning_pivot, workload_table, lev_table, margin_table
     c.save()
     buffer.seek(0)
     return buffer.getvalue()
+
+def style_starter_names(df, starter_names):
+    """Highlight only pitcher-name index cells for starters (>= 3.0 IP/outing)."""
+    starter_names = set(str(x) for x in starter_names)
+    return df.style.apply_index(
+        lambda values: [
+            f"background-color: {STARTER_GREEN}; color: {STARTER_GREEN_TEXT}; font-weight: 700;"
+            if str(v) in starter_names else ""
+            for v in values
+        ],
+        axis="index",
+    )
+
 
 def process_file(uploaded, mid_cut, high_cut):
     df = pd.read_csv(uploaded)
@@ -537,7 +568,9 @@ workload_table = (
 workload_table["Total IP"] = workload_table["Total Outs"].apply(baseball_ip_from_outs)
 workload_table["Avg. IP / Outing"] = (workload_table["Total Outs"] / 3 / workload_table["Appearances"]).round(2)
 workload_table = workload_table[["Appearances", "Total IP", "Avg. IP / Outing"]]
-st.dataframe(workload_table, use_container_width=True)
+starter_names = set(workload_table.index[workload_table["Avg. IP / Outing"] >= 3.0].astype(str).tolist())
+st.caption("Pitchers highlighted in green average 3.0+ innings per outing (starter profile).")
+st.dataframe(style_starter_names(workload_table, starter_names), use_container_width=True)
 
 st.subheader("Entry Inning Usage")
 inning_counts = (
@@ -574,7 +607,7 @@ inning_pivot = (
 )
 inning_pivot.columns = [f"{int(c)}th" if int(c) not in [1,2,3] else {1:"1st",2:"2nd",3:"3rd"}[int(c)] for c in inning_pivot.columns]
 inning_pivot["Total"] = inning_pivot.sum(axis=1)
-st.dataframe(inning_pivot, use_container_width=True)
+st.dataframe(style_starter_names(inning_pivot, starter_names), use_container_width=True)
 
 st.subheader("Leverage at Entry")
 lev_order = ["Low", "Mid", "High"]
@@ -609,7 +642,7 @@ lev_table = (
 lev_table["Total"] = lev_table.sum(axis=1)
 for col in lev_order:
     lev_table[f"{col} %"] = (lev_table[col] / lev_table["Total"] * 100).round(1)
-st.dataframe(lev_table, use_container_width=True)
+st.dataframe(style_starter_names(lev_table, starter_names), use_container_width=True)
 
 st.subheader("Score Margin at Entry")
 margin_order = [
@@ -623,7 +656,7 @@ margin_table = (
 )
 margin_table["Total"] = margin_table.sum(axis=1)
 st.caption("Counts show the score margin from the pitcher's team perspective when he threw his first pitch of the appearance.")
-st.dataframe(margin_table, use_container_width=True)
+st.dataframe(style_starter_names(margin_table, starter_names), use_container_width=True)
 
 with st.expander("How leverage is calculated", expanded=False):
     st.markdown(
