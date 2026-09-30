@@ -86,9 +86,9 @@ st.markdown(
 # =========================================================
 COLUMN_ALIASES = {
     "pitcher": [
-        "Pitcher", "PitcherName", "pitcher_name", "PlayerName",
-        "player_name", "PitcherFullName", "Pitcher Full Name",
-        "fullName", "pitcherAbbrevName"
+        "fullName", "PitcherFullName", "Pitcher Full Name",
+        "PitcherName", "pitcher_name", "PlayerName", "player_name",
+        "pitcherAbbrevName", "Pitcher"
     ],
     "pitch_type": [
         "PitchType", "TaggedPitchType", "AutoPitchType", "pitch_type",
@@ -117,21 +117,21 @@ COLUMN_ALIASES = {
         "Pitcher Hand", "pitcherHand"
     ],
     "game_date": [
-        "Date", "GameDate", "game_date", "Game Date", "gameDate", "date"
+        "gameDate", "GameDate", "game_date", "Game Date", "date", "Date"
     ],
     "game_id": [
-        "GameID", "GameId", "game_pk", "Game", "Game ID", "gameId"
+        "gameId", "GameID", "GameId", "game_pk", "Game ID", "Game"
     ],
     "pa_id": [
-        "PAofInning", "PA_ID", "PlateAppearance", "PlateAppearanceID",
-        "AtBatNo", "AtBatNumber", "AB", "pa_id", "abNumInGame"
+        "abNumInGame", "PAofInning", "PA_ID", "PlateAppearance",
+        "PlateAppearanceID", "AtBatNo", "AtBatNumber", "AB", "pa_id"
     ],
     "pitch_no": [
-        "PitchofPA", "PitchNo", "PitchNumber", "Pitch #", "pitch_number",
-        "PitchOfPA", "PitchNoInPA", "pitchNumInAB", "pitchNumInGame"
+        "pitchNumInGame", "pitchNumInAB", "PitchofPA", "PitchNo",
+        "PitchNumber", "Pitch #", "pitch_number", "PitchOfPA", "PitchNoInPA"
     ],
     "inning": [
-        "Inning", "inning", "inn"
+        "inn", "Inning", "inning"
     ],
     "top_bottom": [
         "TopBottom", "InningHalf", "Top/Bottom", "inning_topbot"
@@ -951,6 +951,14 @@ if raw_csv_files:
     st.success(
         f"{len(frames)} CSV file(s) loaded • {len(raw_df):,} pitch rows combined."
     )
+
+    # This Pitch Info export contains both a numeric `pitcher` field and a text `fullName`.
+    # Always prefer `fullName` for pitcher identity when it exists.
+    if "fullName" in raw_df.columns and raw_df["fullName"].notna().any():
+        detected_name_preview = ", ".join(
+            raw_df["fullName"].dropna().astype(str).drop_duplicates().head(8).tolist()
+        )
+        st.caption(f"Pitcher names read from `fullName`: {detected_name_preview}")
 
     # Detect core fields first so pitcher matching can be shown immediately.
     detected = detect_columns(raw_df)
