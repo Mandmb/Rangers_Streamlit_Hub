@@ -952,8 +952,64 @@ if raw_csv_files:
         f"{len(frames)} CSV file(s) loaded • {len(raw_df):,} pitch rows combined."
     )
 
-    st.subheader("CSV field detection")
+    # Detect core fields first so pitcher matching can be shown immediately.
     detected = detect_columns(raw_df)
+
+    st.subheader("Pitcher match status")
+    csv_pitcher_col_early = detected.get("pitcher")
+
+    if pitch_chart_file is None:
+        st.warning("Upload the Pitch Chart PDF too. PDFs are created only for pitchers present in BOTH sources.")
+    elif fitz is None:
+        st.warning("The Pitch Chart cannot be matched until PyMuPDF is installed.")
+    elif not chart_pitchers:
+        st.warning("No pitcher names were detected in the Pitch Chart PDF.")
+    elif not csv_pitcher_col_early:
+        st.warning("The pitcher-name column was not detected in the CSV files. Review the field mapping below.")
+    else:
+        early_pdf_names = [p.name for p in chart_pitchers]
+        early_csv_names = (
+            raw_df[csv_pitcher_col_early]
+            .dropna().astype(str).str.strip()
+            .loc[lambda s: s.ne("")]
+            .drop_duplicates().tolist()
+        )
+        early_pdf_map = {person_match_key(n): n for n in early_pdf_names}
+        early_csv_map = {person_match_key(n): n for n in early_csv_names}
+        early_match_keys = sorted(set(early_pdf_map) & set(early_csv_map))
+
+        mc1, mc2, mc3 = st.columns(3)
+        mc1.metric("Pitchers in PDF", len(early_pdf_names))
+        mc2.metric("Pitchers in CSVs", len(early_csv_names))
+        mc3.metric("MATCHED", len(early_match_keys))
+
+        if early_match_keys:
+            st.success(
+                f"{len(early_match_keys)} pitcher(s) match. Only these pitchers will be eligible for downloadable reports."
+            )
+            early_match_df = pd.DataFrame([
+                {"Pitcher in PDF": early_pdf_map[k], "Pitcher in CSV": early_csv_map[k]}
+                for k in early_match_keys
+            ])
+            st.dataframe(early_match_df, use_container_width=True, hide_index=True)
+        else:
+            st.error(
+                "0 MATCHED PITCHERS. There is no PDF to generate yet because none of the pitcher names "
+                "in the uploaded CSV files appear in the imported Pitch Chart report."
+            )
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("**Pitchers in Pitch Chart PDF**")
+                st.dataframe(pd.DataFrame({"PDF Pitcher": early_pdf_names}), use_container_width=True, hide_index=True)
+            with c2:
+                st.markdown("**Pitchers in uploaded CSVs**")
+                st.dataframe(pd.DataFrame({"CSV Pitcher": early_csv_names}), use_container_width=True, hide_index=True)
+            st.info(
+                "Upload CSVs for one or more pitchers listed in the Pitch Chart PDF. "
+                "As soon as at least one pitcher matches, the report section will unlock."
+            )
+
+    st.subheader("CSV field detection")
 
     # Allow user to correct auto-detection.
     options = ["—"] + list(raw_df.columns)
@@ -1026,7 +1082,10 @@ if raw_csv_files:
         )
         st.dataframe(pd.DataFrame(matched_rows), use_container_width=True, hide_index=True)
     else:
-        st.error("No pitcher names match between the Pitch Chart PDF and the uploaded CSV files.")
+        st.error(
+            "No pitcher names match between the Pitch Chart PDF and the uploaded CSV files. "
+            "The download button is intentionally hidden until at least one pitcher exists in BOTH sources."
+        )
         st.stop()
 
     # Filter the combined raw data to matched pitchers only.
