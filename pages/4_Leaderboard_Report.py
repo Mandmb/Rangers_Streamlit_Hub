@@ -14,6 +14,22 @@ st.set_page_config(page_title="Leaderboard Report", layout="wide")
 
 st.title("Player Leaderboard Report")
 
+
+with st.sidebar.expander("📂 What files do I upload?", expanded=False):
+    st.markdown("""
+Upload these **6 CSVs** together:
+
+- **Hitting / Rate CSV** — filename should contain `rate`
+- **Baserunning / Stolen Bases CSV** — filename should contain `stolen` or `base`
+- **Infield Defense CSV** — filename should contain `infield`
+- **Outfield Defense CSV** — filename should contain `outfield`
+- **Catching / Game Review CSV** — filename should contain `game review` or `catch`
+- **Pitching CSV** — filename should contain `pitch` or `pitcher`
+
+The app shows which files were detected after upload.
+""")
+
+
 st.sidebar.header("Upload CSVs")
 
 uploaded_files = st.sidebar.file_uploader(

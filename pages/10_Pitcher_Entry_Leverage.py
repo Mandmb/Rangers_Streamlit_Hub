@@ -603,6 +603,30 @@ with st.sidebar:
     high_cut = st.number_input("High leverage starts at", min_value=0.0, max_value=15.0, value=6.5, step=0.1)
     st.caption("These cutoffs apply to the transparent leverage score shown in the report.")
 
+
+with st.expander("📂 What files do I upload?", expanded=False):
+    st.markdown("""
+Upload **one or more pitcher pitch-log CSVs**.
+
+**Required columns**
+- `fullName`
+- `inn` / inning
+- `outs`
+- `Situation`
+- `pitchResult`
+- `currentRuns`
+- `opponentCurrentRuns`
+- Either `gameId` **or** `date` / `gameDate`
+
+**Helpful optional columns**
+- `pitchNumInGame`
+- `team`
+- `opponent`
+
+You can upload multiple pitchers/games at once.
+""")
+
+
 uploads = st.file_uploader(
     "Pitch log CSV files",
     type=["csv"],

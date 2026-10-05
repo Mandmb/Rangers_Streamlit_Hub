@@ -922,6 +922,25 @@ def load_local_baseball_icon():
 # APP UI
 # =====================================================
 
+
+with st.expander("📂 What files do I upload?", expanded=False):
+    st.markdown("""
+**Required**
+- **1 Pitch-by-Pitch CSV**
+
+The CSV must include:
+- `pitcherAbbrevName`
+- `pitcherHand`
+- `batterAbbrevName`
+- `batterHand`
+- `pitchResult`
+
+**Optional for PDF export**
+- Team logo
+- `baseball.png` summary/snapshot icon
+""")
+
+
 uploaded_file = st.file_uploader("Upload pitch-by-pitch CSV", type=["csv"])
 
 if not uploaded_file:

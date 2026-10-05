@@ -2706,6 +2706,25 @@ selected_league = st.sidebar.selectbox(
 league_cfg = LEAGUE_CONFIG[selected_league]
 league_team_options = league_cfg["teams"]
 
+
+with st.expander("📂 What files do I upload?", expanded=False):
+    st.markdown("""
+Upload all applicable league files together:
+
+- **Team Pregame CSVs** — one or more team pitch-by-pitch files
+- **Draft SP CSV** — starter pitching
+- **Draft RP CSV** — reliever pitching
+- **Game Review CSV** — catching
+- **Infield Counting CSV**
+- **Outfield Counting CSV**
+
+The app auto-classifies files by filename and column signatures.
+
+**Optional**
+- League/team logos and baserunning icon for the PDF.
+""")
+
+
 all_csv_files = st.file_uploader(
     f"Upload all {league_cfg['display']} CSV files here",
     type=["csv"],

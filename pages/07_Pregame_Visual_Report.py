@@ -2380,6 +2380,27 @@ def find_logo_path():
 st.title("Advanced Pregame Report")
 st.caption("Upload all opponent and league CSVs at once. The app auto-detects files by filename. Version: Page 1 CS Direct Comparison Fix.")
 
+
+with st.expander("📂 What files do I upload?", expanded=False):
+    st.markdown("""
+Upload the CSVs you have for the opponent/report. This version auto-detects files by filename.
+
+**Recognized file types**
+- **Pregame** CSV
+- **Standard** / `Copy of Standard` CSV
+- **Catching PreGame** CSV
+- **Stolen Bases** CSV
+- **SBA Count** CSV
+- **Pregame Hitting** CSV
+- **Rate** CSV
+- **Pitch Usage** CSV
+- **Catcher / Framing** CSV
+- **Base Running / Baserunning** CSV
+
+You can upload them together in the single uploader. The app displays which file types it detected.
+""")
+
+
 with st.sidebar:
     st.header("Report Setup")
     opponent = st.text_input("Opponent name", value="Opponent")

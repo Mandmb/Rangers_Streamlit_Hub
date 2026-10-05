@@ -298,6 +298,31 @@ def downloadable_results(df: pd.DataFrame, player: str, season, age, pa) -> byte
     return export.to_csv(index=False).encode("utf-8")
 
 
+
+with st.expander("📂 What files do I upload?", expanded=False):
+    st.markdown("""
+You can either upload a player CSV or use Manual Entry.
+
+**CSV minimum requirements**
+- `PA`
+- `AVG` / `BA`
+- `OBP`
+- `SLG`
+
+**Recommended**
+- Player name
+- Season
+- Age
+- `OPS`
+- `ISO`
+- `BB%`
+- `K%`
+- `wOBA`
+
+OPS and ISO can be calculated when absent; additional statistics improve the output.
+""")
+
+
 upload_tab, manual_tab, method_tab = st.tabs(
     ["Upload Player CSV", "Manual Entry", "Model Methodology"]
 )

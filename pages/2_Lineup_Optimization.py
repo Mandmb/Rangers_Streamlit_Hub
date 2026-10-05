@@ -1174,6 +1174,20 @@ with st.sidebar:
 
 primary_rgb, accent_rgb = extract_team_colors(team_logo)
 
+
+with st.expander("📂 What files do I upload?", expanded=False):
+    st.markdown("""
+Choose **one** hitter data source:
+
+- **Pregame Pitch-by-Pitch CSV** — expected fields include `batterAbbrevName`, `batterHand`, `pitcherHand`, `pitchType`, `pitchResult`, and `BaseStealAtt`.
+- **OR Lineup Optimizer Stats CSV** — expected fields include `playerFullName`, `batsHand`, `PA`, `AVG`, `OBP`, `SLG`, `ISO`, and `SB`.
+
+**Optional**
+- **Opponent Pitcher PDF** — needed for the opponent-specific lineup when using the Pregame source.
+- Team logo image for PDF branding.
+""")
+
+
 st.markdown("### Data Source")
 csv_source = st.radio(
     "CSV Source",

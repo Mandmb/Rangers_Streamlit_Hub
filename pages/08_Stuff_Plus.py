@@ -788,6 +788,25 @@ def build_stuff_plus_pdf(combined_df, pitch_order):
 # Upload section
 # ============================================================
 
+
+with st.expander("📂 What files do I upload?", expanded=False):
+    st.markdown("""
+Upload **one aggregated CSV for each pitch type you want to evaluate**. A file can contain multiple pitchers.
+
+Available upload slots:
+- Fastball
+- Sinker
+- Cutter
+- Slider
+- Sweeper
+- Curveball
+- Changeup
+- Splitter
+
+You do **not** need all eight. Upload only the pitch types you want included.
+""")
+
+
 st.subheader("1. Upload pitch files")
 st.write(
     "Upload one CSV for each pitch type you want to evaluate. Files can contain multiple pitchers."

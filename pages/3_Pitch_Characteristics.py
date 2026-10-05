@@ -1813,6 +1813,22 @@ def make_pdf_report(
 
 st.write("Upload one target-pitcher CSV and one or more comparison CSVs. The app compares pitch characteristics by pitch type and returns the closest matches.")
 
+
+with st.expander("📂 What files do I upload?", expanded=False):
+    st.markdown("""
+**Required**
+- **1 Target Pitcher CSV**
+- **1 or more Comparison Pitcher CSVs**
+
+The app compares pitch characteristics by pitch type. Comparison files can contain different pitchers/pitch types, and the filename may be used to help infer pitch type.
+
+**Optional**
+- Team logo
+- Pitcher headshot
+- Headshot URL
+""")
+
+
 with st.sidebar:
     st.header("Uploads")
     target_file = st.file_uploader("Target pitcher CSV", type=["csv"], key="target")

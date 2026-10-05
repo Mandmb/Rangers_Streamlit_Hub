@@ -133,6 +133,26 @@ la_low_default, la_high_default = profile["ideal_la"]
 la_low = st.sidebar.number_input("Ideal LA lower bound", value=float(la_low_default), disabled=locked)
 la_high = st.sidebar.number_input("Ideal LA upper bound", value=float(la_high_default), disabled=locked)
 
+
+with st.expander("📂 What files do I upload?", expanded=False):
+    st.markdown("""
+**Required**
+- **1 Hitter CSV**
+
+**Expected columns**
+- `playerFullName`
+- `ForwVel`
+- `ExitVel`
+- `LaunchAng`
+- `OPS vs FB95`
+- `Contact%`
+- `Hard Hit%`
+- `Pull%`
+
+The app can map similarly named columns after upload.
+""")
+
+
 uploaded = st.file_uploader("Upload hitter CSV", type=["csv"])
 if uploaded is None:
     st.info("Upload your hitter CSV to begin.")

@@ -1093,6 +1093,19 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+
+with st.expander("📂 What files do I upload?", expanded=False):
+    st.markdown("""
+**Required**
+1. **Pitch Chart Report PDF** — standardized multi-page pitch chart; ideally one pitcher per page.
+2. **One or more Pitch Info / pitch-by-pitch CSVs**
+
+Only pitchers found in **both** the PDF and the uploaded CSVs are included in the downloadable reports.
+
+The PDF supplies pitcher-specific location ecosystems; the CSVs supply pitch type, velocity, hitter side, pitch order, and other pitch information.
+""")
+
+
 st.info(
     "The Pitch Chart PDF supplies the pitcher-specific location ecosystems. The Pitch Info CSV supplies "
     "velocity, pitch type, hitter side and pitch order. When the CSV has no plate X/Z fields, the app "
