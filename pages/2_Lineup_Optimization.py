@@ -1213,7 +1213,9 @@ st.caption(
 
 with st.sidebar:
     st.header("Report Branding")
-    team_name = st.text_input("Team Name", value="Texas Rangers")
+    team_name = "Leones del Escogido"
+    st.text_input("Team Name", value=team_name, disabled=True,
+                  help="This report is branded for Leones del Escogido.")
     report_title = st.text_input("Report Title", value="Lineup Optimization Report")
     report_date = st.date_input("Report Date", value=date.today())
     team_logo = st.file_uploader("Team Logo", type=["png", "jpg", "jpeg"])
@@ -1247,7 +1249,10 @@ with st.sidebar:
         ),
     )
 
-primary_rgb, accent_rgb = extract_team_colors(team_logo)
+# Fixed Leones del Escogido branding: deep red, red accent, white text.
+# Logo upload is retained for the PDF header/footer but does not change colors.
+primary_rgb = (139, 0, 27)   # Escogido deep red
+accent_rgb = (206, 17, 38)   # Escogido bright red
 
 st.markdown("### Data Source")
 csv_source = st.radio(
