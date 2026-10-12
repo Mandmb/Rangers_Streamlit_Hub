@@ -21,7 +21,7 @@ except ModuleNotFoundError:
         PdfReader = None
         PDF_READER_AVAILABLE = False
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import landscape, letter
+from reportlab.lib.pagesizes import landscape, letter, A3
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 from reportlab.platypus import Table, TableStyle
@@ -1201,6 +1201,107 @@ def generate_pdf(lineups, pitcher_info, team_name, report_title, report_date, lo
     return buffer
 
 
+
+def ten_priority_scenarios(base_weights):
+    """Two transparent sensitivity levels per priority, preserving other weights."""
+    for stat in BASE_STATS:
+        for level, multiplier in (("Focused", 2.0), ("Strong", 4.0)):
+            modified = dict(base_weights)
+            modified[stat] = max(1.0, modified[stat]) * multiplier
+            yield stat, level, modified
+
+
+def generate_ten_lineups_pdf(scenarios, team_name, report_date, logo_file,
+                             primary_rgb, accent_rgb, opponent_name=None):
+    """One landscape A3 sheet: five priorities, two alternatives per priority."""
+    output = BytesIO()
+    w, h = landscape(A3)
+    c = canvas.Canvas(output, pagesize=(w, h))
+    deep = colors.Color(*(v / 255 for v in primary_rgb))
+    bright = colors.Color(*(v / 255 for v in accent_rgb))
+    c.setFillColor(deep)
+    c.rect(0, h - 91, w, 91, fill=1, stroke=0)
+    logo_path = save_uploaded_temp(logo_file, ".png") if logo_file else None
+    if logo_path:
+        draw_logo(c, logo_path, 28, h - 79, 64, 65)
+    left = 106 if logo_path else 34
+    c.setFillColor(colors.white)
+    c.setFont("Helvetica-Bold", 21)
+    c.drawString(left, h - 41, "LEONES DEL ESCOGIDO")
+    c.setFont("Helvetica-Bold", 13)
+    c.drawString(left, h - 65, "10 OPTIMIZED LINEUPS | STAT PRIORITIES")
+    c.setFont("Helvetica", 9)
+    c.drawRightString(w - 29, h - 35, str(report_date))
+    subtitle = "Opponent: " + str(opponent_name) if opponent_name else "Overall player statistics"
+    c.drawRightString(w - 29, h - 54, subtitle[:64])
+    c.setFillColor(bright)
+    c.rect(0, h - 95, w, 4, fill=1, stroke=0)
+
+    margin, gutter = 25, 15
+    panel_w = (w - 2 * margin - gutter) / 2
+    panel_h, row_gap = 129, 9
+    top = h - 110
+
+    for index, (stat, level, lineup, weights_used) in enumerate(scenarios):
+        col, row = index % 2, index // 2
+        x = margin + col * (panel_w + gutter)
+        y = top - (row + 1) * panel_h - row * row_gap
+        c.setStrokeColor(colors.HexColor("#D5D9DF"))
+        c.setFillColor(colors.white)
+        c.roundRect(x, y, panel_w, panel_h, 5, fill=1, stroke=1)
+        band = deep if level == "Focused" else bright
+        c.setFillColor(band)
+        c.roundRect(x, y + panel_h - 25, panel_w, 25, 5, fill=1, stroke=0)
+        c.rect(x, y + panel_h - 25, panel_w, 5, fill=1, stroke=0)
+        c.setFillColor(colors.white)
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(x + 10, y + panel_h - 17, f"{stat} PRIORITY  |  {level.upper()}")
+        c.setFont("Helvetica", 7.5)
+        weight_pct = 100 * weights_used[stat] / max(sum(weights_used.values()), 1)
+        c.drawRightString(x + panel_w - 10, y + panel_h - 16,
+                          f"{weight_pct:.0f}% stat weight")
+        c.setFillColor(colors.HexColor("#555D69"))
+        c.setFont("Helvetica-Bold", 7)
+        for tx, title in [(11, "#"), (32, "PLAYER"), (panel_w - 197, "B"),
+                          (panel_w - 173, "PA"), (panel_w - 139, "AVG"),
+                          (panel_w - 103, "OBP"), (panel_w - 67, "SLG"),
+                          (panel_w - 31, "SB")]:
+            c.drawString(x + tx, y + panel_h - 37, title)
+        for i, (_, player) in enumerate(lineup.iterrows()):
+            yy = y + panel_h - 48 - i * 8.75
+            if i % 2 == 0:
+                c.setFillColor(colors.HexColor("#F5F6F8"))
+                c.rect(x + 5, yy - 2, panel_w - 10, 9, fill=1, stroke=0)
+            hand = str(player.get("Bats", "R")).upper()
+            c.setFillColor(colors.HexColor("#BA0C2F") if hand == "L" else
+                           colors.HexColor("#0057B8") if hand == "S" else
+                           colors.HexColor("#1E2530"))
+            c.setFont("Helvetica", 7.3)
+            c.drawString(x + 11, yy, str(i + 1))
+            name = str(player["playerFullName"])
+            # Truncate to avoid overlapping the stats columns.
+            while c.stringWidth(name, "Helvetica", 7.3) > panel_w - 245 and len(name) > 3:
+                name = name[:-1]
+            if name != str(player["playerFullName"]):
+                name = name[:-1] + "..."
+            c.drawString(x + 32, yy, name)
+            c.drawString(x + panel_w - 197, yy, hand)
+            c.drawString(x + panel_w - 173, yy, str(int(player["PA"])))
+            for offset, key in [(-139, "AVG"), (-103, "OBP"), (-67, "SLG")]:
+                c.drawString(x + panel_w + offset, yy, f'{float(player[key]):.3f}')
+            c.drawString(x + panel_w - 31, yy, str(int(player["SB"])))
+    c.setFillColor(deep)
+    c.rect(0, 0, w, 29, fill=1, stroke=0)
+    c.setFillColor(colors.white)
+    c.setFont("Helvetica", 8)
+    c.drawString(27, 11, "LHH red  |  Switch blue  |  RHH black")
+    c.drawRightString(w - 27, 11,
+                      "Sensitivity scenarios, not projected runs or guaranteed distinct lineups")
+    c.save()
+    output.seek(0)
+    return output
+
+
 # ============================================================
 # APP UI
 # ============================================================
@@ -1585,6 +1686,56 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+st.divider()
+st.subheader("10-Lineup Priority Comparison")
+st.caption(
+    "Two scenarios for each of AVG, OBP, SLG, ISO and SB. Focused = 2× "
+    "that statistic's current weight; Strong = 4×. All other weights stay "
+    "unchanged. The report fits all 10 lineups on one landscape A3 page."
+)
+compare_opponent = st.checkbox(
+    "Optimize the 10 lineups against the uploaded opposing pitcher",
+    value=pitcher_info is not None,
+    disabled=pitcher_info is None,
+)
+if st.button("Prepare 10-Lineup PDF", type="primary"):
+    try:
+        comparison = []
+        for priority, level, scenario_weights in ten_priority_scenarios(weights):
+            if compare_opponent and pitcher_info is not None:
+                if csv_source == "Pregame Pitch-by-Pitch":
+                    pitcher_split = vs_rhp_df if pitcher_info["hand"] == "R" else vs_lhp_df
+                    scenario_pitches = build_pitch_type_tables(
+                        terminal_df, hitter_hand_context=pitcher_info["hand"]
+                    )
+                    lineup_variant, _ = build_pitcher_specific_lineup(
+                        overall_df, pitcher_split, scenario_pitches,
+                        pitcher_info, scenario_weights, regression_pa
+                    )
+                else:
+                    lineup_variant, _ = build_stats_only_pitcher_lineup(
+                        overall_df, pitcher_info, scenario_weights
+                    )
+            else:
+                lineup_variant, _ = build_standard_lineup(overall_df, scenario_weights)
+            comparison.append((priority, level, lineup_variant, scenario_weights))
+        pdf_ten = generate_ten_lineups_pdf(
+            comparison, team_name, report_date, team_logo,
+            primary_rgb, accent_rgb,
+            opponent_name=pitcher_info.get("name", "Uploaded pitcher")
+            if compare_opponent and pitcher_info else None
+        )
+        st.session_state["ten_lineup_pdf"] = pdf_ten.getvalue()
+    except Exception as exc:
+        st.error(f"Could not generate the comparison PDF: {exc}")
+if "ten_lineup_pdf" in st.session_state:
+    st.download_button(
+        "Download 10 Optimized Lineups (One-Page PDF)",
+        data=st.session_state["ten_lineup_pdf"],
+        file_name="escogido_10_optimized_lineups.pdf",
+        mime="application/pdf",
+    )
 
 if (
     csv_source == "Pregame Pitch-by-Pitch"
