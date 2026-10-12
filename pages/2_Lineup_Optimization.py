@@ -584,6 +584,27 @@ def detect_csv_source(uploaded_csv):
     return None
 
 
+
+def combine_extra_hitters(existing, extra, replace_existing=False):
+    """Append missing hitters without silently double counting existing players."""
+    if extra is None or extra.empty:
+        return existing.copy()
+    result = existing.copy()
+    keys = set(result["playerFullName"].astype(str).str.strip().str.casefold())
+    additions = extra[
+        ~extra["playerFullName"].astype(str).str.strip().str.casefold().isin(keys)
+    ].copy()
+    return pd.concat([result, additions], ignore_index=True)
+
+
+def supplement_split(split, combined_overall, original_names):
+    """Use overall stats as a clearly identified fallback for supplemental hitters."""
+    extra = combined_overall[
+        ~combined_overall["playerFullName"].isin(original_names)
+    ].copy()
+    return combine_extra_hitters(split, extra)
+
+
 # ============================================================
 # PITCHER PDF PARSER
 # ============================================================
@@ -1229,6 +1250,16 @@ with col2:
         help="Used with the Pregame Pitch-by-Pitch source for the opponent-specific lineup.",
     )
 
+extra_file = st.file_uploader(
+    "Optional: Additional Players Stats CSV",
+    type=["csv"],
+    key="extra_players_csv",
+    help="Add players absent from the main file. Required: playerFullName, PA, AVG, OBP, SLG, ISO, SB. Optional: batsHand.",
+)
+extra_stats = prepare_lineup_optimizer_csv(extra_file) if extra_file is not None else None
+if extra_file is not None and extra_stats is None:
+    st.stop()
+
 if hitter_file is None:
     st.info(f"Upload the {csv_source} CSV to begin.")
     st.stop()
@@ -1248,6 +1279,11 @@ if csv_source == "Pregame Pitch-by-Pitch":
     vs_rhp_df_all = aggregate_stats(terminal_df, pitcher_hand="R")
     vs_lhp_df_all = aggregate_stats(terminal_df, pitcher_hand="L")
 
+    original_names = set(overall_df_all["playerFullName"])
+    if extra_stats is not None:
+        original_count = len(overall_df_all)
+        overall_df_all = combine_extra_hitters(overall_df_all, extra_stats)
+        st.caption(f"Added {len(overall_df_all) - original_count} additional hitters not present in the main CSV.")
     # Minimum PA qualification is based on TOTAL PA only.
     eligible_overall = overall_df_all[
         overall_df_all["PA"] >= minimum_pa
@@ -1287,15 +1323,30 @@ if csv_source == "Pregame Pitch-by-Pitch":
 
     vs_rhp_df = build_eligible_split(vs_rhp_df_all, eligible_overall)
     vs_lhp_df = build_eligible_split(vs_lhp_df_all, eligible_overall)
+    # Supplemental hitters have only overall statistics, so use those as
+    # provisional split estimates rather than falsely assigning zero production.
+    for split_frame in (vs_rhp_df, vs_lhp_df):
+        missing = ~split_frame["playerFullName"].isin(original_names)
+        if missing.any():
+            lookup = eligible_overall.set_index("playerFullName")
+            for stat in ["PA", "AVG", "OBP", "SLG", "ISO", "SB"]:
+                split_frame.loc[missing, stat] = split_frame.loc[missing, "playerFullName"].map(lookup[stat]).values
 
-    if len(overall_df) < 9:
-        st.error(
-            f"Only {len(overall_df)} hitters have {int(minimum_pa)}+ total PA. "
-            "At least 9 qualified hitters are required to build a complete lineup."
-        )
+    all_names = sorted(overall_df["playerFullName"].astype(str).unique().tolist(), key=str.casefold)
+    chosen = st.multiselect(
+        "Eligible Players — select or deselect",
+        options=all_names,
+        default=all_names,
+        key="eligible_player_selection",
+        help="Deselected players are removed from every lineup and the exported report.",
+    )
+    if len(chosen) < 9:
+        st.warning(f"Select at least 9 players to build a complete lineup ({len(chosen)} currently selected).")
         st.stop()
-
+    overall_df = overall_df[overall_df["playerFullName"].isin(chosen)].copy()
     overall_lineup, overall_pool = build_standard_lineup(overall_df, weights)
+    vs_rhp_df = vs_rhp_df[vs_rhp_df["playerFullName"].isin(chosen)].copy()
+    vs_lhp_df = vs_lhp_df[vs_lhp_df["playerFullName"].isin(chosen)].copy()
     rhp_lineup, rhp_pool = build_standard_lineup(vs_rhp_df, weights)
     lhp_lineup, lhp_pool = build_standard_lineup(vs_lhp_df, weights)
 
@@ -1325,17 +1376,26 @@ else:
     if overall_df_all is None:
         st.stop()
 
+    if extra_stats is not None:
+        original_count = len(overall_df_all)
+        overall_df_all = combine_extra_hitters(overall_df_all, extra_stats)
+        st.caption(f"Added {len(overall_df_all) - original_count} additional hitters not present in the main CSV.")
     overall_df = overall_df_all[
         overall_df_all["PA"] >= minimum_pa
     ].copy()
 
-    if len(overall_df) < 9:
-        st.error(
-            f"Only {len(overall_df)} hitters have {int(minimum_pa)}+ total PA. "
-            "At least 9 qualified hitters are required to build a complete lineup."
-        )
+    all_names = sorted(overall_df["playerFullName"].astype(str).unique().tolist(), key=str.casefold)
+    chosen = st.multiselect(
+        "Eligible Players — select or deselect",
+        options=all_names,
+        default=all_names,
+        key="eligible_player_selection",
+        help="Deselected players are removed from every lineup and the exported report.",
+    )
+    if len(chosen) < 9:
+        st.warning(f"Select at least 9 players to build a complete lineup ({len(chosen)} currently selected).")
         st.stop()
-
+    overall_df = overall_df[overall_df["playerFullName"].isin(chosen)].copy()
     overall_lineup, overall_pool = build_standard_lineup(overall_df, weights)
     rhp_lineup = rhp_pool = None
     lhp_lineup = lhp_pool = None
@@ -1413,6 +1473,8 @@ if lineup_mode == "Vs Uploaded Pitcher":
 
     render_pitcher_card(pitcher_info)
 
+if extra_stats is not None and csv_source == "Pregame Pitch-by-Pitch":
+    st.caption("Additional hitters use overall stats as provisional vs-RHP/vs-LHP estimates; pitch-type matchup defaults to neutral without pitch-level data.")
 st.subheader(f"Optimized Lineup — {lineup_mode}")
 st.caption(f"Eligibility filter: {int(minimum_pa)}+ total PA across all pitcher hands.")
 render_lineup_table(selected_lineup, header_color)
