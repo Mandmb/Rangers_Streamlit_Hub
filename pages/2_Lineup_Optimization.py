@@ -551,6 +551,12 @@ def prepare_lineup_optimizer_csv(uploaded_csv):
     iso_recalc = df["SLG"] - df["AVG"]
     df["ISO"] = df["ISO"].where(df["ISO"].notna(), iso_recalc)
 
+    # A large league-wide export can contain several different players with
+    # the same full name. Use the highest-PA row for each name, and let the
+    # user explicitly choose which additional names to import.
+    df = df.sort_values("PA", ascending=False).drop_duplicates(
+        subset=["playerFullName"], keep="first"
+    )
     return df[
         ["playerFullName", "Bats", "PA", "AVG", "OBP", "SLG", "ISO", "SB"]
     ].reset_index(drop=True)
@@ -803,6 +809,54 @@ def build_pitcher_specific_lineup(overall_df, split_df, pitch_tables, pitcher_in
     selected = merged.sort_values("Matchup Score", ascending=False).head(9).copy()
     lineup = optimize_batting_order(selected, weights, score_column="Matchup Score")
     return lineup, merged
+
+
+def build_stats_only_pitcher_lineup(overall_df, pitcher_info, weights, opponent_weight=0.25):
+    """Opponent-adjusted proxy: hitter overall quality plus pitcher's observed
+    results allowed to the batter's effective side. Does not claim pitch-type
+    or hitter platoon splits that the stats-only CSV does not provide.
+    """
+    scored = overall_df.copy()
+    scored["Overall Component"] = weighted_offense_score(scored, weights)
+
+    def allowed_number(side, stat):
+        try:
+            raw = pitcher_info.get(f"stats_vs_{side}", {}).get(stat, "")
+            return float(str(raw).strip().replace("%", ""))
+        except (ValueError, TypeError):
+            return float("nan")
+
+    # Opponent allowed OBP and SLG by hitter side, scaled to a relative
+    # multiplier. Switch hitters face the pitcher from the opposite side.
+    allowed = {}
+    for side in ("R", "L"):
+        obp = allowed_number(side, "OBP")
+        slg = allowed_number(side, "SLG")
+        allowed[side] = (obp + slg) if pd.notna(obp) and pd.notna(slg) else float("nan")
+
+    valid = [v for v in allowed.values() if pd.notna(v)]
+    neutral = sum(valid) / len(valid) if valid else 1.0
+
+    def effective_bats(hand):
+        hand = normalize_hand(hand)
+        if hand == "S":
+            return "L" if pitcher_info["hand"] == "R" else "R"
+        return hand
+
+    def vulnerability(hand):
+        val = allowed.get(effective_bats(hand), float("nan"))
+        if pd.isna(val) or neutral <= 0:
+            return 1.0
+        return max(0.75, min(1.25, val / neutral))
+
+    scored["Opponent Factor"] = scored["Bats"].apply(vulnerability)
+    scored["Matchup Score"] = scored["Overall Component"] * (
+        (1.0 - opponent_weight) + opponent_weight * scored["Opponent Factor"]
+    )
+    scored["Overall Score"] = scored["Matchup Score"]
+    selected = scored.sort_values("Matchup Score", ascending=False).head(9).copy()
+    lineup = optimize_batting_order(selected, weights, score_column="Matchup Score")
+    return lineup, scored
 
 
 def calculate_spot_fit(row, spot, normalized, user_weights):
@@ -1195,24 +1249,10 @@ with st.sidebar:
 
 primary_rgb, accent_rgb = extract_team_colors(team_logo)
 
-
-with st.expander("📂 What files do I upload?", expanded=False):
-    st.markdown("""
-Choose **one** hitter data source:
-
-- **Pregame Pitch-by-Pitch CSV** — expected fields include `batterAbbrevName`, `batterHand`, `pitcherHand`, `pitchType`, `pitchResult`, and `BaseStealAtt`.
-- **OR Lineup Optimizer Stats CSV** — expected fields include `playerFullName`, `batsHand`, `PA`, `AVG`, `OBP`, `SLG`, `ISO`, and `SB`.
-
-**Optional**
-- **Opponent Pitcher PDF** — needed for the opponent-specific lineup when using the Pregame source.
-- Team logo image for PDF branding.
-""")
-
-
 st.markdown("### Data Source")
 csv_source = st.radio(
     "CSV Source",
-    ["Pregame Pitch-by-Pitch", "Lineup Optimizer Stats"],
+    ["Pregame Pitch-by-Pitch", "Lineup Optimizer Stats", "Additional Stats Only"],
     horizontal=True,
     help=(
         "Pregame Pitch-by-Pitch enables Overall, vs RHP, vs LHP, and opponent-specific lineups. "
@@ -1222,7 +1262,10 @@ csv_source = st.radio(
 
 col1, col2 = st.columns(2)
 with col1:
-    if csv_source == "Pregame Pitch-by-Pitch":
+    if csv_source == "Additional Stats Only":
+        hitter_file = None
+        st.info("Upload your player stats in the Additional Players Stats CSV field below. No Pregame CSV is needed.")
+    elif csv_source == "Pregame Pitch-by-Pitch":
         hitter_file = st.file_uploader(
             "Pregame Pitch-by-Pitch CSV",
             type=["csv"],
@@ -1247,11 +1290,11 @@ with col2:
     pitcher_pdf = st.file_uploader(
         "Opponent Pitcher PDF",
         type=["pdf"],
-        help="Used with the Pregame Pitch-by-Pitch source for the opponent-specific lineup.",
+        help="Works with either pitch-by-pitch data or the additional stats CSV. Stats-only matchups use the pitcher's allowed splits.",
     )
 
 extra_file = st.file_uploader(
-    "Optional: Additional Players Stats CSV",
+    "Additional Players Stats CSV (can be used alone)",
     type=["csv"],
     key="extra_players_csv",
     help="Add players absent from the main file. Required: playerFullName, PA, AVG, OBP, SLG, ISO, SB. Optional: batsHand.",
@@ -1259,10 +1302,33 @@ extra_file = st.file_uploader(
 extra_stats = prepare_lineup_optimizer_csv(extra_file) if extra_file is not None else None
 if extra_file is not None and extra_stats is None:
     st.stop()
+if extra_stats is not None:
+    if hitter_file is None:
+        # Standalone mode: automatically import every valid hitter in the CSV.
+        # Roster selection below is the single place to exclude players.
+        st.caption(f"Loaded {len(extra_stats)} hitters from the Additional Players Stats CSV. Use Eligible Players below to exclude anyone.")
+    else:
+        st.caption("Select supplemental hitters to import. Duplicate names use the highest-PA record.")
+        extra_choices = st.multiselect(
+            "Additional players to import",
+            options=sorted(extra_stats["playerFullName"].tolist(), key=str.casefold),
+            default=[],
+            key="additional_player_names",
+        )
+        extra_stats = extra_stats[extra_stats["playerFullName"].isin(extra_choices)].copy()
 
-if hitter_file is None:
-    st.info(f"Upload the {csv_source} CSV to begin.")
+# The optional stats upload can also serve as a standalone data source.
+# This preserves the usual Pregame + supplemental workflow when both exist.
+stats_only_from_additional = hitter_file is None and extra_stats is not None and not extra_stats.empty
+if hitter_file is None and not stats_only_from_additional:
+    if extra_file is not None and extra_stats is not None and extra_stats.empty:
+        st.info("No valid hitters were found in the uploaded additional stats CSV.")
+    else:
+        st.info("Upload an Additional Players Stats CSV to build a standalone lineup, or upload a main CSV.")
     st.stop()
+if stats_only_from_additional:
+    st.success("Stats-only mode: building the optimized lineup from your Additional Players Stats CSV.")
+    csv_source = "Lineup Optimizer Stats"
 
 pitcher_info = None
 pitcher_lineup = None
@@ -1328,7 +1394,9 @@ if csv_source == "Pregame Pitch-by-Pitch":
     for split_frame in (vs_rhp_df, vs_lhp_df):
         missing = ~split_frame["playerFullName"].isin(original_names)
         if missing.any():
-            lookup = eligible_overall.set_index("playerFullName")
+            lookup = (eligible_overall.sort_values("PA", ascending=False)
+                      .drop_duplicates("playerFullName")
+                      .set_index("playerFullName"))
             for stat in ["PA", "AVG", "OBP", "SLG", "ISO", "SB"]:
                 split_frame.loc[missing, stat] = split_frame.loc[missing, "playerFullName"].map(lookup[stat]).values
 
@@ -1372,9 +1440,14 @@ if csv_source == "Pregame Pitch-by-Pitch":
     available_modes = ["Overall", "Vs RHP", "Vs LHP", "Vs Uploaded Pitcher"]
 
 else:
-    overall_df_all = prepare_lineup_optimizer_csv(hitter_file)
-    if overall_df_all is None:
-        st.stop()
+    if stats_only_from_additional:
+        overall_df_all = extra_stats.copy()
+        # Already selected in the optional uploader; don't merge it a second time.
+        extra_stats = None
+    else:
+        overall_df_all = prepare_lineup_optimizer_csv(hitter_file)
+        if overall_df_all is None:
+            st.stop()
 
     if extra_stats is not None:
         original_count = len(overall_df_all)
@@ -1401,13 +1474,18 @@ else:
     lhp_lineup = lhp_pool = None
 
     available_modes = ["Overall"]
-
     if pitcher_pdf is not None:
-        st.info(
-            "The Lineup Optimizer Stats CSV contains overall statistics only. "
-            "Use the Pregame Pitch-by-Pitch source to create vs RHP, vs LHP, "
-            "or opponent-specific lineups."
-        )
+        pitcher_info = parse_pitcher_pdf(pitcher_pdf)
+        if pitcher_info is not None:
+            pitcher_lineup, pitcher_pool = build_stats_only_pitcher_lineup(
+                overall_df, pitcher_info, weights
+            )
+            available_modes.append("Vs Uploaded Pitcher")
+            st.caption(
+                "Opponent-specific lineup uses overall hitter stats plus the pitcher's "
+                "OBP/SLG allowed to each batting side. No hitter pitch-type or platoon "
+                "splits are inferred."
+            )
 
 # Override the sidebar mode selector with modes supported by the selected data source.
 lineup_mode = st.radio(
@@ -1442,19 +1520,17 @@ if csv_source == "Pregame Pitch-by-Pitch":
         rgb_to_hex(primary_rgb),
     )
 
-    if pitcher_lineup is not None:
-        lineups["Vs Pitcher"] = pitcher_lineup
-        display_map["Vs Uploaded Pitcher"] = (
-            pitcher_lineup,
-            pitcher_pool,
-            rgb_to_hex(accent_rgb),
-        )
-    else:
-        display_map["Vs Uploaded Pitcher"] = (
-            None,
-            None,
-            rgb_to_hex(accent_rgb),
-        )
+if pitcher_lineup is not None:
+    lineups["Vs Pitcher"] = pitcher_lineup
+    display_map["Vs Uploaded Pitcher"] = (
+        pitcher_lineup,
+        pitcher_pool,
+        rgb_to_hex(accent_rgb),
+    )
+elif csv_source == "Pregame Pitch-by-Pitch":
+    display_map["Vs Uploaded Pitcher"] = (
+        None, None, rgb_to_hex(accent_rgb)
+    )
 
 selected_lineup, selected_pool, header_color = display_map[lineup_mode]
 
@@ -1534,8 +1610,8 @@ else:
         )
     else:
         st.caption(
-            "Four-lineup PDF export requires the Pregame Pitch-by-Pitch source "
-            "because the pre-calculated CSV does not contain pitcher-hand or pitch-type splits."
+            "Stats-only mode can optimize Overall and vs Uploaded Pitcher. "
+            "The four-lineup PDF requires pitch-by-pitch data for true hitter splits."
         )
 
 st.info(
