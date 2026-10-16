@@ -1410,28 +1410,20 @@ primary_rgb = (139, 0, 27)   # Escogido deep red
 accent_rgb = (206, 17, 38)   # Escogido bright red
 
 st.markdown("### LIDOM Offensive Environment Translation")
-st.caption("The uploaded CSV identifies leagues using newestTeamLevel. Upload league-wide AVG, OBP, SLG and SB/PA averages to translate players to the WIN (LIDOM) environment. No benchmark values are invented; leagues without benchmarks remain unadjusted.")
-benchmark_upload = st.file_uploader("League averages CSV (optional)", type=["csv"], key="league_benchmarks", help="Columns: League, AVG, OBP, SLG, SB_PA. Include WIN for LIDOM and each source league (e.g. MLB, AAA, AAX, AFA, MEX). Use matching seasons and comparable competition samples.")
-benchmarks = {}
-if benchmark_upload is not None:
-    try:
-        bm = pd.read_csv(benchmark_upload)
-        needed = {"League", "AVG", "OBP", "SLG", "SB_PA"}
-        if not needed.issubset(bm.columns):
-            st.error("League averages CSV must contain League, AVG, OBP, SLG, SB_PA.")
-            st.stop()
-        for _, row in bm.iterrows():
-            code = str(row["League"]).strip().upper()
-            vals = {key: float(row[key]) for key in ("AVG", "OBP", "SLG", "SB_PA")}
-            if all(np.isfinite(v) and v >= 0 for v in vals.values()):
-                benchmarks[code] = vals
-        if "WIN" not in benchmarks:
-            st.warning("Include a WIN row for LIDOM; no translation can be applied without it.")
-    except Exception as exc:
-        st.error(f"Could not parse league benchmarks: {exc}")
-        st.stop()
-else:
-    st.info("League benchmarks not uploaded: player stats remain unadjusted. The report will label the runs-created projection as an estimate.")
+st.caption("League is detected automatically from newestTeamLevel. No additional CSV upload is needed. Verified league benchmarks can be stored once in the application configuration.")
+# Enter verified league averages here once, then deploy. No invented values.
+# WIN must be the LIDOM benchmark, not an aggregate of unrelated winter leagues.
+BUILTIN_LEAGUE_BENCHMARKS = {
+    # "WIN": {"AVG": ..., "OBP": ..., "SLG": ..., "SB_PA": ...},
+    # "MLB": {"AVG": ..., "OBP": ..., "SLG": ..., "SB_PA": ...},
+    # "AAA": {"AVG": ..., "OBP": ..., "SLG": ..., "SB_PA": ...},
+    # "AAX": {"AVG": ..., "OBP": ..., "SLG": ..., "SB_PA": ...},
+    # "AFA": {"AVG": ..., "OBP": ..., "SLG": ..., "SB_PA": ...},
+    # "MEX": {"AVG": ..., "OBP": ..., "SLG": ..., "SB_PA": ...},
+}
+benchmarks = BUILTIN_LEAGUE_BENCHMARKS.copy()
+if "WIN" not in benchmarks:
+    st.warning("League codes detected automatically, but LIDOM conversion factors have not yet been calibrated. Original stats are used until verified league benchmarks are configured in the app.")
 
 st.markdown("### Data Source")
 csv_source = st.radio(
@@ -1747,7 +1739,7 @@ with st.expander("Player Pool and Calculated Statistics"):
     pool_columns = [
         column for column in
         ["playerFullName", "Bats", "PA", "AVG", "OBP", "SLG", "ISO", "SB",
-         "Overall Score", "Matchup Score", "Pitch Matchup Coverage"]
+         "League", "Last Team", "Overall Score", "Matchup Score", "Pitch Matchup Coverage"]
         if column in selected_pool.columns
     ]
     st.dataframe(
