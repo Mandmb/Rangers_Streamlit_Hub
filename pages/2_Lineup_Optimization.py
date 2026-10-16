@@ -1410,20 +1410,68 @@ primary_rgb = (139, 0, 27)   # Escogido deep red
 accent_rgb = (206, 17, 38)   # Escogido bright red
 
 st.markdown("### LIDOM Offensive Environment Translation")
-st.caption("League is detected automatically from newestTeamLevel. No additional CSV upload is needed. Verified league benchmarks can be stored once in the application configuration.")
-# Enter verified league averages here once, then deploy. No invented values.
-# WIN must be the LIDOM benchmark, not an aggregate of unrelated winter leagues.
+# Official 2025-26 LIDOM regular-season team totals (MLB winter leagues).
+# Source: https://www.mlb.com/ligas-invernales/stats/team/team
+# Do not mark the 3-season benchmark complete until 2023-24 and 2024-25
+# are independently verified with matching AB/H/2B/3B/HR/R/BB/SB and
+# complete HBP/SF/PA counts for exact OBP and SB/PA.
+LIDOM_VERIFIED_SEASONS = {
+    "2025-26": {"AB": 9998, "H": 2472, "2B": 485, "3B": 49,
+                "HR": 195, "R": 1414, "BB": 1171, "SB": 372,
+                "team_games": 298, "source": "MLB winter league team stats"},
+    # "2024-25": { ... },  # Awaiting verification
+    # "2023-24": { ... },  # Awaiting verification
+}
+REQUIRED_LIDOM_SEASONS = ("2023-24", "2024-25", "2025-26")
+
+def calculate_lidom_baseline(seasons):
+    """Combine counting stats first; never average displayed season rates."""
+    if any(year not in seasons for year in REQUIRED_LIDOM_SEASONS):
+        return None
+    keys = ("AB", "H", "2B", "3B", "HR", "R", "BB", "SB", "team_games")
+    totals = {key: sum(seasons[year][key] for year in REQUIRED_LIDOM_SEASONS)
+              for key in keys}
+    if not totals["AB"] or not totals["team_games"]:
+        return None
+    tb = totals["H"] + totals["2B"] + 2 * totals["3B"] + 3 * totals["HR"]
+    avg = totals["H"] / totals["AB"]
+    slg = tb / totals["AB"]
+    result = {"AVG": avg, "SLG": slg, "ISO": slg - avg,
+              "R_G": totals["R"] / totals["team_games"]}
+    # Exact OBP and SB/PA require HBP, SF and PA, respectively.
+    if all(all(k in seasons[y] for k in ("HBP", "SF", "PA"))
+           for y in REQUIRED_LIDOM_SEASONS):
+        hbp = sum(seasons[y]["HBP"] for y in REQUIRED_LIDOM_SEASONS)
+        sf = sum(seasons[y]["SF"] for y in REQUIRED_LIDOM_SEASONS)
+        pa = sum(seasons[y]["PA"] for y in REQUIRED_LIDOM_SEASONS)
+        result["OBP"] = ((totals["H"] + totals["BB"] + hbp) /
+                         (totals["AB"] + totals["BB"] + hbp + sf))
+        result["SB_PA"] = totals["SB"] / pa if pa else 0
+    return result
+
 BUILTIN_LEAGUE_BENCHMARKS = {
-    # "WIN": {"AVG": ..., "OBP": ..., "SLG": ..., "SB_PA": ...},
-    # "MLB": {"AVG": ..., "OBP": ..., "SLG": ..., "SB_PA": ...},
-    # "AAA": {"AVG": ..., "OBP": ..., "SLG": ..., "SB_PA": ...},
-    # "AAX": {"AVG": ..., "OBP": ..., "SLG": ..., "SB_PA": ...},
-    # "AFA": {"AVG": ..., "OBP": ..., "SLG": ..., "SB_PA": ...},
-    # "MEX": {"AVG": ..., "OBP": ..., "SLG": ..., "SB_PA": ...},
+    # Populate verified 3-season league benchmarks for MLB/AAA/AAX/AFA/MEX.
+    # A LIDOM reference is calculated automatically once all three seasons
+    # above have complete, verified counting totals.
 }
 benchmarks = BUILTIN_LEAGUE_BENCHMARKS.copy()
-if "WIN" not in benchmarks:
-    st.warning("League codes detected automatically, but LIDOM conversion factors have not yet been calibrated. Original stats are used until verified league benchmarks are configured in the app.")
+lidom_baseline = calculate_lidom_baseline(LIDOM_VERIFIED_SEASONS)
+if lidom_baseline and all(k in lidom_baseline for k in ("AVG", "OBP", "SLG", "SB_PA")):
+    benchmarks["WIN"] = lidom_baseline
+
+verified = LIDOM_VERIFIED_SEASONS["2025-26"]
+with st.expander("Verified LIDOM reference data and model status", expanded=False):
+    st.write("**Target seasons:** 2023-24, 2024-25, 2025-26 (regular season only)")
+    st.write("**Verified so far:** " + ", ".join(LIDOM_VERIFIED_SEASONS))
+    st.write("**2025-26:** AVG .247 | SLG .364 | ISO .117 | Runs/team game 4.74")
+    st.caption("2025-26 MLB team totals: 9,998 AB, 2,472 H, 485 2B, "
+               "49 3B, 195 HR, 1,414 R, 1,171 BB, 372 SB, 298 team games. "
+               "Exact OBP requires HBP and SF; SB/PA requires PA.")
+    st.markdown("[Source: MLB Winter Leagues team batting](https://www.mlb.com/ligas-invernales/stats/team/team)")
+if "WIN" not in benchmarks or not any(k in benchmarks for k in ("MLB", "AAA", "AAX", "AFA", "MEX")):
+    st.info("Three-season LIDOM translation is not fully calibrated yet. "
+            "The app continues using original statistics; it does NOT label "
+            "them LIDOM-equivalent. No additional CSV upload is required.")
 
 st.markdown("### Data Source")
 csv_source = st.radio(
