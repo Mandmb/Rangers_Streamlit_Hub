@@ -616,6 +616,83 @@ def projected_runs_nine(lineup, team_pa=38.0):
     return total
 
 
+def simulated_lineup_runs_nine(lineup, games=4000, seed=20261016):
+    """Order-sensitive, reproducible 9-inning run estimate.
+
+    Simulates base/out advancement and carries batting position between innings.
+    Rates inferred from AVG/OBP/SLG. Singles/doubles/triples/HR breakdown is
+    assumed because the supplemental CSV does not include hit-type counts.
+    This is a scenario estimate, not a calibrated game prediction.
+    """
+    import random
+    if lineup is None or len(lineup) != 9:
+        return projected_runs_nine(lineup)
+    probs = []
+    for _, player in lineup.iterrows():
+        avg = min(0.95, max(0.0, float(player.get("AVG", 0))))
+        obp = min(0.99, max(avg, float(player.get("OBP", avg))))
+        slg = max(avg, float(player.get("SLG", avg)))
+        ab_share = max(0.0, min(1.0, (1.0 - obp) / max(1e-8, 1.0 - avg)))
+        hit = avg * ab_share
+        walk = max(0.0, obp - hit)
+        # Convert isolated power to an approximate hit distribution.
+        # A fixed extra-base mix is used until 2B/3B/HR counts are available.
+        iso = max(0.0, slg - avg)
+        extra_bases = iso * ab_share
+        triples = min(hit * 0.025, extra_bases / 2.0)
+        remaining = max(0.0, extra_bases - 2.0 * triples)
+        homers = min(hit * 0.13, remaining / 3.0)
+        doubles = min(max(0.0, hit - triples - homers), max(0.0, remaining - 3.0 * homers))
+        singles = max(0.0, hit - doubles - triples - homers)
+        # Normalize for any rounding / extreme inputs.
+        events = [max(0.0, 1.0 - obp), walk, singles, doubles, triples, homers]
+        scale = sum(events)
+        thresholds = []
+        running = 0.0
+        for probability in events:
+            running += probability / scale
+            thresholds.append(running)
+        probs.append(thresholds)
+    rng = random.Random(seed)
+    runs_total = 0
+    for _ in range(games):
+        slot = 0
+        runs = 0
+        for _inning in range(9):
+            outs = 0
+            bases = 0  # bitmask: first=1, second=2, third=4
+            safety = 0
+            while outs < 3 and safety < 120:
+                safety += 1
+                r = rng.random()
+                cut = probs[slot]
+                slot = (slot + 1) % 9
+                if r < cut[0]:
+                    outs += 1
+                elif r < cut[1]:  # walk, force runners if necessary
+                    if bases & 1:
+                        if bases & 2:
+                            if bases & 4:
+                                runs += 1
+                            bases |= 4
+                        bases |= 2
+                    bases |= 1
+                elif r < cut[2]:  # single: runner on 2nd/3rd scores, 1st to 2nd
+                    runs += ((bases >> 1) & 1) + ((bases >> 2) & 1)
+                    bases = 1 | ((bases & 1) << 1)
+                elif r < cut[3]:  # double: runners on 2nd/3rd score, 1st to 3rd
+                    runs += ((bases >> 1) & 1) + ((bases >> 2) & 1)
+                    bases = 2 | ((bases & 1) << 2)
+                elif r < cut[4]:  # triple: all existing runners score
+                    runs += bases.bit_count()
+                    bases = 4
+                else:  # home run
+                    runs += 1 + bases.bit_count()
+                    bases = 0
+        runs_total += runs
+    return runs_total / games
+
+
 def detect_csv_source(uploaded_csv):
     """
     Auto-detect whether an uploaded CSV is pitch-by-pitch Pregame data or a
@@ -1313,7 +1390,7 @@ def generate_ten_lineups_pdf(scenarios, team_name, report_date, logo_file,
         c.setFont("Helvetica", 7.5)
         weight_pct = 100 * weights_used[stat] / max(sum(weights_used.values()), 1)
         c.drawRightString(x + panel_w - 10, y + panel_h - 16,
-                          f"Est. RC/9: {projected_runs_nine(lineup):.1f}  |  {weight_pct:.0f}%")
+                          f"Sim R/9: {simulated_lineup_runs_nine(lineup):.2f}  |  {weight_pct:.0f}%")
         c.setFillColor(colors.HexColor("#555D69"))
         c.setFont("Helvetica-Bold", 7)
         for tx, title in [(11, "#"), (32, "PLAYER"), (panel_w - 197, "B"),
@@ -1350,7 +1427,7 @@ def generate_ten_lineups_pdf(scenarios, team_name, report_date, logo_file,
     c.setFont("Helvetica", 8)
     c.drawString(27, 11, "LHH red  |  Switch blue  |  RHH black")
     c.drawRightString(w - 27, 11,
-                      "RC/9 estimated via Bill James basic RC; 38 team PA, rate-derived BB/AB; no sequencing model")
+                      "Sim R/9: 4,000 seeded games; batting order + baserunners modeled; hit types estimated")
     c.save()
     output.seek(0)
     return output
@@ -1811,7 +1888,7 @@ st.markdown(
 
 st.divider()
 st.subheader("10-Lineup Priority Comparison")
-st.caption("Projected RC/9 uses Bill James's basic Runs Created, estimated from AVG/OBP/SLG and 38 team PA. It is a lineup-level rate estimate, not a batting-order simulation. League normalization is applied only where benchmark data are supplied.")
+st.caption("The 10-lineup PDF uses a 4,000-game batting-order simulation (Sim R/9), including base/out states and lineup turnover. Hit-type probabilities are estimated from AVG/OBP/SLG; projections are approximate. League normalization is applied only where benchmark data are supplied.")
 st.caption(
     "Two scenarios for each of AVG, OBP, SLG, ISO and SB. Focused = 2× "
     "that statistic's current weight; Strong = 4×. All other weights stay "
