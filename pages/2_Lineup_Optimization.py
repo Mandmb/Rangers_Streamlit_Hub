@@ -557,9 +557,63 @@ def prepare_lineup_optimizer_csv(uploaded_csv):
     df = df.sort_values("PA", ascending=False).drop_duplicates(
         subset=["playerFullName"], keep="first"
     )
+    # The provided export uses newestTeamLevel as its league identifier.
+    league_col = find_column(df, ["newestTeamLevel", "newestTeam", "currentTeamLevel"])
+    df["League"] = df[league_col].fillna("UNKNOWN").astype(str).str.strip().str.upper() if league_col else "UNKNOWN"
+    df["Last Team"] = df["newestTeamName"].fillna("").astype(str) if "newestTeamName" in df.columns else ""
     return df[
-        ["playerFullName", "Bats", "PA", "AVG", "OBP", "SLG", "ISO", "SB"]
+        ["playerFullName", "Bats", "PA", "AVG", "OBP", "SLG", "ISO", "SB", "League", "Last Team"]
     ].reset_index(drop=True)
+
+
+def lidom_translate(df, benchmarks):
+    """League-relative rate translation, using user-provided league means.
+
+    For rate r, translated r = r * (LIDOM mean / source mean).
+    SB is translated as steals per PA, then restored to the same sample PA.
+    This is an environment adjustment, not a calibrated talent projection.
+    """
+    result = df.copy()
+    if "League" not in result.columns:
+        result["League"] = "UNKNOWN"
+    lidom = benchmarks.get("WIN")
+    if not lidom:
+        return result
+    for idx, row in result.iterrows():
+        source = benchmarks.get(str(row["League"]).upper())
+        if not source:
+            continue
+        for stat in ("AVG", "OBP", "SLG"):
+            denom = source.get(stat, 0)
+            if denom > 0 and lidom.get(stat, 0) > 0:
+                result.at[idx, stat] = float(row[stat]) * lidom[stat] / denom
+        result.at[idx, "AVG"] = min(1.0, max(0.0, result.at[idx, "AVG"]))
+        result.at[idx, "OBP"] = min(1.0, max(result.at[idx, "AVG"], result.at[idx, "OBP"]))
+        result.at[idx, "SLG"] = max(result.at[idx, "AVG"], result.at[idx, "SLG"])
+        result.at[idx, "ISO"] = max(0.0, result.at[idx, "SLG"] - result.at[idx, "AVG"])
+        if source.get("SB_PA", 0) > 0 and lidom.get("SB_PA", 0) > 0:
+            result.at[idx, "SB"] = max(0.0, float(row["SB"]) * lidom["SB_PA"] / source["SB_PA"])
+    return result
+
+
+def projected_runs_nine(lineup, team_pa=38.0):
+    """Bill James basic RC=(H+BB)*TB/(AB+BB), approximated from rate data.
+    Assumes PA=AB+BB and OBP=(H+BB)/PA; ignores HBP, SF, CS, etc.
+    """
+    if lineup is None or lineup.empty:
+        return 0.0
+    total = 0.0
+    for _, p in lineup.iterrows():
+        avg = float(p["AVG"]); obp = float(p["OBP"]); slg = float(p["SLG"])
+        if avg >= 0.999:
+            continue
+        ab_fraction = max(0.0, min(1.0, (1 - obp) / (1 - avg)))
+        hits = avg * ab_fraction
+        walks = 1 - ab_fraction
+        tb = slg * ab_fraction
+        rc_per_pa = ((hits + walks) * tb)  # AB+BB = 1 normalized PA
+        total += max(0.0, rc_per_pa) * (team_pa / 9.0)
+    return total
 
 
 def detect_csv_source(uploaded_csv):
@@ -1259,7 +1313,7 @@ def generate_ten_lineups_pdf(scenarios, team_name, report_date, logo_file,
         c.setFont("Helvetica", 7.5)
         weight_pct = 100 * weights_used[stat] / max(sum(weights_used.values()), 1)
         c.drawRightString(x + panel_w - 10, y + panel_h - 16,
-                          f"{weight_pct:.0f}% stat weight")
+                          f"Est. RC/9: {projected_runs_nine(lineup):.1f}  |  {weight_pct:.0f}%")
         c.setFillColor(colors.HexColor("#555D69"))
         c.setFont("Helvetica-Bold", 7)
         for tx, title in [(11, "#"), (32, "PLAYER"), (panel_w - 197, "B"),
@@ -1296,7 +1350,7 @@ def generate_ten_lineups_pdf(scenarios, team_name, report_date, logo_file,
     c.setFont("Helvetica", 8)
     c.drawString(27, 11, "LHH red  |  Switch blue  |  RHH black")
     c.drawRightString(w - 27, 11,
-                      "Sensitivity scenarios, not projected runs or guaranteed distinct lineups")
+                      "RC/9 estimated via Bill James basic RC; 38 team PA, rate-derived BB/AB; no sequencing model")
     c.save()
     output.seek(0)
     return output
@@ -1355,6 +1409,30 @@ with st.sidebar:
 primary_rgb = (139, 0, 27)   # Escogido deep red
 accent_rgb = (206, 17, 38)   # Escogido bright red
 
+st.markdown("### LIDOM Offensive Environment Translation")
+st.caption("The uploaded CSV identifies leagues using newestTeamLevel. Upload league-wide AVG, OBP, SLG and SB/PA averages to translate players to the WIN (LIDOM) environment. No benchmark values are invented; leagues without benchmarks remain unadjusted.")
+benchmark_upload = st.file_uploader("League averages CSV (optional)", type=["csv"], key="league_benchmarks", help="Columns: League, AVG, OBP, SLG, SB_PA. Include WIN for LIDOM and each source league (e.g. MLB, AAA, AAX, AFA, MEX). Use matching seasons and comparable competition samples.")
+benchmarks = {}
+if benchmark_upload is not None:
+    try:
+        bm = pd.read_csv(benchmark_upload)
+        needed = {"League", "AVG", "OBP", "SLG", "SB_PA"}
+        if not needed.issubset(bm.columns):
+            st.error("League averages CSV must contain League, AVG, OBP, SLG, SB_PA.")
+            st.stop()
+        for _, row in bm.iterrows():
+            code = str(row["League"]).strip().upper()
+            vals = {key: float(row[key]) for key in ("AVG", "OBP", "SLG", "SB_PA")}
+            if all(np.isfinite(v) and v >= 0 for v in vals.values()):
+                benchmarks[code] = vals
+        if "WIN" not in benchmarks:
+            st.warning("Include a WIN row for LIDOM; no translation can be applied without it.")
+    except Exception as exc:
+        st.error(f"Could not parse league benchmarks: {exc}")
+        st.stop()
+else:
+    st.info("League benchmarks not uploaded: player stats remain unadjusted. The report will label the runs-created projection as an estimate.")
+
 st.markdown("### Data Source")
 csv_source = st.radio(
     "CSV Source",
@@ -1406,6 +1484,8 @@ extra_file = st.file_uploader(
     help="Add players absent from the main file. Required: playerFullName, PA, AVG, OBP, SLG, ISO, SB. Optional: batsHand.",
 )
 extra_stats = prepare_lineup_optimizer_csv(extra_file) if extra_file is not None else None
+if extra_stats is not None and "WIN" in benchmarks:
+    extra_stats = lidom_translate(extra_stats, benchmarks)
 if extra_file is not None and extra_stats is None:
     st.stop()
 if extra_stats is not None:
@@ -1554,6 +1634,8 @@ else:
         overall_df_all = prepare_lineup_optimizer_csv(hitter_file)
         if overall_df_all is None:
             st.stop()
+        if "WIN" in benchmarks:
+            overall_df_all = lidom_translate(overall_df_all, benchmarks)
 
     if extra_stats is not None:
         original_count = len(overall_df_all)
@@ -1689,6 +1771,7 @@ st.markdown(
 
 st.divider()
 st.subheader("10-Lineup Priority Comparison")
+st.caption("Projected RC/9 uses Bill James's basic Runs Created, estimated from AVG/OBP/SLG and 38 team PA. It is a lineup-level rate estimate, not a batting-order simulation. League normalization is applied only where benchmark data are supplied.")
 st.caption(
     "Two scenarios for each of AVG, OBP, SLG, ISO and SB. Focused = 2× "
     "that statistic's current weight; Strong = 4×. All other weights stay "
