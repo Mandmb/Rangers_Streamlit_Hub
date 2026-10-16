@@ -562,7 +562,7 @@ def prepare_lineup_optimizer_csv(uploaded_csv):
     df["League"] = df[league_col].fillna("UNKNOWN").astype(str).str.strip().str.upper() if league_col else "UNKNOWN"
     df["Last Team"] = df["newestTeamName"].fillna("").astype(str) if "newestTeamName" in df.columns else ""
     # Keep event-count columns when supplied, for future run simulation upgrades.
-    event_cols = [c for c in ["AB", "1B", "2B", "3B", "HR", "BB", "HBP", "SO", "SF", "GIDP", "CS"] if c in df.columns]
+    event_cols = [c for c in ["AB", "1B", "2B", "3B", "HR", "BB", "HBP", "SO", "SF", "GIDP", "DP", "CS", "SBA", "BatterSprintSpd"] if c in df.columns]
     for c in event_cols:
         df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
     return df[
@@ -620,60 +620,112 @@ def projected_runs_nine(lineup, team_pa=38.0):
     return total
 
 
-def simulated_lineup_runs_nine(lineup, games=4000, seed=20261016):
-    """Order-sensitive, reproducible 9-inning run estimate.
+def simulated_lineup_runs_nine(lineup, games=12000, seed=20261016):
+    """Nine-inning batting-order model using actual event counts when available.
 
-    Simulates base/out advancement and carries batting position between innings.
-    Rates inferred from AVG/OBP/SLG. Singles/doubles/triples/HR breakdown is
-    assumed because the supplemental CSV does not include hit-type counts.
-    This is a scenario estimate, not a calibrated game prediction.
+    Same-seed comparisons; probability estimates based on hitter PA. Baseline
+    baserunner advancement assumptions remain approximate without play-by-play.
+    GIDP/DP is a *subset* of outs, not a separate PA outcome. SB/CS are used
+    as conditional baserunning actions, not counted as plate appearances.
     """
     import random
     if lineup is None or len(lineup) != 9:
         return projected_runs_nine(lineup)
-    probs = []
+
+    def val(player, name, default=0.0):
+        try:
+            v = float(player.get(name, default))
+            return v if math.isfinite(v) else default
+        except (ValueError, TypeError):
+            return default
+
+    profiles = []
     for _, player in lineup.iterrows():
-        avg = min(0.95, max(0.0, float(player.get("AVG", 0))))
-        obp = min(0.99, max(avg, float(player.get("OBP", avg))))
-        slg = max(avg, float(player.get("SLG", avg)))
-        ab_share = max(0.0, min(1.0, (1.0 - obp) / max(1e-8, 1.0 - avg)))
-        hit = avg * ab_share
-        walk = max(0.0, obp - hit)
-        # Convert isolated power to an approximate hit distribution.
-        # A fixed extra-base mix is used until 2B/3B/HR counts are available.
-        iso = max(0.0, slg - avg)
-        extra_bases = iso * ab_share
-        triples = min(hit * 0.025, extra_bases / 2.0)
-        remaining = max(0.0, extra_bases - 2.0 * triples)
-        homers = min(hit * 0.13, remaining / 3.0)
-        doubles = min(max(0.0, hit - triples - homers), max(0.0, remaining - 3.0 * homers))
-        singles = max(0.0, hit - doubles - triples - homers)
-        # Normalize for any rounding / extreme inputs.
-        events = [max(0.0, 1.0 - obp), walk, singles, doubles, triples, homers]
-        scale = sum(events)
+        pa = max(1.0, val(player, "PA", 1))
+        ab = val(player, "AB", -1)
+        event_fields = ("1B", "2B", "3B", "HR", "BB", "HBP")
+        has_events = ab > 0 and all(f in lineup.columns for f in event_fields)
+        if has_events:
+            # Allow a few unclassified PA (sac bunts, interference) as outs.
+            counts = [max(0., val(player, x)) for x in event_fields]
+            if sum(counts) > pa:
+                counts = [v * pa / sum(counts) for v in counts]
+            single, double, triple, homer, walk, hbp = [v / pa for v in counts]
+            out = max(0., 1. - sum(counts) / pa)
+        else:
+            avg = min(.95, max(0., val(player, "AVG")))
+            obp = min(.99, max(avg, val(player, "OBP", avg)))
+            slg = max(avg, val(player, "SLG", avg))
+            ab_share = max(0., min(1., (1. - obp) / max(1e-8, 1. - avg)))
+            hit = avg * ab_share
+            walk = max(0., obp - hit)
+            hbp = 0.
+            iso = max(0., slg - avg)
+            extra = iso * ab_share
+            triple = min(hit * .025, extra / 2.)
+            homer = min(hit * .13, max(0., extra - 2. * triple) / 3.)
+            double = min(max(0., hit - triple - homer), max(0., extra - 2. * triple - 3. * homer))
+            single = max(0., hit - double - triple - homer)
+            out = max(0., 1. - obp)
+        probabilities = [out, walk + hbp, single, double, triple, homer]
+        total = sum(probabilities)
+        running = 0.
         thresholds = []
-        running = 0.0
-        for probability in events:
-            running += probability / scale
+        for pr in probabilities:
+            running += pr / max(total, 1e-10)
             thresholds.append(running)
-        probs.append(thresholds)
+        # DP totals include GIDP in some exports; prefer GIDP if present.
+        dp = val(player, "GIDP", -1)
+        if dp < 0:
+            dp = val(player, "DP")
+        # DP opportunities are not provided; conservative approximation conditional
+        # on an out with first occupied and fewer than two outs.
+        dp_given_out = min(.28, max(0., dp / max(pa * out * .40, 1.)))
+        sf_given_out = min(.15, max(0., val(player, "SF") / max(pa * out * .35, 1.)))
+        attempts = val(player, "SBA", -1)
+        if attempts < 0:
+            attempts = val(player, "SB") + val(player, "CS")
+        steal_rate = min(.20, max(0., attempts / pa))
+        steal_success = max(0., min(1., val(player, "SB") / attempts)) if attempts > 0 else 0.
+        profiles.append((thresholds, dp_given_out, sf_given_out, steal_rate, steal_success))
+
     rng = random.Random(seed)
-    runs_total = 0
+    total_runs = 0
     for _ in range(games):
         slot = 0
         runs = 0
-        for _inning in range(9):
+        for inning in range(9):
             outs = 0
-            bases = 0  # bitmask: first=1, second=2, third=4
+            bases = 0
             safety = 0
-            while outs < 3 and safety < 120:
+            while outs < 3 and safety < 130:
                 safety += 1
+                cut, dp_rate, sf_rate, steal_rate, steal_success = profiles[slot]
+                # Steal attempts attributed to the current batting-order slot's
+                # runner in the *previous* PA, when possible.
+                if (bases & 1) and not (bases & 2) and outs < 3:
+                    previous = profiles[(slot - 1) % 9]
+                    if rng.random() < previous[3]:
+                        if rng.random() < previous[4]:
+                            bases = (bases & ~1) | 2
+                        else:
+                            bases &= ~1
+                            outs += 1
+                            if outs >= 3:
+                                break
                 r = rng.random()
-                cut = probs[slot]
                 slot = (slot + 1) % 9
                 if r < cut[0]:
-                    outs += 1
-                elif r < cut[1]:  # walk, force runners if necessary
+                    if (bases & 1) and outs < 2 and rng.random() < dp_rate:
+                        outs += 2
+                        bases &= ~1
+                    else:
+                        # SF advances/scoring third-base runner on an out.
+                        if (bases & 4) and outs < 2 and rng.random() < sf_rate:
+                            runs += 1
+                            bases &= ~4
+                        outs += 1
+                elif r < cut[1]:
                     if bases & 1:
                         if bases & 2:
                             if bases & 4:
@@ -681,20 +733,20 @@ def simulated_lineup_runs_nine(lineup, games=4000, seed=20261016):
                             bases |= 4
                         bases |= 2
                     bases |= 1
-                elif r < cut[2]:  # single: runner on 2nd/3rd scores, 1st to 2nd
+                elif r < cut[2]:
                     runs += ((bases >> 1) & 1) + ((bases >> 2) & 1)
                     bases = 1 | ((bases & 1) << 1)
-                elif r < cut[3]:  # double: runners on 2nd/3rd score, 1st to 3rd
+                elif r < cut[3]:
                     runs += ((bases >> 1) & 1) + ((bases >> 2) & 1)
                     bases = 2 | ((bases & 1) << 2)
-                elif r < cut[4]:  # triple: all existing runners score
+                elif r < cut[4]:
                     runs += bases.bit_count()
                     bases = 4
-                else:  # home run
+                else:
                     runs += 1 + bases.bit_count()
                     bases = 0
-        runs_total += runs
-    return runs_total / games
+        total_runs += runs
+    return total_runs / games
 
 
 def detect_csv_source(uploaded_csv):
@@ -901,7 +953,7 @@ def merge_split_scores(overall_df, split_df, weights):
     split["Platoon Component"] = weighted_offense_score(split, weights)
 
     merged = overall.merge(
-        split[["playerFullName", "PA", "AVG", "OBP", "SLG", "ISO", "SB", "Platoon Component"]],
+        split[["playerFullName", "PA", "AVG", "OBP", "SLG", "ISO", "SB", "Platoon Component"] + [c for c in ["AB", "1B", "2B", "3B", "HR", "BB", "HBP", "SO", "SF", "DP", "GIDP", "CS", "SBA"] if c in split.columns]],
         on="playerFullName",
         how="left",
         suffixes=("", "_Split"),
@@ -941,6 +993,10 @@ def build_pitcher_specific_lineup(overall_df, split_df, pitch_tables, pitcher_in
         if split_col in merged.columns:
             merged[stat] = merged[split_col].where(merged[split_col].notna(), merged[stat])
 
+    for event_col in ["AB", "1B", "2B", "3B", "HR", "BB", "HBP", "SO", "SF", "DP", "GIDP", "CS", "SBA"]:
+        split_col = f"{event_col}_Split"
+        if split_col in merged.columns:
+            merged[event_col] = merged[split_col].where(merged[split_col].notna(), merged.get(event_col, 0))
     selected = merged.sort_values("Matchup Score", ascending=False).head(9).copy()
     lineup = optimize_batting_order(selected, weights, score_column="Matchup Score")
     return lineup, merged
@@ -1030,6 +1086,8 @@ def optimize_batting_order(selected_df, weights, score_column):
     if "Matchup Score" in lineup.columns:
         columns.append("Matchup Score")
     columns += ["Overall Score", "Spot Fit Score"]
+    # Retain event-level data through scoring and lineup selection for R/9.
+    columns += [c for c in ["AB", "1B", "2B", "3B", "HR", "BB", "HBP", "SO", "SF", "DP", "GIDP", "CS", "SBA", "BatterSprintSpd"] if c in lineup.columns and c not in columns]
     return lineup[[column for column in columns if column in lineup.columns]]
 
 
@@ -1431,7 +1489,7 @@ def generate_ten_lineups_pdf(scenarios, team_name, report_date, logo_file,
     c.setFont("Helvetica", 8)
     c.drawString(27, 11, "LHH red  |  Switch blue  |  RHH black")
     c.drawRightString(w - 27, 11,
-                      "Sim R/9: 4,000 seeded games; batting order + baserunners modeled; hit types estimated")
+                      "Sim R/9: 12,000 seeded games; event counts used where available; baserunning estimated")
     c.save()
     output.seek(0)
     return output
@@ -1954,7 +2012,7 @@ st.markdown(
 
 st.divider()
 st.subheader("10-Lineup Priority Comparison")
-st.caption("The 10-lineup PDF uses a 4,000-game batting-order simulation (Sim R/9), including base/out states and lineup turnover. Hit-type probabilities are estimated from AVG/OBP/SLG; projections are approximate. League normalization is applied only where benchmark data are supplied.")
+st.caption("The 10-lineup PDF uses 12,000 seeded nine-inning simulations. Uploaded 1B/2B/3B/HR/BB/HBP/AB/PA determine batting outcomes; DP, SF, SB and CS influence baserunning. Advancement and opportunity rates are approximations, not play-by-play projections. League normalization applies only with configured benchmarks.")
 st.caption(
     "Two scenarios for each of AVG, OBP, SLG, ISO and SB. Focused = 2× "
     "that statistic's current weight; Strong = 4×. All other weights stay "
