@@ -561,8 +561,12 @@ def prepare_lineup_optimizer_csv(uploaded_csv):
     league_col = find_column(df, ["newestTeamLevel", "newestTeam", "currentTeamLevel"])
     df["League"] = df[league_col].fillna("UNKNOWN").astype(str).str.strip().str.upper() if league_col else "UNKNOWN"
     df["Last Team"] = df["newestTeamName"].fillna("").astype(str) if "newestTeamName" in df.columns else ""
+    # Keep event-count columns when supplied, for future run simulation upgrades.
+    event_cols = [c for c in ["AB", "1B", "2B", "3B", "HR", "BB", "HBP", "SO", "SF", "GIDP", "CS"] if c in df.columns]
+    for c in event_cols:
+        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
     return df[
-        ["playerFullName", "Bats", "PA", "AVG", "OBP", "SLG", "ISO", "SB", "League", "Last Team"]
+        ["playerFullName", "Bats", "PA", "AVG", "OBP", "SLG", "ISO", "SB", "League", "Last Team"] + event_cols
     ].reset_index(drop=True)
 
 
@@ -1600,6 +1604,28 @@ extra_file = st.file_uploader(
     key="extra_players_csv",
     help="Add players absent from the main file. Required: playerFullName, PA, AVG, OBP, SLG, ISO, SB. Optional: batsHand.",
 )
+st.markdown("#### Optional handedness split CSVs")
+right_col, left_col = st.columns(2)
+with right_col:
+    right_file = st.file_uploader(
+        "Hitters vs RHP CSV", type=["csv"], key="hitter_vs_rhp_stats_csv",
+        help="Upload hitter performance against right-handed pitchers (not right-handed hitters)."
+    )
+with left_col:
+    left_file = st.file_uploader(
+        "Hitters vs LHP CSV", type=["csv"], key="hitter_vs_lhp_stats_csv",
+        help="Upload hitter performance against left-handed pitchers."
+    )
+right_stats = prepare_lineup_optimizer_csv(right_file) if right_file else None
+left_stats = prepare_lineup_optimizer_csv(left_file) if left_file else None
+if right_file and right_stats is None:
+    st.stop()
+if left_file and left_stats is None:
+    st.stop()
+if right_stats is not None and "WIN" in benchmarks:
+    right_stats = lidom_translate(right_stats, benchmarks)
+if left_stats is not None and "WIN" in benchmarks:
+    left_stats = lidom_translate(left_stats, benchmarks)
 extra_stats = prepare_lineup_optimizer_csv(extra_file) if extra_file is not None else None
 if extra_stats is not None and "WIN" in benchmarks:
     extra_stats = lidom_translate(extra_stats, benchmarks)
@@ -1622,6 +1648,9 @@ if extra_stats is not None:
 
 # The optional stats upload can also serve as a standalone data source.
 # This preserves the usual Pregame + supplemental workflow when both exist.
+if hitter_file is None and extra_stats is None and (right_stats is not None or left_stats is not None):
+    extra_stats = (right_stats if right_stats is not None else left_stats).copy()
+    st.info("No overall CSV uploaded. Using one handedness split as the overall roster reference; upload an overall CSV for true overall projections.")
 stats_only_from_additional = hitter_file is None and extra_stats is not None and not extra_stats.empty
 if hitter_file is None and not stats_only_from_additional:
     if extra_file is not None and extra_stats is not None and extra_stats.empty:
@@ -1778,12 +1807,42 @@ else:
     rhp_lineup = rhp_pool = None
     lhp_lineup = lhp_pool = None
 
+    # Handedness splits are optional. Only players present in the uploaded
+    # split file have real split statistics; never fabricate missing splits.
+    def split_eligible(frame, label):
+        if frame is None:
+            return None
+        names = set(overall_df["playerFullName"])
+        filtered = frame[frame["playerFullName"].isin(names)].copy()
+        if len(filtered) < 9:
+            st.warning(f"{label} contains only {len(filtered)} eligible hitters; at least 9 are needed.")
+            return None
+        return filtered
+
+    vs_rhp_df = split_eligible(right_stats, "Vs RHP CSV")
+    vs_lhp_df = split_eligible(left_stats, "Vs LHP CSV")
+    if vs_rhp_df is not None:
+        rhp_lineup, rhp_pool = build_standard_lineup(vs_rhp_df, weights)
+    if vs_lhp_df is not None:
+        lhp_lineup, lhp_pool = build_standard_lineup(vs_lhp_df, weights)
+
     available_modes = ["Overall"]
+    if rhp_lineup is not None:
+        available_modes.append("Vs RHP")
+    if lhp_lineup is not None:
+        available_modes.append("Vs LHP")
     if pitcher_pdf is not None:
         pitcher_info = parse_pitcher_pdf(pitcher_pdf)
         if pitcher_info is not None:
+            pitcher_hand = pitcher_info.get("hand", "R")
+            matchup_hitter_df = (vs_rhp_df if pitcher_hand == "R" else vs_lhp_df)
+            if matchup_hitter_df is None:
+                matchup_hitter_df = overall_df
+                st.caption("No complete hitter split uploaded for this pitcher hand; using overall hitter stats.")
+            else:
+                st.caption(f"Using actual hitter vs {pitcher_hand}HP CSV statistics for this matchup.")
             pitcher_lineup, pitcher_pool = build_stats_only_pitcher_lineup(
-                overall_df, pitcher_info, weights
+                matchup_hitter_df, pitcher_info, weights
             )
             available_modes.append("Vs Uploaded Pitcher")
             st.caption(
@@ -1809,6 +1868,13 @@ display_map = {
         rgb_to_hex(primary_rgb),
     )
 }
+
+if rhp_lineup is not None:
+    lineups["Vs RHP"] = rhp_lineup
+    display_map["Vs RHP"] = (rhp_lineup, rhp_pool, rgb_to_hex(accent_rgb))
+if lhp_lineup is not None:
+    lineups["Vs LHP"] = lhp_lineup
+    display_map["Vs LHP"] = (lhp_lineup, lhp_pool, rgb_to_hex(primary_rgb))
 
 if csv_source == "Pregame Pitch-by-Pitch":
     lineups["Vs RHP"] = rhp_lineup
@@ -1894,6 +1960,15 @@ st.caption(
     "that statistic's current weight; Strong = 4×. All other weights stay "
     "unchanged. The report fits all 10 lineups on one landscape A3 page."
 )
+ten_lineup_source_options = ["Overall"]
+if rhp_lineup is not None:
+    ten_lineup_source_options.append("Vs RHP")
+if lhp_lineup is not None:
+    ten_lineup_source_options.append("Vs LHP")
+ten_lineup_source = st.selectbox(
+    "Stat source for the 10-lineup PDF", ten_lineup_source_options,
+    help="Use the uploaded handedness-specific CSV for all 10 priority scenarios."
+)
 compare_opponent = st.checkbox(
     "Optimize the 10 lineups against the uploaded opposing pitcher",
     value=pitcher_info is not None,
@@ -1914,11 +1989,16 @@ if st.button("Prepare 10-Lineup PDF", type="primary"):
                         pitcher_info, scenario_weights, regression_pa
                     )
                 else:
+                    hand = pitcher_info.get("hand", "R")
+                    matchup_data = vs_rhp_df if hand == "R" else vs_lhp_df
                     lineup_variant, _ = build_stats_only_pitcher_lineup(
-                        overall_df, pitcher_info, scenario_weights
+                        matchup_data if matchup_data is not None else overall_df,
+                        pitcher_info, scenario_weights
                     )
             else:
-                lineup_variant, _ = build_standard_lineup(overall_df, scenario_weights)
+                comparison_data = (vs_rhp_df if ten_lineup_source == "Vs RHP" else
+                                   vs_lhp_df if ten_lineup_source == "Vs LHP" else overall_df)
+                lineup_variant, _ = build_standard_lineup(comparison_data, scenario_weights)
             comparison.append((priority, level, lineup_variant, scenario_weights))
         pdf_ten = generate_ten_lineups_pdf(
             comparison, team_name, report_date, team_logo,
