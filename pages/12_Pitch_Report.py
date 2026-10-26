@@ -31,10 +31,27 @@ def parse_main(group):
     return [player]+values
 
 def parse_chase(group):
-    player=' '.join(w[4] for w in group if 429<w[0]<513).strip()
-    vals=[w[4] for w in group if w[0]>=513]
-    if not player or len(vals)!=3: return None
-    return [player]+vals
+    # Separate each metric by its physical column, not number of PDF words.
+    # This handles exports where a number is broken into multiple text fragments.
+    fields = [[], [], [], []]
+    for w in group:
+        midpoint = (w[0] + w[2]) / 2
+        idx = 0 if midpoint < 510 else 1 if midpoint < 536 else 2 if midpoint < 548 else 3
+        fields[idx].append(w)
+    cells = [''.join(w[4] for w in sorted(items, key=lambda w: w[0]))
+             if i else ' '.join(w[4] for w in sorted(items, key=lambda w: w[0]))
+             for i, items in enumerate(fields)]
+    name, pct, pitches, chases = [v.strip() for v in cells]
+    if not name or name.upper() in ('PLAYER', 'RESULTS', 'CALCULATIONS'):
+        return None
+    if not (re.fullmatch(r'\d+(?:\.\d+)?%', pct)
+            and re.fullmatch(r'\d+', pitches)
+            and re.fullmatch(r'\d+', chases)):
+        return None
+    # Verify the percentage is consistent with numerator and denominator.
+    if int(pitches) and abs(float(pct[:-1]) - 100*int(chases)/int(pitches)) > 0.16:
+        return None
+    return [name, pct, pitches, chases]
 
 def extract(pdf):
     doc=fitz.open(stream=pdf,filetype='pdf')
@@ -52,18 +69,16 @@ def extract(pdf):
         total_rows=[r for r in total_rows if r and r[0]=='TOTAL']
         players=[parser(g) for g in rows_in_band(p,start,end,left,right)]
         players=[r for r in players if r and r[0] != 'TOTAL']
-        if len(total_rows)!=1 or len(players)<1:
-            raise ValueError(
-                f'Could not extract {title}: '
-                f'{len(total_rows)} totals and {len(players)} player rows.'
-            )
+        if len(total_rows)!=1 or not players:
+            raise ValueError(f'Could not reliably extract {title}: {len(total_rows)} totals and {len(players)} player rows.')
         if len({r[0].casefold() for r in players}) != len(players):
-            raise ValueError(f'Duplicate player rows detected in {title}.')
-        if kind == 'chase':
-            if any(len(r)!=4 or not re.fullmatch(
-                r'[0-9]+(?:\\.[0-9]+)?%', r[1]
-            ) or not all(v.isdigit() for v in r[2:]) for r in players):
-                raise ValueError(f'Incomplete Chase statistics in {title}.')
+            raise ValueError(f'Duplicate players in {title}; the source PDF may have a different layout.')
+        if kind=='chase':
+            # Each data row must be accounted for, even if extraction is difficult.
+            source_groups=rows_in_band(p,start,end,left,right)
+            candidates=[g for g in source_groups if any(429 < w[0] < 505 for w in g)]
+            if len(players)!=len(candidates):
+                raise ValueError(f'{title}: extracted {len(players)} of {len(candidates)} candidate rows. Upload this exact PDF for a layout-specific fix.')
         if kind=='main' and any(sum(bool(x) for x in r[1:])<18 for r in players):
             raise ValueError(f'Missing statistics in {title}; please check the original PDF format.')
         data.append((title,kind,total_rows[0],players))
