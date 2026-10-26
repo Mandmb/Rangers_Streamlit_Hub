@@ -52,9 +52,18 @@ def extract(pdf):
         total_rows=[r for r in total_rows if r and r[0]=='TOTAL']
         players=[parser(g) for g in rows_in_band(p,start,end,left,right)]
         players=[r for r in players if r and r[0] != 'TOTAL']
-        minimum=6 if ('LHH' in title) else 11
-        if len(total_rows)!=1 or len(players)<minimum:
-            raise ValueError(f'Could not reliably extract {title}: {len(total_rows)} totals and {len(players)} player rows.')
+        if len(total_rows)!=1 or len(players)<1:
+            raise ValueError(
+                f'Could not extract {title}: '
+                f'{len(total_rows)} totals and {len(players)} player rows.'
+            )
+        if len({r[0].casefold() for r in players}) != len(players):
+            raise ValueError(f'Duplicate player rows detected in {title}.')
+        if kind == 'chase':
+            if any(len(r)!=4 or not re.fullmatch(
+                r'[0-9]+(?:\\.[0-9]+)?%', r[1]
+            ) or not all(v.isdigit() for v in r[2:]) for r in players):
+                raise ValueError(f'Incomplete Chase statistics in {title}.')
         if kind=='main' and any(sum(bool(x) for x in r[1:])<18 for r in players):
             raise ValueError(f'Missing statistics in {title}; please check the original PDF format.')
         data.append((title,kind,total_rows[0],players))
