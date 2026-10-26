@@ -8,7 +8,7 @@ NAVY=(0.052,0.14,0.26); BLUE=(0.10,0.25,0.43); RED=(0.78,0.10,0.17)
 WHITE=(1,1,1); INK=(0.15,0.21,0.29); PALE=(0.94,0.96,0.98); GRAY=(0.42,0.48,0.54)
 HEADERS=['Player','K','K-L','P','CS#','CS%','Miss#','Miss%','Foul#','Foul%','Total','Tot%','BIP','BIP%','1B','2B','3B','HR','TB','BABIP','SLG']
 ANCHORS=[111.6,136.4,147,167.8,192.6,207.2,223.5,237.6,255.1,268,284.2,294.6,309.2,318.1,327.1,336,345.6,354.6,370.4,381.9]
-SECTIONS=[('FASTBALL IN ZONE','main',80,110,270),('FASTBALL CHASE BELOW ZONE','chase',80,110,260),('FASTBALLS UP & IN · RHH','main',418,448,570),('ALL PITCHES CHASE BELOW ZONE','chase',432,462,591),('FASTBALLS UP & IN · LHH','main',620,649,728)]
+SECTIONS=[('FASTBALL IN ZONE','main'),('FASTBALL CHASE BELOW ZONE','chase'),('FASTBALLS UP & IN · RHH','main'),('ALL PITCHES CHASE BELOW ZONE','chase'),('FASTBALLS UP & IN · LHH','main')]
 
 def rows_in_band(page,y0,y1,x0,x1):
     words=[w for w in page.get_text('words') if y0 <= w[1] < y1 and x0 <= w[0] < x1]
@@ -31,58 +31,67 @@ def parse_main(group):
     return [player]+values
 
 def parse_chase(group):
-    # Separate each metric by its physical column, not number of PDF words.
-    # This handles exports where a number is broken into multiple text fragments.
-    fields = [[], [], [], []]
-    for w in group:
-        midpoint = (w[0] + w[2]) / 2
-        idx = 0 if midpoint < 510 else 1 if midpoint < 536 else 2 if midpoint < 548 else 3
-        fields[idx].append(w)
-    cells = [''.join(w[4] for w in sorted(items, key=lambda w: w[0]))
-             if i else ' '.join(w[4] for w in sorted(items, key=lambda w: w[0]))
-             for i, items in enumerate(fields)]
-    name, pct, pitches, chases = [v.strip() for v in cells]
-    if not name or name.upper() in ('PLAYER', 'RESULTS', 'CALCULATIONS'):
-        return None
-    if not (re.fullmatch(r'\d+(?:\.\d+)?%', pct)
-            and re.fullmatch(r'\d+', pitches)
-            and re.fullmatch(r'\d+', chases)):
-        return None
-    # Verify the percentage is consistent with numerator and denominator.
-    if int(pitches) and abs(float(pct[:-1]) - 100*int(chases)/int(pitches)) > 0.16:
-        return None
-    return [name, pct, pitches, chases]
+    name=' '.join(w[4] for w in sorted(group,key=lambda w:w[0]) if w[0]<510).strip()
+    metrics=[w[4] for w in sorted(group,key=lambda w:w[0]) if w[0]>=510]
+    if len(metrics)!=3:return None
+    pct,pitches,chase=metrics
+    if not name or not re.fullmatch(r'\d+(?:\.\d+)?%',pct):return None
+    if not(pitches.isdigit() and chase.isdigit()):return None
+    if int(pitches)==0 or abs(float(pct[:-1])-100*int(chase)/int(pitches))>0.16:return None
+    return [name,pct,pitches,chase]
 
 def extract(pdf):
     doc=fitz.open(stream=pdf,filetype='pdf')
-    if doc.page_count!=1: raise ValueError('Expected a one-page TrackMan export.')
-    p=doc[0]; text=p.get_text().lower()
-    if not all(s in text for s in ['fastball in zone','fastballs up','chase']):
-        raise ValueError('The uploaded report does not match the expected format.')
+    if doc.page_count!=1:raise ValueError('Expected a one-page TrackMan export.')
+    p=doc[0];t=p.get_text().lower()
+    if not all(s in t for s in ['fastball in zone','fastballs up','chase']):
+        raise ValueError('This is not the expected TrackMan report.')
     if abs(p.rect.width-612)>12 or abs(p.rect.height-792)>12:
-        raise ValueError('Unexpected source PDF page dimensions.')
+        raise ValueError('Unexpected PDF page dimensions.')
+    # Find CALCULATIONS and RESULTS positions in each column dynamically.
+    words=p.get_text('words')
+    def labels(xmin,xmax,label):
+        return sorted(w[1] for w in words if xmin<w[0]<xmax and w[4].upper()==label)
+    main_cal=labels(68,110,'CALCULATIONS')
+    main_res=labels(68,110,'RESULTS')
+    chase_cal=labels(425,475,'CALCULATIONS')
+    chase_res=labels(425,475,'RESULTS')
+    if not (len(main_cal)==len(main_res)==3 and len(chase_cal)==len(chase_res)==2):
+        raise ValueError('Cannot locate the five expected table sections.')
     data=[]
-    for title,kind,total_y,start,end in SECTIONS:
-        left,right=(65,390) if kind=='main' else (425,565)
+    for ix,(title,kind) in enumerate(SECTIONS):
+        k=(0 if ix==0 else 1 if ix==2 else 2) if kind=='main' else (0 if ix==1 else 1)
+        cal=(main_cal if kind=='main' else chase_cal)[k]
+        res=(main_res if kind=='main' else chase_res)[k]
+        x0,x1=(65,390) if kind=='main' else (425,565)
         parser=parse_main if kind=='main' else parse_chase
-        total_rows=[parser(g) for g in rows_in_band(p,total_y,total_y+8,left,right)]
-        total_rows=[r for r in total_rows if r and r[0]=='TOTAL']
-        players=[parser(g) for g in rows_in_band(p,start,end,left,right)]
-        players=[r for r in players if r and r[0] != 'TOTAL']
-        if len(total_rows)!=1 or not players:
-            raise ValueError(f'Could not reliably extract {title}: {len(total_rows)} totals and {len(players)} player rows.')
-        if len({r[0].casefold() for r in players}) != len(players):
-            raise ValueError(f'Duplicate players in {title}; the source PDF may have a different layout.')
-        if kind=='chase':
-            # Each data row must be accounted for, even if extraction is difficult.
-            source_groups=rows_in_band(p,start,end,left,right)
-            candidates=[g for g in source_groups if any(429 < w[0] < 505 for w in g)]
-            if len(players)!=len(candidates):
-                raise ValueError(f'{title}: extracted {len(players)} of {len(candidates)} candidate rows. Upload this exact PDF for a layout-specific fix.')
-        if kind=='main' and any(sum(bool(x) for x in r[1:])<18 for r in players):
-            raise ValueError(f'Missing statistics in {title}; please check the original PDF format.')
-        data.append((title,kind,total_rows[0],players))
-    doc.close(); return data
+        totals=[parser(g) for g in rows_in_band(p,cal+15,cal+26,x0,x1)]
+        totals=[r for r in totals if r and r[0].upper()=='TOTAL']
+        next_cal=(main_cal[k+1] if kind=='main' and k<2 else
+                  chase_cal[k+1] if kind=='chase' and k<1 else p.rect.height-25)
+        # Last main section can extend to footer; others stop before next panel.
+        groups=rows_in_band(p,res+19,min(next_cal-3,p.rect.height-25),x0,x1)
+        players=[parser(g) for g in groups]
+        players=[r for r in players if r and r[0].upper()!='TOTAL']
+        if len(totals)!=1 or not players:
+            raise ValueError(f'{title}: could not identify totals and players.')
+        if len({r[0].casefold() for r in players})!=len(players):
+            raise ValueError(f'Duplicate player names detected in {title}.')
+        if kind=='main':
+            if any(len(r)!=21 or sum(bool(x) for x in r[1:])<18 for r in players):
+                raise ValueError(f'Missing values in {title}.')
+            # P is the third statistic; sum of player pitch counts should match the total.
+            try:
+                if sum(int(r[3]) for r in players)!=int(totals[0][3]):
+                    raise ValueError(f'{title}: player pitch counts do not match total.')
+            except (TypeError,ValueError) as e:
+                raise ValueError(f'{title}: invalid pitch count: {e}')
+        else:
+            if sum(int(r[2]) for r in players)!=int(totals[0][2]) or sum(int(r[3]) for r in players)!=int(totals[0][3]):
+                raise ValueError(f'{title}: Chase table totals do not match the players.')
+        data.append((title,kind,totals[0],players))
+    doc.close()
+    return data
 
 def write(page,x,y,value,sz=8,color=INK,bold=False,align='left',limit=None):
     font='hebo' if bold else 'helv'
@@ -134,21 +143,38 @@ def panel(page,x,y,w,h,title,kind,total,players):
 
 def make_pdf(data,game_date,opponent):
     parsed=extract(data)
-    out=fitz.open(); page=out.new_page(width=1191,height=842)
+    main_need=sum(56+18*(len(parsed[i][3])+1) for i in (0,2,4))+20
+    chase_need=sum(56+21*(len(parsed[i][3])+1) for i in (1,3))+12
+    page_height=max(690,min(842,102+max(main_need,chase_need)+60))
+    out=fitz.open(); page=out.new_page(width=1191,height=page_height)
     page.draw_rect(page.rect,color=None,fill=(.975,.980,.987))
     page.draw_rect(fitz.Rect(0,0,1191,11),color=None,fill=RED)
     write(page,28,48,'LEONES DEL ESCOGIDO',22,NAVY,True)
     write(page,28,71,'PITCH REPORT',13,RED,True)
     write(page,1160,49,f'{game_date:%B %d, %Y}  |  vs. {opponent}',11,GRAY,False,'right')
     page.draw_line((28,86),(1163,86),color=(.81,.84,.88),width=1)
-    # Space-efficient grid, three full-width stat tables and two chase tables
     left_x,left_w=28,862
     right_x,right_w=904,259
-    specs=[(left_x,100,left_w,288),(right_x,100,right_w,288),(left_x,402,left_w,195),(right_x,402,right_w,355),(left_x,611,left_w,146)]
-    for entry,spec in zip(parsed,specs): panel(page,*spec,*entry)
-    page.draw_line((28,788),(1163,788),color=(.81,.84,.88),width=1)
-    write(page,28,805,'LEONES DEL ESCOGIDO  /  BASEBALL ANALYTICS',8,GRAY,True)
-    write(page,1163,805,'1 / 1',8,GRAY,False,'right')
+    def needed_height(entry):
+        _,kind,_,players=entry
+        row_height=18 if kind=='main' else 21
+        return 27+20+9+row_height*(len(players)+1)
+    def stack(entries,x,w,y0,y_end,gap):
+        heights=[needed_height(e) for e in entries]
+        available=y_end-y0-gap*(len(entries)-1)
+        if sum(heights)>available:
+            # Scale row heights by available panel height when necessary.
+            ratio=available/sum(heights)
+            heights=[h*ratio for h in heights]
+        cursor=y0
+        for entry,h in zip(entries,heights):
+            panel(page,x,cursor,w,h,*entry)
+            cursor+=h+gap
+    stack([parsed[0],parsed[2],parsed[4]],left_x,left_w,102,page_height-71,10)
+    stack([parsed[1],parsed[3]],right_x,right_w,102,page_height-71,12)
+    page.draw_line((28,page_height-54),(1163,page_height-54),color=(.81,.84,.88),width=1)
+    write(page,28,page_height-37,'LEONES DEL ESCOGIDO  /  BASEBALL ANALYTICS',8,GRAY,True)
+    write(page,1163,page_height-37,'1 / 1',8,GRAY,False,'right')
     pdf=out.tobytes(garbage=4,deflate=True)
     out.close();return pdf
 
