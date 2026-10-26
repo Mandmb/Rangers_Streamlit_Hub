@@ -24,6 +24,7 @@ SECTIONS = [
     ("Fastballs Up & In vs Lefties", (.105, .745, .635, .945), True),
 ]
 
+
 def make_pdf(data, game_date, opponent):
     source = fitz.open(stream=data, filetype="pdf")
     if source.page_count == 0:
@@ -32,86 +33,114 @@ def make_pdf(data, game_date, opponent):
     src = source[0]
     source_text = src.get_text().lower()
 
-    if not all(x in source_text for x in [
-        "fastball in zone", "chase", "fastballs up"
-    ]):
+    required = [
+        "fastball in zone",
+        "fastballs up",
+        "chase"
+    ]
+    if not all(x in source_text for x in required):
         raise ValueError(
-            "The PDF does not match the expected "
-            "TrackMan report format."
+            "The uploaded PDF does not match the "
+            "expected TrackMan report."
         )
 
+    # Single A3 portrait sheet.
+    # The original PDF tables are kept as vector content.
     output = fitz.open()
-    page_count = len(SECTIONS)
+    page = output.new_page(width=842, height=1191)
 
-    for number, (title, coords, wide) in enumerate(SECTIONS, 1):
-        if wide:
-            page = output.new_page(width=842, height=595)
-        else:
-            page = output.new_page(width=595, height=842)
+    w = page.rect.width
+    h = page.rect.height
 
-        w, h = page.rect.width, page.rect.height
+    # Main header
+    page.draw_rect(
+        fitz.Rect(0, 0, w, 11),
+        color=RED, fill=RED
+    )
 
-        # Top accent
-        page.draw_rect(
-            fitz.Rect(0, 0, w, 9),
-            color=RED, fill=RED
+    page.insert_text(
+        (35, 47),
+        "LEONES DEL ESCOGIDO - PITCH REPORT",
+        fontname="hebo",
+        fontsize=20,
+        color=BLUE
+    )
+
+    page.insert_text(
+        (35, 73),
+        f"{game_date:%B %d, %Y}  |  vs. {opponent}",
+        fontsize=12,
+        color=GRAY
+    )
+
+    page.draw_line(
+        (35, 89), (807, 89),
+        color=RED, width=2
+    )
+
+    # Original PDF coordinates measured from
+    # the October 25 TrackMan export.
+    #
+    # The first three tables occupy the left.
+    # The two chase tables occupy the right.
+    #
+    # (name, source clipping rectangle,
+    #  destination x, destination y, max width)
+
+    panels = [
+        (
+            "Fastball in Zone",
+            (68, 46, 385, 330),
+            35, 115, 530
+        ),
+        (
+            "Fastballs Up & In vs Righties",
+            (68, 384, 385, 562),
+            35, 607, 530
+        ),
+        (
+            "Fastballs Up & In vs Lefties",
+            (68, 585, 385, 704),
+            35, 926, 530
+        ),
+        (
+            "Fastball Chase Below Zone",
+            (428, 46, 560, 230),
+            584, 115, 223
+        ),
+        (
+            "All Pitches Chase Below Zone",
+            (428, 398, 560, 556),
+            584, 464, 223
         )
+    ]
 
-        # Main title
-        page.insert_text(
-            (35, 42),
-            "LEONES DEL ESCOGIDO - PITCH REPORT",
-            fontsize=17,
-            fontname="hebo",
-            color=BLUE
-        )
+    for name, rect, x, y, max_width in panels:
+        clip = fitz.Rect(*rect)
 
-        page.insert_text(
-            (35, 64),
-            f"{game_date.strftime('%B %d, %Y')} | vs. {opponent}",
-            fontsize=11,
-            color=GRAY
-        )
+        # Convert original PDF coordinates
+        # if the export page dimensions differ.
+        sx = src.rect.width / 612
+        sy = src.rect.height / 792
 
-        # Section heading
-        page.draw_rect(
-            fitz.Rect(35, 83, w-35, 118),
-            color=BLUE, fill=BLUE
-        )
-        page.insert_text(
-            (47, 105),
-            title.upper(),
-            fontsize=12,
-            fontname="hebo",
-            color=(1, 1, 1)
-        )
-
-        # Convert normalized coordinates to source PDF units
         clip = fitz.Rect(
-            coords[0] * src.rect.width,
-            coords[1] * src.rect.height,
-            coords[2] * src.rect.width,
-            coords[3] * src.rect.height,
+            clip.x0 * sx,
+            clip.y0 * sy,
+            clip.x1 * sx,
+            clip.y1 * sy
         )
 
-        # Fit original vector content into the new page.
-        # This avoids changing any player statistics.
-        available = fitz.Rect(35, 135, w-35, h-58)
-        scale = min(
-            available.width / clip.width,
-            available.height / clip.height
-        )
-
-        content_w = clip.width * scale
-        content_h = clip.height * scale
+        scale = max_width / clip.width
+        rendered_height = clip.height * scale
 
         target = fitz.Rect(
-            (w-content_w)/2,
-            140,
-            (w+content_w)/2,
-            140+content_h
+            x, y,
+            x + max_width,
+            y + rendered_height
         )
 
+        # Copy original text and tables directly.
+        # No statistics are recalculated or rounded.
         page.show_pdf_page(
             target,
             source,
@@ -120,29 +149,44 @@ def make_pdf(data, game_date, opponent):
             keep_proportion=True
         )
 
-        # Footer
-        page.draw_line(
-            (35, h-43),
-            (w-35, h-43),
-            color=(.83, .85, .88)
-        )
-        page.insert_text(
-            (35, h-27),
-            "LEONES DEL ESCOGIDO | ANALYTICS",
-            fontsize=8,
-            color=GRAY
-        )
-        page.insert_text(
-            (w-100, h-27),
-            f"Page {number} of {page_count}",
-            fontsize=8,
-            color=GRAY
-        )
+    # Subtle separation between columns
+    page.draw_line(
+        (574, 110),
+        (574, 1124),
+        color=(0.85, 0.87, 0.90),
+        width=0.7
+    )
 
-    pdf = output.tobytes(garbage=4, deflate=True)
+    # Footer
+    page.draw_line(
+        (35, 1145), (807, 1145),
+        color=(0.83, 0.85, 0.88),
+        width=0.7
+    )
+
+    page.insert_text(
+        (35, 1165),
+        "LEONES DEL ESCOGIDO | ANALYTICS",
+        fontsize=9,
+        color=GRAY
+    )
+
+    page.insert_text(
+        (747, 1165),
+        "Page 1 of 1",
+        fontsize=9,
+        color=GRAY
+    )
+
+    result = output.tobytes(
+        garbage=4,
+        deflate=True
+    )
+
     output.close()
     source.close()
-    return pdf
+
+    return result
 
 
 st.title("⚾ Leones del Escogido - Pitch Report")
@@ -201,7 +245,7 @@ if st.button("Generate Pitch Report", type="primary"):
                 game_date,
                 opponent.strip()
             )
-            st.success("Your report is ready!")
+            st.success("Your one-page report is ready!")
         except Exception as e:
             st.error(str(e))
 
