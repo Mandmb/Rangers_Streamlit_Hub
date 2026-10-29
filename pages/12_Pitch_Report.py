@@ -20,14 +20,19 @@ def rows_in_band(page,y0,y1,x0,x1):
     return [sorted(g,key=lambda a:a[0]) for g in groups]
 
 def parse_main(group):
-    player=' '.join(w[4] for w in group if w[0]<104).strip()
-    values=['']*20
-    for w in group:
-        if w[0]<104: continue
-        idx=min(range(20),key=lambda i:abs(w[2]-ANCHORS[i]))
-        if abs(w[2]-ANCHORS[idx])<5:
-            values[idx]=w[4] if not values[idx] else values[idx]+' '+w[4]
-    if not player or not values[2]: return None
+    # Parse data from the RIGHT: every main-table row has precisely 20
+    # statistics, while player names can contain any number of words.
+    # This avoids assuming the same column coordinates in every export.
+    tokens=[w[4] for w in sorted(group,key=lambda w:w[0])]
+    if len(tokens)<21:
+        return None
+    values=tokens[-20:]
+    player=' '.join(tokens[:-20]).strip()
+    numeric=re.compile(r'(?:- | -|\d+(?:\.\d+)?%?|\.\d+|-)'.strip())
+    if not player or not all(numeric.fullmatch(v) for v in values):
+        return None
+    if player.upper() in ('PLAYER','CALCULATIONS','RESULTS'):
+        return None
     return [player]+values
 
 def parse_chase(group):
