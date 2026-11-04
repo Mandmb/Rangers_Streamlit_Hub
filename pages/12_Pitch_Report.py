@@ -19,15 +19,15 @@ def rows_in_band(page,y0,y1,x0,x1):
         else: groups.append([w])
     return [sorted(g,key=lambda a:a[0]) for g in groups]
 
-def parse_main(group):
+def parse_main(group, stat_count=20):
     # Parse data from the RIGHT: every main-table row has precisely 20
     # statistics, while player names can contain any number of words.
     # This avoids assuming the same column coordinates in every export.
     tokens=[w[4] for w in sorted(group,key=lambda w:w[0])]
-    if len(tokens)<21:
+    if len(tokens)<stat_count+1:
         return None
-    values=tokens[-20:]
-    player=' '.join(tokens[:-20]).strip()
+    values=tokens[-stat_count:]
+    player=' '.join(tokens[:-stat_count]).strip()
     numeric=re.compile(r'(?:- | -|\d+(?:\.\d+)?%?|\.\d+|-)'.strip())
     if not player or not all(numeric.fullmatch(v) for v in values):
         return None
@@ -57,19 +57,25 @@ def extract(pdf):
     words=p.get_text('words')
     def labels(xmin,xmax,label):
         return sorted(w[1] for w in words if xmin<w[0]<xmax and w[4].upper()==label)
-    main_cal=labels(68,110,'CALCULATIONS')
-    main_res=labels(68,110,'RESULTS')
+    main_cal=labels(45,190,'CALCULATIONS')
+    main_res=labels(45,190,'RESULTS')
     chase_cal=labels(425,475,'CALCULATIONS')
     chase_res=labels(425,475,'RESULTS')
     if not (len(main_cal)==len(main_res)==3 and len(chase_cal)==len(chase_res)==2):
         raise ValueError('Cannot locate the five expected table sections.')
+    # TrackMan may add columns, such as '1st P Looking'. Detect the
+    # actual main-table header rather than requiring a fixed schema.
+    first_header = [w[4] for w in words if main_cal[0]+9 < w[1] < main_cal[0]+17 and w[0] < 400]
+    has_first_p_looking = ('1st' in first_header and 'Looking' in first_header)
+    main_headers = (['Player', '1st P Looking'] + HEADERS[1:]) if has_first_p_looking else HEADERS[:]
+    count_main = len(main_headers)-1
     data=[]
     for ix,(title,kind) in enumerate(SECTIONS):
         k=(0 if ix==0 else 1 if ix==2 else 2) if kind=='main' else (0 if ix==1 else 1)
         cal=(main_cal if kind=='main' else chase_cal)[k]
         res=(main_res if kind=='main' else chase_res)[k]
-        x0,x1=(65,390) if kind=='main' else (425,565)
-        parser=parse_main if kind=='main' else parse_chase
+        x0,x1=(45,402) if kind=='main' else (425,565)
+        parser=(lambda g: parse_main(g,count_main)) if kind=='main' else parse_chase
         totals=[parser(g) for g in rows_in_band(p,cal+15,cal+26,x0,x1)]
         totals=[r for r in totals if r and r[0].upper()=='TOTAL']
         next_cal=(main_cal[k+1] if kind=='main' and k<2 else
@@ -83,18 +89,19 @@ def extract(pdf):
         if len({r[0].casefold() for r in players})!=len(players):
             raise ValueError(f'Duplicate player names detected in {title}.')
         if kind=='main':
-            if any(len(r)!=21 or sum(bool(x) for x in r[1:])<18 for r in players):
+            if any(len(r)!=len(main_headers) or not all(re.fullmatch(r'(?:\d+(?:\.\d+)?%?|\.\d+|-)',v) for v in r[1:]) for r in players):
                 raise ValueError(f'Missing values in {title}.')
             # P is the third statistic; sum of player pitch counts should match the total.
             try:
-                if sum(int(r[3]) for r in players)!=int(totals[0][3]):
+                pitch_col=4 if has_first_p_looking else 3
+                if sum(int(r[pitch_col]) for r in players)!=int(totals[0][pitch_col]):
                     raise ValueError(f'{title}: player pitch counts do not match total.')
             except (TypeError,ValueError) as e:
                 raise ValueError(f'{title}: invalid pitch count: {e}')
         else:
             if sum(int(r[2]) for r in players)!=int(totals[0][2]) or sum(int(r[3]) for r in players)!=int(totals[0][3]):
                 raise ValueError(f'{title}: Chase table totals do not match the players.')
-        data.append((title,kind,totals[0],players))
+        data.append((title,kind,totals[0],players,main_headers if kind=='main' else ['Player','Chase%','P','Chase#']))
     doc.close()
     return data
 
@@ -107,12 +114,12 @@ def write(page,x,y,value,sz=8,color=INK,bold=False,align='left',limit=None):
     if align=='right':x-=width
     page.insert_text((x,y),s,fontname=font,fontsize=sz,color=color)
 
-def panel(page,x,y,w,h,title,kind,total,players):
+def panel(page,x,y,w,h,title,kind,total,players,headers):
     page.draw_rect(fitz.Rect(x,y,x+w,y+h),color=(.86,.89,.93),fill=WHITE,width=.6)
     page.draw_rect(fitz.Rect(x,y,x+w,y+27),color=NAVY,fill=NAVY)
     page.draw_rect(fitz.Rect(x,y,x+5,y+27),color=RED,fill=RED)
     write(page,x+14,y+18,title,10,WHITE,True)
-    ncol=21 if kind=='main' else 4
+    ncol=len(headers)
     header_h=20
     table_top=y+27
     page.draw_rect(fitz.Rect(x+1,table_top,x+w-1,table_top+header_h),color=BLUE,fill=BLUE)
@@ -120,11 +127,15 @@ def panel(page,x,y,w,h,title,kind,total,players):
         widths=[w*.177]+[w*.823/20]*20
         # Give the wider percentage columns slightly more space
         weights=[1,1.2,1.05,1.2,1.45,1.0,1.35,1.0,1.35,1.05,1.35,1.0,1.35,.85,.85,.85,.85,1.0,1.2,1.1]
+        if len(headers)>21:
+            # Added first-pitch metric gets a wider column and the remaining
+            # columns scale proportionally.
+            weights=[1.8]+weights
         widths=[w*.18]+[w*.82*z/sum(weights) for z in weights]
-        heads=HEADERS
+        heads=headers
     else:
         widths=[w*.57,w*.17,w*.12,w*.14]
-        heads=['Player','Chase%','P','Chase#']
+        heads=headers
     edges=[x]
     for cw in widths:edges.append(edges[-1]+cw)
     for j,head in enumerate(heads):
@@ -161,7 +172,7 @@ def make_pdf(data,game_date,opponent):
     left_x,left_w=28,862
     right_x,right_w=904,259
     def needed_height(entry):
-        _,kind,_,players=entry
+        _,kind,_,players,_headers=entry
         row_height=18 if kind=='main' else 21
         return 27+20+9+row_height*(len(players)+1)
     def stack(entries,x,w,y0,y_end,gap):
