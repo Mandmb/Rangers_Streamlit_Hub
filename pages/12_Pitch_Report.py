@@ -54,68 +54,121 @@ def parse_fastball(group):
     return [player,pitches,pct]
 
 def extract(pdf):
-    doc=fitz.open(stream=pdf,filetype='pdf')
-    if doc.page_count!=1:raise ValueError('Expected a one-page TrackMan export.')
-    p=doc[0]
-    if abs(p.rect.width-612)>12 or abs(p.rect.height-792)>12:
-        raise ValueError('Unexpected PDF page dimensions.')
-    words=p.get_text('words')
-    text=p.get_text().lower()
-    if not all(t in text for t in ('fastball in zone','chase','fastballs up')):
-        raise ValueError('Expected Escogido TrackMan tables not found.')
-    def labels(xmin,xmax,label):
-        return sorted(w[1] for w in words if xmin<w[0]<xmax and w[4].upper()==label)
-    main_cal=labels(45,190,'CALCULATIONS')
-    main_res=labels(45,190,'RESULTS')
-    side_cal=labels(420,475,'CALCULATIONS')
-    side_res=labels(420,475,'RESULTS')
-    if len(main_cal)!=3 or len(main_res)!=3 or len(side_cal)!=len(side_res) or len(side_cal) not in (2,3):
-        raise ValueError('Cannot identify required TrackMan report sections.')
-    data=[]
-    for ix,(title,kind) in enumerate(SECTIONS):
-        if kind=='fastball' and len(side_cal)==2:
-            continue  # backwards compatibility with older PDF exports
-        if kind=='main':
-            k={0:0,2:1,4:2}[ix]
-            cal,res=main_cal[k],main_res[k]
-            x0,x1=45,410
-            next_cal=main_cal[k+1] if k<2 else p.rect.height-25
-            header_words=[w[4] for w in words if cal+8<=w[1]<=cal+14 and 45<w[0]<410]
-            has_first=('1st' in header_words and 'Looking' in header_words)
-            has_avg=('AVG' in header_words)
-            headers=['Player']+(['1st P Looking'] if has_first else [])+HEADERS[1:-1]+(['AVG'] if has_avg else [])+['SLG']
-            parser=lambda g:parse_main(g,len(headers)-1)
-        else:
-            k=0 if ix==1 else 1 if ix==3 else 2
-            cal,res=side_cal[k],side_res[k]
-            x0,x1=425,572
-            next_cal=side_cal[k+1] if k<len(side_cal)-1 else p.rect.height-24
-            parser=parse_chase if kind=='chase' else parse_fastball
-            headers=['Player','Chase%','P','Chase#'] if kind=='chase' else ['Player','P','Fastball%']
-        total_rows=[parser(g) for g in rows_in_band(p,cal+17,res-1,x0,x1)]
-        total_rows=[r for r in total_rows if r and r[0].upper()=='TOTAL']
-        players=[parser(g) for g in rows_in_band(p,res+17,min(next_cal-2,p.rect.height-20),x0,x1)]
-        players=[r for r in players if r and r[0].upper()!='TOTAL' and r[0].upper()!='PLAYER']
-        if len(total_rows)!=1 or not players:
-            raise ValueError(f'{title}: expected a totals row and player rows; extracted {len(total_rows)} totals and {len(players)} players.')
-        total=total_rows[0]
-        if len({r[0].casefold() for r in players})!=len(players):
-            raise ValueError(f'{title}: duplicate player rows found.')
-        if kind=='main':
-            pitch_idx=headers.index('P')
-            if any(len(r)!=len(headers) for r in players):
-                raise ValueError(f'{title}: incomplete stat columns.')
-            if sum(int(r[pitch_idx]) for r in players)!=int(total[pitch_idx]):
-                raise ValueError(f'{title}: pitch counts do not match the total.')
-        elif kind=='chase':
-            if sum(int(r[2]) for r in players)!=int(total[2]) or sum(int(r[3]) for r in players)!=int(total[3]):
-                raise ValueError(f'{title}: Chase totals do not match player data.')
-        else:
-            if sum(int(r[1]) for r in players)!=int(total[1]):
-                raise ValueError(f'{title}: Fastball % pitch totals do not match player data.')
-        data.append((title,kind,total,players,headers))
-    doc.close()
-    return data
+    """Read the same six report sections across one or multiple PDF pages.
+
+    Source exports may switch between portrait and landscape. Each page is
+    processed independently, then sections are assembled in report order.
+    """
+    doc = fitz.open(stream=pdf, filetype='pdf')
+    try:
+        if not 1 <= doc.page_count <= 20:
+            raise ValueError('The uploaded PDF has an unexpected page count.')
+        main_parts, side_parts = [], []
+        for page_number, page in enumerate(doc, start=1):
+            words = page.get_text('words')
+            page_text = page.get_text().lower()
+            if not page_text.strip():
+                raise ValueError(f'Page {page_number} contains no selectable text.')
+
+            def occurrences(term):
+                return sorted(
+                    (w for w in words if w[4].upper() == term),
+                    key=lambda w:(w[1], w[0])
+                )
+
+            calculations = occurrences('CALCULATIONS')
+            results = occurrences('RESULTS')
+            if len(calculations) != len(results) or not calculations:
+                raise ValueError(f'Page {page_number}: cannot identify table boundaries.')
+
+            # Locate columns by the CALCULATIONS labels, which remain stable
+            # even when page orientation and table widths change.
+            xpos = sorted(w[0] for w in calculations)
+            if len(xpos) < 2 or xpos[-1] - xpos[0] < page.rect.width * .25:
+                raise ValueError(f'Page {page_number}: cannot distinguish table columns.')
+            divide = (xpos[0] + xpos[-1]) / 2
+            for side in ('main', 'side'):
+                cals = sorted(
+                    (w for w in calculations if (w[0] < divide) == (side == 'main')),
+                    key=lambda w:w[1]
+                )
+                ress = sorted(
+                    (w for w in results if (w[0] < divide) == (side == 'main')),
+                    key=lambda w:w[1]
+                )
+                if len(cals) != len(ress):
+                    raise ValueError(f'Page {page_number}: mismatched CALCULATIONS/RESULTS.')
+                if side == 'main':
+                    x0 = max(0, min(w[0] for w in cals)-18) if cals else 0
+                    x1 = max(w[0] for w in calculations if w[0]>divide)-10
+                else:
+                    x0 = min(w[0] for w in cals)-8 if cals else divide
+                    x1 = page.rect.width-8
+                for i,(cal_word,res_word) in enumerate(zip(cals,ress)):
+                    cal,res = cal_word[1],res_word[1]
+                    if res <= cal:
+                        raise ValueError(f'Page {page_number}: reversed section boundaries.')
+                    next_cal = cals[i+1][1] if i+1<len(cals) else page.rect.height-18
+                    if side == 'main':
+                        header_words = [w[4] for w in words
+                            if cal+8<=w[1]<=cal+17 and x0<=w[0]<x1]
+                        has_first = '1st' in header_words and 'Looking' in header_words
+                        has_avg = 'AVG' in header_words
+                        headers = (['Player'] + (['1st P Looking'] if has_first else [])
+                            + HEADERS[1:-1] + (['AVG'] if has_avg else []) + ['SLG'])
+                        parser = lambda group, count=len(headers)-1: parse_main(group,count)
+                    else:
+                        # Third right-hand table, when present, is Fastball %.
+                        k = len(side_parts)
+                        kind = 'fastball' if k==2 else 'chase'
+                        parser = parse_fastball if kind=='fastball' else parse_chase
+                        headers = (['Player','P','Fastball%'] if kind=='fastball'
+                                   else ['Player','Chase%','P','Chase#'])
+                    totals = [parser(g) for g in rows_in_band(page,cal+17,res-1,x0,x1)]
+                    totals = [r for r in totals if r and r[0].upper()=='TOTAL']
+                    players = [parser(g) for g in rows_in_band(
+                        page,res+17,min(next_cal-2,page.rect.height-13),x0,x1)]
+                    players = [r for r in players if r and r[0].upper() not in ('TOTAL','PLAYER')]
+                    if len(totals)!=1 or not players:
+                        raise ValueError(
+                            f'Page {page_number}: incomplete {side} table '
+                            f'({len(totals)} totals, {len(players)} players).')
+                    if len({r[0].casefold() for r in players}) != len(players):
+                        raise ValueError(f'Page {page_number}: duplicate player names detected.')
+                    record = (totals[0],players,headers,page_number)
+                    (main_parts if side=='main' else side_parts).append(record)
+
+        if len(main_parts)!=3 or len(side_parts) not in (2,3):
+            raise ValueError(
+                f'Expected three left-side tables and two or three right-side tables; '
+                f'found {len(main_parts)} and {len(side_parts)} across {doc.page_count} pages.')
+
+        assembled=[]
+        main_titles=[SECTIONS[0][0],SECTIONS[2][0],SECTIONS[4][0]]
+        side_titles=[SECTIONS[1][0],SECTIONS[3][0],SECTIONS[5][0]]
+        for kind,records,titles in [('main',main_parts,main_titles),('side',side_parts,side_titles)]:
+            for i,(total,players,headers,page_number) in enumerate(records):
+                title=titles[i]
+                category=('main' if kind=='main' else 'fastball' if i==2 else 'chase')
+                if category=='main':
+                    idx=headers.index('P')
+                    if any(len(r)!=len(headers) for r in players):
+                        raise ValueError(f'{title}: incomplete statistics.')
+                    if sum(int(r[idx]) for r in players)!=int(total[idx]):
+                        raise ValueError(f'{title}: pitch counts do not match the total.')
+                elif category=='chase':
+                    if (sum(int(r[2]) for r in players)!=int(total[2]) or
+                        sum(int(r[3]) for r in players)!=int(total[3])):
+                        raise ValueError(f'{title}: Chase counts do not match.')
+                else:
+                    if sum(int(r[1]) for r in players)!=int(total[1]):
+                        raise ValueError(f'{title}: pitch totals do not match.')
+                assembled.append((title,category,total,players,headers))
+        # Return in original visual report order.
+        lookup={record[0]:record for record in assembled}
+        return [lookup[t] for t,k in SECTIONS if t in lookup]
+    finally:
+        doc.close()
 
 def write(page,x,y,value,sz=8,color=INK,bold=False,align='left',limit=None):
     font='hebo' if bold else 'helv'
@@ -197,8 +250,15 @@ def make_pdf(data,game_date,opponent):
     return result
 
 st.title('⚾ Leones del Escogido - Pitch Report')
+st.caption('Pitch Report v2.1 | Multi-page input → single-page output')
 st.write('Upload the TrackMan export to generate a professionally redesigned, single-page PDF with unchanged statistics.')
 uploaded=st.file_uploader('Upload TrackMan PDF',type=['pdf'])
+if uploaded is not None:
+    try:
+        with fitz.open(stream=uploaded.getvalue(), filetype='pdf') as src:
+            st.info(f'Source PDF detected: {src.page_count} page(s). Output will be one page.')
+    except Exception as e:
+        st.error(f'Cannot open PDF: {e}')
 c1,c2=st.columns(2)
 with c1: game_date=st.date_input('Game Date',value=date.today()-timedelta(days=1),format='MM/DD/YYYY')
 with c2: opponent=st.text_input('Opponent',placeholder='Toros del Este')
