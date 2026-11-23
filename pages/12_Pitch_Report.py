@@ -14,7 +14,7 @@ def rows_in_band(page,y0,y1,x0,x1):
     words=[w for w in page.get_text('words') if y0 <= w[1] < y1 and x0 <= w[0] < x1]
     groups=[]
     for w in sorted(words,key=lambda a:(a[1],a[0])):
-        if groups and abs(groups[-1][0][1]-w[1])<1.2:
+        if groups and abs(groups[-1][0][1]-w[1])<0.24:
             groups[-1].append(w)
         else: groups.append([w])
     return [sorted(g,key=lambda a:a[0]) for g in groups]
@@ -109,6 +109,10 @@ def extract(pdf):
                     if res <= cal:
                         raise ValueError(f'Page {page_number}: reversed section boundaries.')
                     next_cal = cals[i+1][1] if i+1<len(cals) else page.rect.height-18
+                    # On long season exports, the second Chase table may
+                    # continue underneath the Fastball % table's heading.
+                    if side == 'side' and i == 1 and i+1 < len(cals):
+                        next_cal = ress[i+1][1] + 13
                     if side == 'main':
                         header_words = [w[4] for w in words
                             if cal+8<=w[1]<=cal+17 and x0<=w[0]<x1]
@@ -144,7 +148,10 @@ def extract(pdf):
                 f'found {len(main_parts)} and {len(side_parts)} across {doc.page_count} pages.')
 
         assembled=[]
-        main_titles=[SECTIONS[0][0],SECTIONS[2][0],SECTIONS[4][0]]
+        # Respect the source: season exports may use BREAKING rather than FASTBALL.
+        text_upper = ' '.join(p.get_text().upper() for p in doc)
+        pitch_family = 'BREAKING' if 'BREAKING IN ZONE' in text_upper else 'FASTBALL'
+        main_titles=[f'{pitch_family} IN ZONE', f'{pitch_family} UP & IN · RHH', f'{pitch_family} UP & IN · LHH']
         side_titles=[SECTIONS[1][0],SECTIONS[3][0],SECTIONS[5][0]]
         for kind,records,titles in [('main',main_parts,main_titles),('side',side_parts,side_titles)]:
             for i,(total,players,headers,page_number) in enumerate(records):
@@ -166,7 +173,8 @@ def extract(pdf):
                 assembled.append((title,category,total,players,headers))
         # Return in original visual report order.
         lookup={record[0]:record for record in assembled}
-        return [lookup[t] for t,k in SECTIONS if t in lookup]
+        order=[main_titles[0],side_titles[0],main_titles[1],side_titles[1],main_titles[2],side_titles[2]]
+        return [lookup[t] for t in order if t in lookup]
     finally:
         doc.close()
 
@@ -226,7 +234,8 @@ def make_pdf(data,game_date,opponent):
     page.draw_rect(fitz.Rect(0,0,1191,10),color=None,fill=RED)
     write(page,28,46,'LEONES DEL ESCOGIDO',22,NAVY,True)
     write(page,28,69,'PITCH REPORT',13,RED,True)
-    write(page,1160,48,f'{game_date:%B %d, %Y}  |  vs. {opponent}',11,GRAY,False,'right')
+    subtitle = (f'{game_date:%B %d, %Y}  |  {opponent}' if opponent.strip().lower() in ('all season', 'season', 'full season') else f'{game_date:%B %d, %Y}  |  vs. {opponent}')
+    write(page,1160,48,subtitle,11,GRAY,False,'right')
     page.draw_line((28,86),(1163,86),color=(.81,.84,.88),width=1)
     def stack(entries,x,w):
         if not entries:return
@@ -250,7 +259,7 @@ def make_pdf(data,game_date,opponent):
     return result
 
 st.title('⚾ Leones del Escogido - Pitch Report')
-st.caption('Pitch Report v2.1 | Multi-page input → single-page output')
+st.caption('Pitch Report v3.0 | Flexible sections and one-page output')
 st.write('Upload the TrackMan export to generate a professionally redesigned, single-page PDF with unchanged statistics.')
 uploaded=st.file_uploader('Upload TrackMan PDF',type=['pdf'])
 if uploaded is not None:
