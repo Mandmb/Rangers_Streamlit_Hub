@@ -142,17 +142,21 @@ def extract(pdf):
                     record = (totals[0],players,headers,page_number)
                     (main_parts if side=='main' else side_parts).append(record)
 
-        if len(main_parts)!=3 or len(side_parts) not in (2,3):
+        if len(main_parts) not in (2,3) or len(side_parts) not in (1,2,3):
             raise ValueError(
-                f'Expected three left-side tables and two or three right-side tables; '
+                f'Expected two or three left-side tables and one to three right-side tables; '
                 f'found {len(main_parts)} and {len(side_parts)} across {doc.page_count} pages.')
 
         assembled=[]
         # Respect the source: season exports may use BREAKING rather than FASTBALL.
         text_upper = ' '.join(p.get_text().upper() for p in doc)
-        pitch_family = 'BREAKING' if 'BREAKING IN ZONE' in text_upper else 'FASTBALL'
-        main_titles=[f'{pitch_family} IN ZONE', f'{pitch_family} UP & IN · RHH', f'{pitch_family} UP & IN · LHH']
-        side_titles=[SECTIONS[1][0],SECTIONS[3][0],SECTIONS[5][0]]
+        if 'OFFSPEED IN ZONE' in text_upper:
+            main_titles=['OFFSPEED IN ZONE', 'OFFSPEED OVERALL']
+            side_titles=['OFFSPEED CHASE · LOW & AWAY']
+        else:
+            pitch_family = 'BREAKING' if 'BREAKING IN ZONE' in text_upper else 'FASTBALL'
+            main_titles=[f'{pitch_family} IN ZONE', f'{pitch_family} UP & IN · RHH', f'{pitch_family} UP & IN · LHH']
+            side_titles=[SECTIONS[1][0],SECTIONS[3][0],SECTIONS[5][0]]
         for kind,records,titles in [('main',main_parts,main_titles),('side',side_parts,side_titles)]:
             for i,(total,players,headers,page_number) in enumerate(records):
                 title=titles[i]
@@ -173,7 +177,10 @@ def extract(pdf):
                 assembled.append((title,category,total,players,headers))
         # Return in original visual report order.
         lookup={record[0]:record for record in assembled}
-        order=[main_titles[0],side_titles[0],main_titles[1],side_titles[1],main_titles[2],side_titles[2]]
+        if len(main_parts)==2 and len(side_parts)==1:
+            order=[main_titles[0],side_titles[0],main_titles[1]]
+        else:
+            order=[main_titles[0],side_titles[0],main_titles[1],side_titles[1],main_titles[2],side_titles[2]]
         return [lookup[t] for t in order if t in lookup]
     finally:
         doc.close()
@@ -228,7 +235,7 @@ def make_pdf(data,game_date,opponent):
     def height_for(entries):
         return sum(50+(15 if e[1]=='main' else 16)*(len(e[3])+1) for e in entries)+12*(len(entries)-1)
     usable=max(height_for(left),height_for(right))
-    height=max(700,min(1250,155+usable))
+    height=max(650,min(1250,155+usable))
     out=fitz.open(); page=out.new_page(width=1191,height=height)
     page.draw_rect(page.rect,color=None,fill=(.975,.980,.987))
     page.draw_rect(fitz.Rect(0,0,1191,10),color=None,fill=RED)
@@ -242,10 +249,10 @@ def make_pdf(data,game_date,opponent):
         y0=101; y_end=height-65; gap=12
         available=y_end-y0-gap*(len(entries)-1)
         ideal=[50+(15 if e[1]=='main' else 16)*(len(e[3])+1) for e in entries]
-        ratio=(available/sum(ideal)) if entries[0][1]=='main' else min(1,available/sum(ideal))
+        ratio=(available/sum(ideal)) if entries[0][1]=='main' else min(1.75,available/sum(ideal))
         ys=[max(45+10*(len(e[3])+1),v*ratio) for e,v in zip(entries,ideal)]
         if sum(ys)>available:ys=[v*available/sum(ys) for v in ys]
-        cursor=y0
+        cursor=y0 if entries[0][1]=='main' or len(entries)>1 else y0+max(0,(available-sum(ys))*.14)
         for entry,h in zip(entries,ys):
             panel(page,x,cursor,w,h,*entry)
             cursor+=h+gap
@@ -259,7 +266,7 @@ def make_pdf(data,game_date,opponent):
     return result
 
 st.title('⚾ Leones del Escogido - Pitch Report')
-st.caption('Pitch Report v3.0 | Flexible sections and one-page output')
+st.caption('Pitch Report v3.1 | Adaptive section count · Multi-page input → single-page output')
 st.write('Upload the TrackMan export to generate a professionally redesigned, single-page PDF with unchanged statistics.')
 uploaded=st.file_uploader('Upload TrackMan PDF',type=['pdf'])
 if uploaded is not None:
